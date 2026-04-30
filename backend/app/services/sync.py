@@ -204,7 +204,10 @@ class SyncService:
                         user_id=user.id,
                         source="komoot",
                         komoot_tour_id=tour.id,
-                        sync_direction="komoot_to_strava",
+                        # sync_direction and destination_platform are NULL at ingest;
+                        # they are set when the activity is actually pushed to a destination.
+                        sync_direction=None,
+                        destination_platform=None,
                         sync_status="completed",
                         activity_name=tour.name,
                         sport_type=tour.sport,
@@ -592,8 +595,11 @@ class SyncService:
                 # Record in local DB
                 activity_record = SyncedActivity(
                     user_id=user.id,
+                    source="komoot",
                     komoot_tour_id=tour.id,
                     strava_activity_id=activity_id,
+                    destination_platform="strava",
+                    destination_activity_id=activity_id,
                     sync_direction="komoot_to_strava",
                     sync_status="completed",
                     activity_name=tour.name,
