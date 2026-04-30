@@ -4,12 +4,13 @@ import logging
 from datetime import UTC
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.db.models.connection import Connection
-from app.db.models.sync import SyncedActivity, UserSyncState
+from app.db.models.pipeline import Pipeline
+from app.db.models.sync import ConnectionSyncState, SyncedActivity
 from app.db.models.user import StravaToken, User
 
 UTC = UTC
@@ -43,9 +44,6 @@ async def get_sync_status(
     db: AsyncSession = Depends(deps.get_db),
 ) -> dict:
     """Return the current sync state for the user, driven by the Connection table."""
-    state_result = await db.execute(select(UserSyncState).where(UserSyncState.user_id == user.id))
-    state = state_result.scalar_one_or_none()
-
     activity_result = await db.execute(
         select(SyncedActivity)
         .where(SyncedActivity.user_id == user.id)
@@ -54,37 +52,66 @@ async def get_sync_status(
     )
     latest_activity = activity_result.scalar_one_or_none()
 
-    # Resolve connected platforms from the Connection table (source of truth).
-    # StravaToken still exists as legacy — include it so existing Strava users aren't broken.
+    # Resolve all connections and their per-connection watermarks.
     connections_result = await db.execute(select(Connection).where(Connection.user_id == user.id))
     connections = connections_result.scalars().all()
-    connected_platforms = {c.platform for c in connections}
 
+    css_result = await db.execute(
+        select(ConnectionSyncState).where(ConnectionSyncState.user_id == user.id)
+    )
+    css_by_conn: dict = {str(s.connection_id): s for s in css_result.scalars().all()}
+
+    # StravaToken counts as a Strava connection for legacy users.
     strava_token = (
         await db.execute(select(StravaToken).where(StravaToken.user_id == user.id))
     ).scalar_one_or_none()
-    if strava_token:
-        connected_platforms.add("strava")
+
+    conn_statuses = []
+    for c in connections:
+        css = css_by_conn.get(str(c.id))
+        conn_statuses.append(
+            {
+                "platform": c.platform,
+                "display_name": c.display_name or c.platform.replace("_", " ").title(),
+                "connected": c.status != "disconnected",
+                "last_sync_at": css.last_synced_at.isoformat()
+                if css and css.last_synced_at
+                else None,
+                "error": css.last_error if css else None,
+            }
+        )
+
+    if strava_token and not any(c["platform"] == "strava" for c in conn_statuses):
+        conn_statuses.append(
+            {
+                "platform": "strava",
+                "display_name": "Strava",
+                "connected": True,
+                "last_sync_at": None,
+                "error": None,
+            }
+        )
+
+    active_pipelines_result = await db.execute(
+        select(func.count(Pipeline.id)).where(
+            Pipeline.user_id == user.id,
+            Pipeline.enabled == True,  # noqa: E712
+        )
+    )
+    active_pipelines = active_pipelines_result.scalar_one()
+
+    all_sync_times = [c["last_sync_at"] for c in conn_statuses if c["last_sync_at"]]
+    last_sync_at = max(all_sync_times) if all_sync_times else None
+
+    connected_platforms = {c["platform"] for c in conn_statuses if c["connected"]}
 
     return {
-        "connections": [{"platform": p, "connected": True} for p in sorted(connected_platforms)],
-        # Legacy fields retained for backward-compatibility until frontend is updated (F3).
+        "connections": conn_statuses,
+        "active_pipelines": active_pipelines,
+        "last_sync_at": last_sync_at,
+        # Legacy fields — retained for backward compat; remove when frontend is updated
         "komoot_connected": "komoot" in connected_platforms,
         "strava_connected": "strava" in connected_platforms,
-        "last_komoot_sync_at": state.last_komoot_sync_at.isoformat()
-        if state and state.last_komoot_sync_at
-        else None,
-        "last_strava_sync_at": state.last_strava_sync_at.isoformat()
-        if state and state.last_strava_sync_at
-        else None,
-        "last_successful_sync_at": (
-            state.last_successful_sync_at.isoformat()
-            if state and state.last_successful_sync_at
-            else None
-        ),
-        "total_synced_count": state.total_synced_count if state else 0,
-        "last_error": state.last_error if state else None,
-        "last_error_at": state.last_error_at.isoformat() if state and state.last_error_at else None,
         "latest_activity": _serialize_activity(latest_activity),
     }
 

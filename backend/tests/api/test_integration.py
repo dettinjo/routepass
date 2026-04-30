@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import security
 from app.db.models.subscription import ApiKey
-from app.db.models.sync import SyncedActivity, SyncRule, UserSyncState
+from app.db.models.sync import SyncedActivity, SyncRule
 from app.db.models.user import User
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -136,7 +136,8 @@ async def test_sync_status_initial(
     data = resp.json()
     assert data["komoot_connected"] is False
     assert data["strava_connected"] is False
-    assert data["total_synced_count"] == 0
+    assert data["connections"] == []
+    assert data["active_pipelines"] == 0
     assert data["latest_activity"] is None
 
 
@@ -147,8 +148,6 @@ async def test_sync_status_reflects_sync_state(
     free_user_headers: dict,
     db: AsyncSession,
 ):
-    state = UserSyncState(user_id=free_user.id, total_synced_count=7)
-    db.add(state)
     activity = SyncedActivity(
         user_id=free_user.id,
         komoot_tour_id="tour_123",
@@ -163,7 +162,6 @@ async def test_sync_status_reflects_sync_state(
     resp = await async_client.get("/api/v1/sync/status", headers=free_user_headers)
     assert resp.status_code == 200
     data = resp.json()
-    assert data["total_synced_count"] == 7
     assert data["latest_activity"]["komoot_tour_id"] == "tour_123"
 
 
