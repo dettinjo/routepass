@@ -571,30 +571,37 @@ async def update_user_settings(
     return {"name": user.name}
 
 
-@router.post("/me/delete", status_code=status.HTTP_200_OK)
+@router.delete("/account", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_account(
     user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(deps.get_db),
-) -> dict:
-    """Permanently delete the authenticated user and all associated data."""
-    from app.db.models.connection import Connection
-    from app.db.models.subscription import ApiKey, Subscription
-    from app.db.models.sync import SyncedActivity, SyncRule, UserSyncState
+) -> None:
+    """Permanently delete the authenticated user's account and all associated data.
 
-    uid = user.id
-    # Delete child rows in dependency order before the user row
-    await db.execute(delete(SyncedActivity).where(SyncedActivity.user_id == uid))
-    await db.execute(delete(UserSyncState).where(UserSyncState.user_id == uid))
-    await db.execute(delete(SyncRule).where(SyncRule.user_id == uid))
-    await db.execute(delete(ApiKey).where(ApiKey.user_id == uid))
-    await db.execute(delete(Subscription).where(Subscription.user_id == uid))
-    await db.execute(delete(Connection).where(Connection.user_id == uid))
-    # StravaToken is cascade-deleted via FK on user_id if ON DELETE CASCADE,
-    # otherwise delete explicitly
-    result = await db.execute(select(StravaToken).where(StravaToken.user_id == uid))
-    token = result.scalar_one_or_none()
-    if token:
-        await db.delete(token)
-    await db.delete(user)
+    Steps:
+    1. Cancel active Stripe subscription (cloud mode only, non-fatal).
+    2. Delete the User row — ON DELETE CASCADE handles all child rows.
+    """
+    import logging as _logging
+
+    _logger = _logging.getLogger(__name__)
+
+    # 1. Cancel Stripe subscription (non-fatal — deletion continues regardless)
+    if settings.DEPLOYMENT_MODE == "cloud" and settings.STRIPE_SECRET_KEY:
+        sub_result = await db.execute(select(Subscription).where(Subscription.user_id == user.id))
+        sub = sub_result.scalar_one_or_none()
+        if sub and sub.stripe_subscription_id:
+            try:
+                import stripe as _stripe
+
+                _stripe.api_key = settings.STRIPE_SECRET_KEY
+                _stripe.Subscription.delete(sub.stripe_subscription_id)
+            except Exception as exc:
+                _logger.warning("delete_account: Stripe cancellation failed: %s", exc)
+
+    # 2. Delete user row — ON DELETE CASCADE purges all child tables
+    # (synced_activities, connections, sync_rules, subscriptions, api_keys, strava_tokens, …)
+    # TODO(A5-ph1): before deletion, purge gpx_storage_key blobs from object storage
+    await db.execute(delete(User).where(User.id == user.id))
     await db.commit()
-    return {"message": "Account deleted."}
+    _logger.info("Account deleted for user %s", user.id)

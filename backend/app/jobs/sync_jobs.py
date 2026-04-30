@@ -92,6 +92,15 @@ async def poll_user_sources(ctx: dict, user_id: str) -> None:
                 logger.warning("poll_user_sources: User %s not found.", user_id)
                 return
 
+            if str(user.id) != user_id:
+                logger.error(
+                    "SECURITY: user_id mismatch in poll_user_sources — "
+                    "expected %s, got %s. Aborting.",
+                    user_id,
+                    user.id,
+                )
+                return
+
             # Load all active source connections for this user
             conn_res = await db.execute(
                 select(Connection).where(
@@ -460,6 +469,13 @@ async def run_pipeline(ctx: dict, pipeline_id: str, user_id: str) -> None:
 
             if not source or not dest:
                 logger.error("run_pipeline: Missing connection(s) for pipeline %s", pipeline_id)
+                return
+
+            if str(source.user_id) != user_id or str(dest.user_id) != user_id:
+                logger.error(
+                    "SECURITY: pipeline %s connections belong to different user — aborting.",
+                    pipeline_id,
+                )
                 return
 
             # Load user with subscription and strava token

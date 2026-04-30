@@ -8,6 +8,7 @@ from app.api.v1 import (
     auth,
     billing,
     connections,
+    export,
     instance,
     pipelines,
     rules,
@@ -27,3 +28,4 @@ router.include_router(rules.router, prefix="/rules")
 router.include_router(connections.router, prefix="/connections")
 router.include_router(pipelines.router, prefix="/pipelines")
 router.include_router(instance.router, prefix="/instance")
+router.include_router(export.router, prefix="/export")
