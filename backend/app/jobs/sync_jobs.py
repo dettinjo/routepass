@@ -18,7 +18,7 @@ from app.db.session import AsyncSessionLocal
 from app.services.intervals_icu import IntervalsIcuClient
 from app.services.komoot import KomootClient, to_komoot_sport, to_strava_sport
 from app.services.runalyze import RunalyzeClient
-from app.services.strava import StravaClient
+from app.services.strava import StravaClient, streams_to_gpx
 from app.services.sync import SyncService
 
 UTC = UTC
@@ -222,6 +222,60 @@ def _build_komoot_client_from_connection(conn: Connection) -> KomootClient | Non
     except Exception as exc:
         logger.warning("Failed to decrypt Komoot connection %s: %s", conn.id, exc)
     return None
+
+
+async def _resolve_strava_client(
+    db: object,
+    user: User,
+) -> tuple[StravaClient, StravaApp, str] | None:
+    """Return (StravaClient, StravaApp, tier_str) for *user*, or None if unavailable."""
+    if not user.strava_token:
+        return None
+    try:
+        access_token = await _get_valid_strava_access_token(user)
+    except Exception as exc:
+        logger.error("_resolve_strava_client: token error for user %s: %s", user.id, exc)
+        return None
+    app_res = await db.execute(
+        select(StravaApp).where(StravaApp.id == user.strava_token.strava_app_id)
+    )
+    strava_app = app_res.scalar_one_or_none()
+    if not strava_app:
+        return None
+    tier_str = user.subscription.tier if user.subscription else "free"
+    return StravaClient(access_token=access_token), strava_app, tier_str
+
+
+async def _fetch_strava_activities_since(
+    db: object,
+    user: User,
+    strava_client: StravaClient,
+    strava_app: StravaApp,
+    tier_str: str,
+) -> list[dict]:
+    """Fetch Strava activities since `UserSyncState.last_strava_sync_at` (default: 30 days)."""
+    from app.db.models.sync import UserSyncState as _USS
+
+    state_res = await db.execute(select(_USS).where(_USS.user_id == user.id))
+    state = state_res.scalar_one_or_none()
+    since = (
+        state.last_strava_sync_at
+        if state and state.last_strava_sync_at
+        else datetime.now(UTC) - timedelta(days=30)
+    )
+    try:
+        return await rate_limit_guard.call(
+            strava_app.id,
+            tier_str,
+            strava_client.get_activities,
+            after=int(since.timestamp()),
+            per_page=50,
+        )
+    except Exception as exc:
+        logger.error(
+            "_fetch_strava_activities_since: Strava fetch failed for user %s: %s", user.id, exc
+        )
+        return []
 
 
 async def process_strava_activity(ctx: dict, athlete_id: str, activity_id: str) -> None:
@@ -497,6 +551,10 @@ async def run_pipeline(ctx: dict, pipeline_id: str, user_id: str) -> None:
                 await _run_komoot_to_intervals_icu(db, pipeline, user, source, dest)
             elif pair == ("komoot", "runalyze"):
                 await _run_komoot_to_runalyze(db, pipeline, user, source, dest)
+            elif pair == ("strava", "intervals_icu"):
+                await _run_strava_to_intervals_icu(db, pipeline, user, source, dest)
+            elif pair == ("strava", "runalyze"):
+                await _run_strava_to_runalyze(db, pipeline, user, source, dest)
             else:
                 logger.warning(
                     "run_pipeline: Unsupported platform pair %s→%s for pipeline %s",
@@ -791,6 +849,234 @@ async def _run_komoot_to_runalyze(
             logger.error("_run_komoot_to_runalyze: Failed for tour %s: %s", tour.id, exc)
 
     logger.info("_run_komoot_to_runalyze: pipeline %s → %d tours synced", pipeline.id, synced_count)
+
+
+# ── Strava → Intervals.icu ────────────────────────────────────────────────────
+
+
+async def _run_strava_to_intervals_icu(
+    db: object,
+    pipeline: Pipeline,
+    user: User,
+    source: Connection,
+    dest: Connection,
+) -> None:
+    """Handle a Strava→Intervals.icu pipeline.
+
+    Fetches new Strava activities since the last sync watermark, converts each
+    to GPX using Strava's streams API, and uploads to Intervals.icu.
+    """
+    if not dest.credentials_enc:
+        logger.error("_run_strava_to_intervals_icu: no dest credentials for %s", dest.id)
+        return
+
+    resolved = await _resolve_strava_client(db, user)
+    if not resolved:
+        logger.error("_run_strava_to_intervals_icu: no Strava token for user %s", user.id)
+        return
+    strava_client, strava_app, tier_str = resolved
+
+    dst_creds = json.loads(security.decrypt(dest.credentials_enc))
+    intervals_client = IntervalsIcuClient(
+        api_key=dst_creds["api_key"],
+        athlete_id=dst_creds["athlete_id"],
+    )
+
+    activities = await _fetch_strava_activities_since(db, user, strava_client, strava_app, tier_str)
+
+    from app.db.models.sync import SyncedActivity as _SA
+
+    synced_count = 0
+    for activity in activities:
+        strava_id = str(activity.get("id", ""))
+        if not strava_id:
+            continue
+
+        already = await db.execute(
+            select(_SA).where(
+                _SA.pipeline_id == pipeline.id,
+                _SA.strava_activity_id == strava_id,
+                _SA.destination_platform == "intervals_icu",
+                _SA.sync_status == "completed",
+            )
+        )
+        if already.scalar_one_or_none():
+            continue
+
+        try:
+            streams = await rate_limit_guard.call(
+                strava_app.id,
+                tier_str,
+                strava_client.get_activity_streams,
+                activity_id=strava_id,
+            )
+            started_at = None
+            try:
+                started_at = datetime.fromisoformat(
+                    activity.get("start_date", "").replace("Z", "+00:00")
+                )
+            except Exception:
+                pass
+
+            sport = activity.get("sport_type") or activity.get("type")
+            gpx_bytes = streams_to_gpx(
+                activity_name=activity.get("name", ""),
+                sport_type=sport or "",
+                started_at=started_at,
+                streams=streams,
+            )
+            if not gpx_bytes:
+                logger.debug(
+                    "_run_strava_to_intervals_icu: no GPS data for activity %s — skipping",
+                    strava_id,
+                )
+                continue
+
+            icu_activity_id = await intervals_client.upload_gpx(
+                gpx_bytes=gpx_bytes,
+                name=activity.get("name", "Activity"),
+                sport_type=sport,
+                external_id=f"strava_{strava_id}",
+            )
+
+            record = _SA(
+                user_id=user.id,
+                pipeline_id=pipeline.id,
+                strava_activity_id=strava_id,
+                source="strava",
+                sync_direction="strava_to_intervals_icu",
+                sync_status="completed",
+                destination_platform="intervals_icu",
+                destination_activity_id=icu_activity_id,
+                activity_name=activity.get("name"),
+                sport_type=sport,
+                distance_m=activity.get("distance"),
+                elevation_up_m=activity.get("total_elevation_gain"),
+                duration_seconds=activity.get("moving_time"),
+                started_at=started_at,
+            )
+            db.add(record)
+            await db.commit()
+            synced_count += 1
+
+        except Exception as exc:
+            logger.error("_run_strava_to_intervals_icu: failed for activity %s: %s", strava_id, exc)
+
+    logger.info(
+        "_run_strava_to_intervals_icu: pipeline %s → %d activities synced",
+        pipeline.id,
+        synced_count,
+    )
+
+
+# ── Strava → Runalyze ─────────────────────────────────────────────────────────
+
+
+async def _run_strava_to_runalyze(
+    db: object,
+    pipeline: Pipeline,
+    user: User,
+    source: Connection,
+    dest: Connection,
+) -> None:
+    """Handle a Strava→Runalyze pipeline.
+
+    Same watermark + streams-to-GPX pattern as _run_strava_to_intervals_icu.
+    """
+    if not dest.credentials_enc:
+        logger.error("_run_strava_to_runalyze: no dest credentials for %s", dest.id)
+        return
+
+    resolved = await _resolve_strava_client(db, user)
+    if not resolved:
+        logger.error("_run_strava_to_runalyze: no Strava token for user %s", user.id)
+        return
+    strava_client, strava_app, tier_str = resolved
+
+    dst_creds = json.loads(security.decrypt(dest.credentials_enc))
+    runalyze_client = RunalyzeClient(access_token=dst_creds["access_token"])
+
+    activities = await _fetch_strava_activities_since(db, user, strava_client, strava_app, tier_str)
+
+    from app.db.models.sync import SyncedActivity as _SA
+
+    synced_count = 0
+    for activity in activities:
+        strava_id = str(activity.get("id", ""))
+        if not strava_id:
+            continue
+
+        already = await db.execute(
+            select(_SA).where(
+                _SA.pipeline_id == pipeline.id,
+                _SA.strava_activity_id == strava_id,
+                _SA.destination_platform == "runalyze",
+                _SA.sync_status == "completed",
+            )
+        )
+        if already.scalar_one_or_none():
+            continue
+
+        try:
+            streams = await rate_limit_guard.call(
+                strava_app.id,
+                tier_str,
+                strava_client.get_activity_streams,
+                activity_id=strava_id,
+            )
+            started_at = None
+            try:
+                started_at = datetime.fromisoformat(
+                    activity.get("start_date", "").replace("Z", "+00:00")
+                )
+            except Exception:
+                pass
+
+            sport = activity.get("sport_type") or activity.get("type")
+            gpx_bytes = streams_to_gpx(
+                activity_name=activity.get("name", ""),
+                sport_type=sport or "",
+                started_at=started_at,
+                streams=streams,
+            )
+            if not gpx_bytes:
+                logger.debug(
+                    "_run_strava_to_runalyze: no GPS data for activity %s — skipping",
+                    strava_id,
+                )
+                continue
+
+            runalyze_activity_id = await runalyze_client.upload_gpx(
+                gpx_bytes=gpx_bytes,
+                external_id=f"strava_{strava_id}",
+            )
+
+            record = _SA(
+                user_id=user.id,
+                pipeline_id=pipeline.id,
+                strava_activity_id=strava_id,
+                source="strava",
+                sync_direction="strava_to_runalyze",
+                sync_status="completed",
+                destination_platform="runalyze",
+                destination_activity_id=runalyze_activity_id,
+                activity_name=activity.get("name"),
+                sport_type=sport,
+                distance_m=activity.get("distance"),
+                elevation_up_m=activity.get("total_elevation_gain"),
+                duration_seconds=activity.get("moving_time"),
+                started_at=started_at,
+            )
+            db.add(record)
+            await db.commit()
+            synced_count += 1
+
+        except Exception as exc:
+            logger.error("_run_strava_to_runalyze: failed for activity %s: %s", strava_id, exc)
+
+    logger.info(
+        "_run_strava_to_runalyze: pipeline %s → %d activities synced", pipeline.id, synced_count
+    )
 
 
 # ── Direct GPX → Strava upload ────────────────────────────────────────────────

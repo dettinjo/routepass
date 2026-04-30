@@ -34,6 +34,7 @@ from app.db.models.sync import SyncedActivity
 from app.db.models.user import StravaApp, User
 from app.services.komoot import KomootClient
 from app.services.strava import StravaClient
+from app.services.strava import streams_to_gpx as _strava_streams_to_gpx
 
 _logger = logging.getLogger(__name__)
 
@@ -115,38 +116,7 @@ def _streams_to_gpx(
     streams: dict,
 ) -> bytes:
     """Convert Strava stream data (latlng, altitude, time) to GPX bytes."""
-    latlng: list = streams.get("latlng", {}).get("data", [])
-    altitudes: list = streams.get("altitude", {}).get("data", [])
-    times: list = streams.get("time", {}).get("data", [])  # seconds offset from start
-
-    base_time = started_at or datetime(2000, 1, 1, tzinfo=UTC)
-
-    lines: list[str] = [
-        '<?xml version="1.0" encoding="UTF-8"?>',
-        '<gpx version="1.1" creator="RoutePass"',
-        '     xmlns="http://www.topografix.com/GPX/1/1">',
-        "  <metadata>",
-        f"    <name>{activity_name}</name>",
-        f"    <time>{base_time.strftime('%Y-%m-%dT%H:%M:%SZ')}</time>",
-        "  </metadata>",
-        "  <trk>",
-        f"    <name>{activity_name}</name>",
-        f"    <type>{sport_type or 'unknown'}</type>",
-        "    <trkseg>",
-    ]
-
-    for i, (lat, lon) in enumerate(latlng):
-        ele = altitudes[i] if i < len(altitudes) else 0
-        offset = times[i] if i < len(times) else 0
-        t = base_time + timedelta(seconds=int(offset))
-        ts = t.strftime("%Y-%m-%dT%H:%M:%SZ")
-        lines.append(
-            f'      <trkpt lat="{lat:.6f}" lon="{lon:.6f}">'
-            f"<ele>{ele:.1f}</ele><time>{ts}</time></trkpt>"
-        )
-
-    lines += ["    </trkseg>", "  </trk>", "</gpx>"]
-    return "\n".join(lines).encode("utf-8")
+    return _strava_streams_to_gpx(activity_name, sport_type, started_at, streams)
 
 
 # ── Seed templates ────────────────────────────────────────────────────────────
