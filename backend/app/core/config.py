@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "production"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
     FRONTEND_URL: str = "http://localhost:3000"
+    # Comma-separated list of allowed CORS origins in production.
+    # Supports cloud (multiple subdomains) and custom self-hosted domains.
+    # Example: "https://routepass.app,https://app.routepass.app"
+    FRONTEND_URLS: str = ""
     STRAVA_WEBHOOK_VERIFY_TOKEN: str = ""
 
     # Deployment mode — controls feature set and billing availability.
