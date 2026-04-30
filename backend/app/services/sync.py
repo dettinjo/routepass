@@ -159,24 +159,41 @@ class SyncService:
         )
         return result.scalar_one_or_none() is not None
 
-    async def ingest_komoot_tours(self, user: User, komoot: KomootClient) -> int:
+    async def ingest_komoot_tours(
+        self,
+        user: User,
+        komoot: KomootClient,
+        since: datetime | None = None,
+    ) -> int:
         """Fetch Komoot tours and store them in the hub DB without requiring Strava.
 
         Activities are stored as source='komoot', sync_status='completed' so they appear
         in the activities overview immediately. strava_activity_id is left NULL and can be
         filled in later when the user connects Strava and uploads.
 
+        Args:
+            since: Watermark override. When provided (E5 per-connection path), the caller
+                   manages the ConnectionSyncState and this method skips UserSyncState.
+                   When omitted, falls back to UserSyncState.last_komoot_sync_at.
+
         Returns the count of newly stored tours.
         """
         state = await self._get_or_create_sync_state(str(user.id))
 
-        # First ever ingest: look back 90 days to capture recent history
-        if state.last_komoot_sync_at is None:
-            since = datetime.now(UTC) - timedelta(days=90)
-            logger.info("Initial Komoot ingest for user %s — looking back to %s", user.id, since)
+        if since is None:
+            # Legacy path: use global UserSyncState watermark
+            if state.last_komoot_sync_at is None:
+                since = datetime.now(UTC) - timedelta(days=90)
+                logger.info(
+                    "Initial Komoot ingest for user %s — looking back to %s", user.id, since
+                )
+            else:
+                since = state.last_komoot_sync_at
+                logger.info("Komoot ingest for user %s since %s", user.id, since)
         else:
-            since = state.last_komoot_sync_at
-            logger.info("Komoot ingest for user %s since %s", user.id, since)
+            logger.info(
+                "Komoot ingest for user %s since %s (per-connection watermark)", user.id, since
+            )
 
         try:
             tours = await komoot.get_tours(since=since)

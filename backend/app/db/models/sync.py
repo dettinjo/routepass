@@ -12,6 +12,7 @@ from app.db.base import Base
 UTC = UTC
 
 if TYPE_CHECKING:
+    from app.db.models.connection import Connection
     from app.db.models.pipeline import Pipeline
     from app.db.models.user import User
 
@@ -164,6 +165,43 @@ class SyncRule(Base):
     # Relationships
     user: Mapped[User] = relationship("User", back_populates="sync_rules")
     pipeline: Mapped[Pipeline | None] = relationship("Pipeline", back_populates="sync_rules")
+
+
+class ConnectionSyncState(Base):
+    """Per-connection sync watermark — replaces the global UserSyncState columns."""
+
+    __tablename__ = "connection_sync_state"
+    __table_args__ = (
+        sa.UniqueConstraint("connection_id", name="uq_connection_sync_state_connection"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        sa.UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    connection_id: Mapped[UUID] = mapped_column(
+        sa.UUID(as_uuid=True),
+        sa.ForeignKey("connections.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        sa.UUID(as_uuid=True),
+        sa.ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    last_synced_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[str | None] = mapped_column(sa.String, nullable=True)
+    last_error_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
+
+    # Relationships
+    connection: Mapped[Connection] = relationship("Connection")
 
 
 class JobAuditLog(Base):

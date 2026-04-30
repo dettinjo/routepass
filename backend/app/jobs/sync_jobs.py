@@ -12,7 +12,7 @@ from app.core.rate_limit import rate_limit_guard
 from app.db.models.connection import Connection
 from app.db.models.pipeline import Pipeline
 from app.db.models.subscription import Subscription
-from app.db.models.sync import JobAuditLog, SyncedActivity
+from app.db.models.sync import ConnectionSyncState, JobAuditLog, SyncedActivity
 from app.db.models.user import StravaApp, StravaToken, User
 from app.db.session import AsyncSessionLocal
 from app.services.intervals_icu import IntervalsIcuClient
@@ -115,12 +115,51 @@ async def poll_user_sources(ctx: dict, user_id: str) -> None:
             komoot_ingested = False
 
             for conn in source_connections:
+                # Load or create per-connection watermark (E5).
+                # Seed from global UserSyncState on first access for backwards compat.
+                css_res = await db.execute(
+                    select(ConnectionSyncState).where(ConnectionSyncState.connection_id == conn.id)
+                )
+                conn_state = css_res.scalar_one_or_none()
+                if not conn_state:
+                    from app.db.models.sync import UserSyncState as _USS
+
+                    uss_res = await db.execute(select(_USS).where(_USS.user_id == user.id))
+                    uss = uss_res.scalar_one_or_none()
+                    seed_ts = None
+                    if uss:
+                        seed_ts = uss.last_komoot_sync_at if conn.platform == "komoot" else None
+                    conn_state = ConnectionSyncState(
+                        connection_id=conn.id,
+                        user_id=user.id,
+                        last_synced_at=seed_ts,
+                    )
+                    db.add(conn_state)
+                    await db.commit()
+
                 if conn.platform == "komoot":
                     komoot_client = _build_komoot_client_from_connection(conn)
                     if komoot_client:
-                        await sync_service.ingest_komoot_tours(user=user, komoot=komoot_client)
-                        komoot_ingested = True
-                        await db.commit()
+                        try:
+                            await sync_service.ingest_komoot_tours(
+                                user=user,
+                                komoot=komoot_client,
+                                since=conn_state.last_synced_at,
+                            )
+                            conn_state.last_synced_at = datetime.now(UTC)
+                            conn_state.last_error = None
+                            conn_state.last_error_at = None
+                            komoot_ingested = True
+                            await db.commit()
+                        except Exception as exc:
+                            conn_state.last_error = str(exc)
+                            conn_state.last_error_at = datetime.now(UTC)
+                            await db.commit()
+                            logger.error(
+                                "poll_user_sources: Komoot ingest failed for conn %s: %s",
+                                conn.id,
+                                exc,
+                            )
                 else:
                     logger.info(
                         "poll_user_sources: platform '%s' not yet implemented — skipping",
