@@ -9,7 +9,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 
+UTC = UTC
+
 if TYPE_CHECKING:
+    from app.db.models.pipeline import Pipeline
     from app.db.models.user import User
 
 
@@ -17,18 +20,36 @@ class SyncedActivity(Base):
     __tablename__ = "synced_activities"
     __table_args__ = (
         sa.CheckConstraint(
-            "sync_direction IN ('komoot_to_strava', 'strava_to_komoot')",
+            "sync_direction IS NULL OR sync_direction IN ("
+            "'komoot_to_strava', 'strava_to_komoot',"
+            "'komoot_to_intervals_icu', 'komoot_to_runalyze',"
+            "'strava_to_intervals_icu', 'strava_to_runalyze',"
+            "'import_to_strava', 'import_to_komoot'"
+            ")",
             name="ck_synced_activities_sync_direction",
         ),
         sa.CheckConstraint(
             "sync_status IN ('pending', 'processing', 'completed', 'failed', 'conflict')",
             name="ck_synced_activities_sync_status",
         ),
-        sa.UniqueConstraint("user_id", "komoot_tour_id", name="uq_synced_activities_user_komoot"),
+        sa.CheckConstraint(
+            "source IN ('komoot', 'strava', 'import', 'garmin', 'polar', 'wahoo')",
+            name="ck_synced_activities_source",
+        ),
+        # Composite unique: one row per (user, komoot_tour, destination_platform).
+        # NULL komoot_tour_id is fine — SQL NULL != NULL so Strava-native and Garmin
+        # activities are not constrained by this. Each source handler handles its own dedup.
+        sa.UniqueConstraint(
+            "user_id",
+            "komoot_tour_id",
+            "destination_platform",
+            name="uq_synced_activities_user_komoot_dest",
+        ),
         sa.UniqueConstraint(
             "user_id", "strava_activity_id", name="uq_synced_activities_user_strava"
         ),
         sa.Index("ix_synced_activities_user_synced_at", "user_id", "synced_at"),
+        sa.Index("ix_synced_activities_dest_platform", "destination_platform"),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -44,7 +65,11 @@ class SyncedActivity(Base):
     )
     komoot_tour_id: Mapped[str | None] = mapped_column(sa.String, nullable=True)
     strava_activity_id: Mapped[str | None] = mapped_column(sa.String, nullable=True)
-    sync_direction: Mapped[str] = mapped_column(sa.String, nullable=False)
+    # Hub destination fields — set when an activity is pushed to an external platform.
+    destination_platform: Mapped[str | None] = mapped_column(sa.String, nullable=True)
+    destination_activity_id: Mapped[str | None] = mapped_column(sa.String, nullable=True)
+    sync_direction: Mapped[str | None] = mapped_column(sa.String, nullable=True)
+    source: Mapped[str] = mapped_column(sa.String, nullable=False, default="komoot")
     synced_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         nullable=False,
@@ -60,9 +85,17 @@ class SyncedActivity(Base):
     duration_seconds: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     conflict_reason: Mapped[str | None] = mapped_column(sa.String, nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
+    gpx_data: Mapped[bytes | None] = mapped_column(sa.LargeBinary, nullable=True)
+    pipeline_id: Mapped[UUID | None] = mapped_column(
+        sa.UUID(as_uuid=True),
+        sa.ForeignKey("pipelines.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # Relationships
     user: Mapped[User] = relationship("User", back_populates="synced_activities")
+    pipeline: Mapped[Pipeline | None] = relationship("Pipeline", back_populates="synced_activities")
 
 
 class UserSyncState(Base):
@@ -121,9 +154,16 @@ class SyncRule(Base):
         nullable=False,
         default=lambda: datetime.now(UTC),
     )
+    pipeline_id: Mapped[UUID | None] = mapped_column(
+        sa.UUID(as_uuid=True),
+        sa.ForeignKey("pipelines.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # Relationships
     user: Mapped[User] = relationship("User", back_populates="sync_rules")
+    pipeline: Mapped[Pipeline | None] = relationship("Pipeline", back_populates="sync_rules")
 
 
 class JobAuditLog(Base):

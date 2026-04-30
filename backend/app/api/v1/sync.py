@@ -99,7 +99,11 @@ async def trigger_sync(
     arq_pool = request.app.state.arq_pool
     if not arq_pool:
         return {"status": "error", "message": "Worker pool not available"}
-    await arq_pool.enqueue_job("poll_user_sources", str(user.id))
+    await arq_pool.enqueue_job(
+        "poll_user_sources",
+        str(user.id),
+        _job_id=f"poll_user_{user.id}",  # dedup: prevents duplicate queuing
+    )
     return {"status": "queued", "message": "Sync job enqueued successfully"}
 
 

@@ -17,6 +17,8 @@ from app.db.models.subscription import ApiKey
 from app.db.models.user import User
 from app.db.session import get_db  # re-export
 
+UTC = UTC
+
 __all__ = [
     "get_db",
     "get_current_user",
@@ -30,12 +32,12 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-TIER_RANKS: dict[str, int] = {"free": 0, "pro": 1, "lifetime": 1, "business": 2}
+TIER_RANKS: dict = {"free": 0, "pro": 1, "lifetime": 1, "business": 2}
 
 _redis_pool: aioredis.Redis | None = None
 
 
-async def get_redis() -> AsyncGenerator[aioredis.Redis, None]:
+async def get_redis() -> AsyncGenerator:
     """Yield an aioredis connection from the shared pool."""
     global _redis_pool
     if _redis_pool is None:
@@ -71,6 +73,9 @@ async def get_current_user(
 def require_tier(min_tier: str) -> Callable:
     """Return a FastAPI dependency that raises HTTP 402 when the user's tier is insufficient.
 
+    In self-hosted mode all features are unlocked regardless of tier, so the
+    check is skipped entirely.
+
     Args:
         min_tier: Minimum required tier name ("free", "pro", or "business").
     """
@@ -80,6 +85,10 @@ def require_tier(min_tier: str) -> Callable:
         user: User = Depends(get_current_user),
         db: AsyncSession = Depends(get_db),
     ) -> None:
+        # Self-hosted: all features unlocked for the instance owner.
+        if settings.DEPLOYMENT_MODE == "selfhosted":
+            return
+
         from app.db.models.subscription import Subscription
 
         result = await db.execute(select(Subscription).where(Subscription.user_id == user.id))

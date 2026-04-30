@@ -339,6 +339,14 @@ async def source_poll_scheduler(ctx: dict) -> None:
         logger.error("Redis not available in Worker ctx.")
         return
 
+    # Distributed lock — only one worker replica runs the scheduler per tick.
+    # TTL of 290 s (just under the 5-min cron interval) prevents a stale lock
+    # from blocking the next tick if the scheduler worker crashes mid-run.
+    lock_acquired = await redis.set("routepass:scheduler_lock", 1, nx=True, ex=290)
+    if not lock_acquired:
+        logger.debug("source_poll_scheduler: lock held by another worker — skipping")
+        return
+
     async with AsyncSessionLocal() as db:
         # Fetch active StravaApp id for Strava budget check
         app_result = await db.execute(
@@ -384,7 +392,11 @@ async def source_poll_scheduler(ctx: dict) -> None:
             if budget_exhausted_for_free and tier == "free":
                 skipped_budget += 1
                 continue
-            await redis.enqueue_job("poll_user_sources", str(uid))
+            await redis.enqueue_job(
+                "poll_user_sources",
+                str(uid),
+                _job_id=f"poll_user_{uid}",  # ARQ dedup: same ID = no double-enqueue
+            )
             enqueued += 1
 
         logger.info(
@@ -611,20 +623,18 @@ async def _run_komoot_to_intervals_icu(
     synced_count = 0
     for tour in tours:
         try:
-            # Pipeline-scoped deduplication (avoids the global unique constraint)
             from app.db.models.sync import SyncedActivity as _SA
 
             already = await db.execute(
                 _select(_SA).where(
-                    _SA.pipeline_id == pipeline.id,
+                    _SA.user_id == user.id,
                     _SA.komoot_tour_id == tour.id,
+                    _SA.destination_platform == "intervals_icu",
                     _SA.sync_status == "completed",
                 )
             )
             if already.scalar_one_or_none():
-                logger.debug(
-                    "Tour %s already synced via pipeline %s — skipping", tour.id, pipeline.id
-                )
+                logger.debug("Tour %s already synced to intervals_icu — skipping", tour.id)
                 continue
 
             gpx_bytes = await komoot_client.download_gpx(tour.id)
@@ -640,8 +650,9 @@ async def _run_komoot_to_intervals_icu(
                 user_id=user.id,
                 pipeline_id=pipeline.id,
                 komoot_tour_id=tour.id,
-                strava_activity_id=activity_id,  # repurposed field: intervals.icu activity id
-                sync_direction="komoot_to_strava",  # closest valid enum value pending migration
+                destination_platform="intervals_icu",
+                destination_activity_id=activity_id,
+                sync_direction="komoot_to_intervals_icu",
                 sync_status="completed",
                 activity_name=tour.name,
                 sport_type=tour.sport,
@@ -726,15 +737,14 @@ async def _run_komoot_to_runalyze(
 
             already = await db.execute(
                 _select(_SA).where(
-                    _SA.pipeline_id == pipeline.id,
+                    _SA.user_id == user.id,
                     _SA.komoot_tour_id == tour.id,
+                    _SA.destination_platform == "runalyze",
                     _SA.sync_status == "completed",
                 )
             )
             if already.scalar_one_or_none():
-                logger.debug(
-                    "Tour %s already synced via pipeline %s — skipping", tour.id, pipeline.id
-                )
+                logger.debug("Tour %s already synced to runalyze — skipping", tour.id)
                 continue
 
             gpx_bytes = await komoot_client.download_gpx(tour.id)
@@ -747,8 +757,9 @@ async def _run_komoot_to_runalyze(
                 user_id=user.id,
                 pipeline_id=pipeline.id,
                 komoot_tour_id=tour.id,
-                strava_activity_id=activity_id,  # repurposed field: runalyze activityId
-                sync_direction="komoot_to_strava",  # closest valid enum value pending migration
+                destination_platform="runalyze",
+                destination_activity_id=activity_id,
+                sync_direction="komoot_to_runalyze",
                 sync_status="completed",
                 activity_name=tour.name,
                 sport_type=tour.sport,
@@ -901,8 +912,12 @@ async def sync_gpx_to_strava(ctx: dict, activity_id: str, user_id: str) -> None:
             strava_activity_id = await strava.poll_upload(upload_id)
 
             activity.strava_activity_id = strava_activity_id
+            activity.destination_platform = "strava"
+            activity.destination_activity_id = strava_activity_id
             activity.sync_status = "completed"
-            activity.sync_direction = "komoot_to_strava"
+            activity.sync_direction = (
+                "komoot_to_strava" if activity.source == "komoot" else "import_to_strava"
+            )
             activity.conflict_reason = None
             await db.commit()
             logger.info(
@@ -1009,8 +1024,10 @@ async def sync_activity_to_komoot(ctx: dict, activity_id: str, user_id: str) -> 
             )
 
             activity.komoot_tour_id = tour_id
+            activity.destination_platform = "komoot"
+            activity.destination_activity_id = tour_id
             activity.sync_status = "completed"
-            activity.sync_direction = "komoot_to_strava"  # closest valid value until schema extends
+            activity.sync_direction = "import_to_komoot"
             activity.conflict_reason = None
             await db.commit()
             logger.info(

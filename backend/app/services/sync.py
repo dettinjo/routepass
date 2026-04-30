@@ -4,6 +4,7 @@ import logging
 import re
 from datetime import UTC, datetime, timedelta
 
+import sqlalchemy as sa
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -371,7 +372,10 @@ class SyncService:
             select(SyncedActivity).where(
                 SyncedActivity.user_id == user.id,
                 SyncedActivity.source == "komoot",
-                SyncedActivity.strava_activity_id.is_(None),
+                sa.or_(
+                    SyncedActivity.destination_platform.is_(None),
+                    SyncedActivity.destination_platform != "strava",
+                ),
             )
         )
         pending = pending_res.scalars().all()
@@ -439,6 +443,9 @@ class SyncService:
                     logger.warning("Could not set hide_from_home on %s: %s", strava_activity_id, e)
 
                 act.strava_activity_id = strava_activity_id
+                act.destination_platform = "strava"
+                act.destination_activity_id = strava_activity_id
+                act.sync_direction = "komoot_to_strava"
                 await self.db.commit()
                 uploaded += 1
                 logger.info(
@@ -453,6 +460,9 @@ class SyncService:
                 if m:
                     existing_id = m.group(1)
                     act.strava_activity_id = existing_id
+                    act.destination_platform = "strava"
+                    act.destination_activity_id = existing_id
+                    act.sync_direction = "komoot_to_strava"
                     await self.db.commit()
                     uploaded += 1
                     logger.info(

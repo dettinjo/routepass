@@ -8,9 +8,13 @@ from arq.cron import cron
 from app.core.config import settings
 from app.db.session import engine
 from app.jobs.sync_jobs import (
-    komoot_poll_scheduler,
     poll_komoot_user,
+    poll_user_sources,
     process_strava_activity,
+    run_pipeline,
+    source_poll_scheduler,
+    sync_activity_to_komoot,
+    sync_gpx_to_strava,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,21 +41,22 @@ class WorkerSettings:
     on_shutdown = shutdown
 
     functions = [
-        poll_komoot_user,
+        poll_user_sources,
+        poll_komoot_user,  # backwards-compat alias for in-flight ARQ jobs
         process_strava_activity,
+        run_pipeline,
+        sync_gpx_to_strava,
+        sync_activity_to_komoot,
     ]
 
     cron_jobs = [
         cron(
-            komoot_poll_scheduler,
+            source_poll_scheduler,
             hour=None,
-            minute=set(range(0, 60, 5)),  # Run every 5 minutes
+            minute=set(range(0, 60, 5)),  # every 5 minutes
             run_at_startup=True,
         )
     ]
 
-    # Max simultaneous jobs
-    max_jobs = 10
-
-    # Max job timeout
+    max_jobs = settings.ARQ_MAX_JOBS
     job_timeout = 600

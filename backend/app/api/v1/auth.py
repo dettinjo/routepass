@@ -58,6 +58,17 @@ async def register_user(
     if existing_user is not None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Email is already registered.")
 
+    # Self-hosted: enforce the operator-configured user cap (MAX_USERS > 0).
+    if settings.DEPLOYMENT_MODE == "selfhosted" and settings.MAX_USERS > 0:
+        from sqlalchemy import func
+
+        count_result = await db.execute(select(func.count()).select_from(User))
+        if (count_result.scalar() or 0) >= settings.MAX_USERS:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This instance has reached its maximum user limit.",
+            )
+
     user = User(
         email=payload.email,
         password_hash=security.hash_password(payload.password),

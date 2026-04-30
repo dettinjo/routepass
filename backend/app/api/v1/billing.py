@@ -72,6 +72,12 @@ async def create_checkout_session(
     db: AsyncSession = Depends(deps.get_db),
 ) -> dict[str, str]:
     """Create a Stripe Checkout Session for subscription upgrade."""
+    if settings.DEPLOYMENT_MODE == "selfhosted":
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Billing is not available in self-hosted mode.",
+        )
+
     if payload.tier == "pro":
         price_id = settings.STRIPE_PRICE_PRO
         checkout_mode = "subscription"
@@ -118,6 +124,12 @@ async def create_portal_session(
     db: AsyncSession = Depends(deps.get_db),
 ) -> dict[str, str]:
     """Create a Stripe Customer Portal session."""
+    if settings.DEPLOYMENT_MODE == "selfhosted":
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Billing is not available in self-hosted mode.",
+        )
+
     stmt = select(Subscription).where(Subscription.user_id == user.id)
     result = await db.execute(stmt)
     sub = result.scalar_one_or_none()

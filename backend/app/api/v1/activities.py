@@ -317,6 +317,8 @@ def _serialize_activity(act: SyncedActivity) -> dict:
         "source": act.source,
         "komoot_tour_id": act.komoot_tour_id,
         "strava_activity_id": act.strava_activity_id,
+        "destination_platform": act.destination_platform,
+        "destination_activity_id": act.destination_activity_id,
         "sync_direction": act.sync_direction,
         "sync_status": act.sync_status,
         "activity_name": act.activity_name,
