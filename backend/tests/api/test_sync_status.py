@@ -5,8 +5,11 @@ from datetime import UTC, datetime
 import pytest
 from httpx import AsyncClient
 
+from app.db.models.connection import Connection
 from app.db.models.sync import SyncedActivity, UserSyncState
 from app.db.models.user import User
+
+UTC = UTC
 
 
 @pytest.mark.asyncio
@@ -18,9 +21,6 @@ async def test_get_sync_status(async_client: AsyncClient):
     fake_user = User(
         id="00000000-0000-0000-0000-000000000000",
         email="test@test.com",
-        komoot_user_id="123456",
-        sync_komoot_to_strava=True,
-        sync_strava_to_komoot=False,
     )
     fake_state = UserSyncState(
         user_id=fake_user.id,
@@ -40,10 +40,31 @@ async def test_get_sync_status(async_client: AsyncClient):
         sport_type="Ride",
         synced_at=datetime.now(UTC),
     )
+    fake_komoot_conn = Connection(
+        user_id=fake_user.id,
+        platform="komoot",
+        display_name="Komoot",
+        status="active",
+    )
 
     app.dependency_overrides[deps.get_current_user] = lambda: fake_user
 
-    class FakeResult:
+    class FakeScalarsResult:
+        """Supports .scalars().all() for Connection list queries."""
+
+        def __init__(self, items):
+            self._items = items
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self._items
+
+        def scalar_one_or_none(self):
+            return self._items[0] if self._items else None
+
+    class FakeSingleResult:
         def __init__(self, scalar_val=None):
             self._scalar = scalar_val
 
@@ -57,8 +78,16 @@ async def test_get_sync_status(async_client: AsyncClient):
         async def execute(self, stmt):
             self.calls += 1
             if self.calls == 1:
-                return FakeResult(scalar_val=fake_state)
-            return FakeResult(scalar_val=fake_activity)
+                # select(UserSyncState)
+                return FakeSingleResult(scalar_val=fake_state)
+            if self.calls == 2:
+                # select(SyncedActivity) — latest activity
+                return FakeSingleResult(scalar_val=fake_activity)
+            if self.calls == 3:
+                # select(Connection) — returns list; komoot is connected
+                return FakeScalarsResult([fake_komoot_conn])
+            # select(StravaToken)
+            return FakeSingleResult(scalar_val=None)
 
     app.dependency_overrides[deps.get_db] = lambda: FakeDB()
 
@@ -67,7 +96,6 @@ async def test_get_sync_status(async_client: AsyncClient):
     assert response.status_code == 200
     data = response.json()
     assert data["komoot_connected"] is True
-    assert data["sync_komoot_to_strava"] is True
     assert data["total_synced_count"] == 4
     assert data["latest_activity"]["activity_name"] == "Evening Ride"
 

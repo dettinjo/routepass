@@ -80,8 +80,7 @@ async def test_get_me_returns_profile(
     assert data["tier"] == "free"
     assert data["komoot_connected"] is False
     assert data["strava_connected"] is False
-    assert "sync_komoot_to_strava" in data
-    assert "komoot_poll_interval_min" in data
+    assert "connections" in data
 
 
 @pytest.mark.asyncio
@@ -98,25 +97,25 @@ async def test_update_settings(
     resp = await async_client.patch(
         "/api/v1/auth/me/settings",
         headers=free_user_headers,
-        json={"hide_from_home_default": False, "komoot_poll_interval_min": 120},
+        json={"name": "Updated Name"},
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["hide_from_home_default"] is False
-    assert data["komoot_poll_interval_min"] == 120
+    assert data["name"] == "Updated Name"
 
 
 @pytest.mark.asyncio
-async def test_update_settings_poll_interval_too_low_returns_400(
+async def test_update_settings_unknown_fields_ignored(
     async_client: AsyncClient, free_user: User, free_user_headers: dict
 ):
-    # Free users must use >= 120 min; 30 min is below the free-tier minimum
+    # Unknown/removed fields must not cause a server error — Pydantic strips extras
     resp = await async_client.patch(
         "/api/v1/auth/me/settings",
         headers=free_user_headers,
-        json={"komoot_poll_interval_min": 30},
+        json={"name": "Valid Name", "unknown_field": "ignored"},
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "Valid Name"
 
 
 @pytest.mark.asyncio
@@ -403,7 +402,7 @@ async def test_api_key_create_list_revoke(
     )
     assert create_resp.status_code == 200
     data = create_resp.json()
-    assert data["raw_key"].startswith("kss_")
+    assert data["raw_key"].startswith("rp_")
     assert "raw_key" in data
     key_id = data["id"]
 

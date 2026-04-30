@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from typing import Any
+import secrets
+from datetime import UTC, datetime, timedelta
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -15,12 +16,15 @@ from app.core.config import settings
 from app.db.models.subscription import Subscription
 from app.db.models.user import StravaApp, StravaToken, User
 
+UTC = UTC
+
 router = APIRouter(tags=["auth"])
 
 
 class RegisterRequest(BaseModel):
     email: str
     password: str
+    name: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -57,6 +61,7 @@ async def register_user(
     user = User(
         email=payload.email,
         password_hash=security.hash_password(payload.password),
+        name=payload.name or None,
         is_active=True,
     )
     db.add(user)
@@ -112,32 +117,47 @@ async def refresh_access_token(
 async def get_current_user_profile(
     user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(deps.get_db),
-) -> dict[str, Any]:
+) -> dict:
     """Retrieve the current logged-in user profile and connection statuses."""
-    from app.db.models.subscription import Subscription
-
     sub_result = await db.execute(select(Subscription).where(Subscription.user_id == user.id))
     sub = sub_result.scalar_one_or_none()
     tier = sub.tier if sub else "free"
 
+    from app.db.models.connection import Connection as ConnectionModel
+    from app.db.models.user import StravaToken
+
+    connections_result = await db.execute(
+        select(ConnectionModel).where(ConnectionModel.user_id == user.id)
+    )
+    connected_platforms = {c.platform for c in connections_result.scalars().all()}
+    strava_token = (
+        await db.execute(select(StravaToken).where(StravaToken.user_id == user.id))
+    ).scalar_one_or_none()
+    if strava_token:
+        connected_platforms.add("strava")
+
     return {
         "id": str(user.id),
         "email": user.email,
+        "name": user.name,
         "is_active": user.is_active,
         "tier": tier,
-        "komoot_connected": bool(user.komoot_user_id),
-        "strava_connected": bool(user.strava_token),
-        "sync_komoot_to_strava": user.sync_komoot_to_strava,
-        "sync_strava_to_komoot": user.sync_strava_to_komoot,
-        "hide_from_home_default": user.hide_from_home_default,
-        "komoot_poll_interval_min": user.komoot_poll_interval_min,
+        "connections": [{"platform": p, "connected": True} for p in sorted(connected_platforms)],
+        # Legacy fields retained for backward-compatibility until frontend is updated (F3).
+        "komoot_connected": "komoot" in connected_platforms,
+        "strava_connected": "strava" in connected_platforms,
     }
 
 
 @router.get("/strava/login")
-async def get_strava_login_url() -> dict[str, str]:
-    """Return the Strava OAuth login URL for the frontend to redirect the user to."""
-    redirect_uri = f"{settings.FRONTEND_URL}/strava-callback"
+async def get_strava_login_url(
+    user: User = Depends(deps.get_current_user),
+) -> dict:
+    """Return the Strava OAuth URL. Frontend calls this (with Bearer token) then redirects."""
+    # Encode a short-lived JWT as the state so the callback can identify the user
+    # without requiring an auth header (Strava GET redirect has no header support).
+    state_token = security.create_access_token(str(user.id), expires_delta=timedelta(minutes=10))
+    redirect_uri = f"{settings.FRONTEND_URL}/strava/callback"
     url = (
         "https://www.strava.com/oauth/authorize"
         f"?client_id={settings.STRAVA_CLIENT_ID}"
@@ -145,8 +165,9 @@ async def get_strava_login_url() -> dict[str, str]:
         f"&redirect_uri={redirect_uri}"
         "&approval_prompt=force"
         "&scope=activity:write,activity:read_all"
+        f"&state={state_token}"
     )
-    return {"url": url}
+    return {"url": url, "state": state_token}
 
 
 @router.post("/strava/callback")
@@ -154,7 +175,7 @@ async def strava_oauth_callback(
     payload: StravaCallback,
     user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(deps.get_db),
-) -> dict[str, str]:
+) -> dict:
     """Exchange OAuth code for Strava tokens and save to user profile."""
     try:
         async with httpx.AsyncClient() as client:
@@ -187,22 +208,65 @@ async def strava_oauth_callback(
             "No Strava app configured. Contact the administrator.",
         )
 
-    if user.strava_token:
-        user.strava_token.access_token = security.encrypt(data["access_token"])
-        user.strava_token.refresh_token = security.encrypt(data["refresh_token"])
-        user.strava_token.expires_at = datetime.fromtimestamp(data["expires_at"], tz=UTC)
-        user.strava_token.strava_athlete_id = athlete_id
-    else:
-        new_token = StravaToken(
-            user_id=user.id,
-            strava_app_id=strava_app.id,
-            strava_athlete_id=athlete_id,
-            access_token=security.encrypt(data["access_token"]),
-            refresh_token=security.encrypt(data["refresh_token"]),
-            expires_at=datetime.fromtimestamp(data["expires_at"], tz=UTC),
-            connected_at=datetime.now(UTC),
+    # Async SQLAlchemy does not support lazy loading, so user.strava_token is
+    # always None. Explicitly query by user_id and also by athlete_id to handle
+    # reconnects correctly without hitting the unique constraint.
+    token_result = await db.execute(select(StravaToken).where(StravaToken.user_id == user.id))
+    existing_token = token_result.scalar_one_or_none()
+
+    if existing_token is None:
+        # Also check if this athlete_id already exists under another user row
+        # (e.g. a previous failed connect that left an orphaned record).
+        orphan_result = await db.execute(
+            select(StravaToken).where(StravaToken.strava_athlete_id == athlete_id)
         )
-        db.add(new_token)
+        existing_token = orphan_result.scalar_one_or_none()
+        if existing_token is not None:
+            # Re-assign the orphaned token to this user
+            existing_token.user_id = user.id
+
+    if existing_token is not None:
+        existing_token.strava_app_id = strava_app.id
+        existing_token.strava_athlete_id = athlete_id
+        existing_token.access_token = security.encrypt(data["access_token"])
+        existing_token.refresh_token = security.encrypt(data["refresh_token"])
+        existing_token.expires_at = datetime.fromtimestamp(data["expires_at"], tz=UTC)
+    else:
+        db.add(
+            StravaToken(
+                user_id=user.id,
+                strava_app_id=strava_app.id,
+                strava_athlete_id=athlete_id,
+                access_token=security.encrypt(data["access_token"]),
+                refresh_token=security.encrypt(data["refresh_token"]),
+                expires_at=datetime.fromtimestamp(data["expires_at"], tz=UTC),
+                connected_at=datetime.now(UTC),
+            )
+        )
+
+    # Keep the connections table in sync so the connections page shows Strava as connected
+    from app.db.models.connection import Connection as ConnectionModel
+
+    athlete_name = (data.get("athlete") or {}).get("username") or f"athlete_{athlete_id}"
+    conn_result = await db.execute(
+        select(ConnectionModel).where(
+            ConnectionModel.user_id == user.id,
+            ConnectionModel.platform == "strava",
+        )
+    )
+    existing_conn = conn_result.scalar_one_or_none()
+    if existing_conn:
+        existing_conn.display_name = athlete_name
+        existing_conn.status = "active"
+    else:
+        db.add(
+            ConnectionModel(
+                user_id=user.id,
+                platform="strava",
+                display_name=athlete_name,
+                status="active",
+            )
+        )
 
     await db.commit()
     return {"status": "success", "message": "Strava account connected"}
@@ -213,15 +277,41 @@ async def setup_komoot_connection(
     payload: KomootCredentials,
     user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(deps.get_db),
-) -> dict[str, str]:
-    """Save encrypted Komoot credentials to user profile."""
-    user.komoot_email_encrypted = security.encrypt(payload.email)
-    user.komoot_password_encrypted = security.encrypt(payload.password)
-    user.komoot_user_id = payload.user_id
-    user.komoot_connected_at = datetime.now(UTC)
+) -> dict:
+    """Save encrypted Komoot credentials to the Connection table."""
+    import json
 
-    # Enable sync by default when they connect valid credentials
-    user.sync_komoot_to_strava = True
+    from app.core.security import encrypt
+    from app.db.models.connection import Connection as ConnectionModel
+
+    credentials_enc = encrypt(
+        json.dumps(
+            {"email": payload.email, "password": payload.password, "user_id": payload.user_id}
+        )
+    )
+
+    existing = (
+        await db.execute(
+            select(ConnectionModel).where(
+                ConnectionModel.user_id == user.id,
+                ConnectionModel.platform == "komoot",
+            )
+        )
+    ).scalar_one_or_none()
+
+    if existing:
+        existing.credentials_enc = credentials_enc
+        existing.status = "active"
+    else:
+        db.add(
+            ConnectionModel(
+                user_id=user.id,
+                platform="komoot",
+                display_name=payload.user_id or "Komoot",
+                status="active",
+                credentials_enc=credentials_enc,
+            )
+        )
 
     await db.commit()
     return {"status": "success", "message": "Komoot connected successfully"}
@@ -231,7 +321,7 @@ async def setup_komoot_connection(
 async def disconnect_strava(
     user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(deps.get_db),
-) -> dict[str, str]:
+) -> dict:
     """Remove the current Strava connection."""
     result = await db.execute(select(StravaToken).where(StravaToken.user_id == user.id))
     token = result.scalar_one_or_none()
@@ -245,22 +335,216 @@ async def disconnect_strava(
 async def disconnect_komoot(
     user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(deps.get_db),
-) -> dict[str, str]:
-    """Remove stored Komoot credentials for the current user."""
-    user.komoot_email_encrypted = None
-    user.komoot_password_encrypted = None
-    user.komoot_user_id = None
-    user.komoot_connected_at = None
-    user.sync_komoot_to_strava = False
-    await db.commit()
+) -> dict:
+    """Remove the Komoot Connection record for the current user."""
+    from app.db.models.connection import Connection as ConnectionModel
+
+    existing = (
+        await db.execute(
+            select(ConnectionModel).where(
+                ConnectionModel.user_id == user.id,
+                ConnectionModel.platform == "komoot",
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        await db.delete(existing)
+        await db.commit()
     return {"status": "success", "message": "Komoot account disconnected"}
 
 
+# ── Social auth helpers ────────────────────────────────────────────────────────
+
+_STATE_COOKIE = "oauth_state"
+_STATE_MAX_AGE = 600  # 10 minutes
+
+
+def _set_state_cookie(response: Response) -> str:
+    state = secrets.token_urlsafe(16)
+    response.set_cookie(
+        _STATE_COOKIE,
+        state,
+        max_age=_STATE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        secure=settings.ENVIRONMENT == "production",
+    )
+    return state
+
+
+def _validate_state(state: str, cookie_state: str | None) -> None:
+    if not cookie_state or not secrets.compare_digest(state, cookie_state):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid OAuth state.")
+
+
+async def _find_or_create_user(
+    db: AsyncSession,
+    email: str,
+    name: str | None = None,
+) -> User:
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+    if user is None:
+        user = User(email=email, name=name, is_active=True)
+        db.add(user)
+        sub = Subscription(user=user, tier="free", status="active")
+        db.add(sub)
+        await db.commit()
+    elif name and not user.name:
+        # Backfill name on first social login if missing
+        user.name = name
+        await db.commit()
+    return user
+
+
+def _auth_redirect(token: str) -> RedirectResponse:
+    url = f"{settings.FRONTEND_URL}/callback?token={token}"
+    response = RedirectResponse(url, status_code=302)
+    response.delete_cookie(_STATE_COOKIE)
+    return response
+
+
+# ── Google OAuth ───────────────────────────────────────────────────────────────
+
+
+@router.get("/google", include_in_schema=False)
+async def google_login() -> RedirectResponse:
+    redirect_uri = f"{settings.FRONTEND_URL.rstrip('/')}/api/v1/auth/google/callback"
+    response = RedirectResponse("", status_code=302)
+    state = _set_state_cookie(response)
+    url = (
+        "https://accounts.google.com/o/oauth2/v2/auth"
+        f"?client_id={settings.GOOGLE_CLIENT_ID}"
+        "&response_type=code"
+        f"&redirect_uri={redirect_uri}"
+        "&scope=openid%20email"
+        f"&state={state}"
+    )
+    response.headers["location"] = url
+    return response
+
+
+@router.get("/google/callback", include_in_schema=False)
+async def google_callback(
+    code: str,
+    state: str,
+    db: AsyncSession = Depends(deps.get_db),
+    cookie_state: str | None = Cookie(None, alias=_STATE_COOKIE),
+) -> RedirectResponse:
+    _validate_state(state, cookie_state)
+    redirect_uri = f"{settings.FRONTEND_URL.rstrip('/')}/api/v1/auth/google/callback"
+    try:
+        async with httpx.AsyncClient() as client:
+            token_resp = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": code,
+                    "client_id": settings.GOOGLE_CLIENT_ID,
+                    "client_secret": settings.GOOGLE_CLIENT_SECRET,
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code",
+                },
+            )
+            token_resp.raise_for_status()
+            user_resp = await client.get(
+                "https://openidconnect.googleapis.com/v1/userinfo",
+                headers={"Authorization": f"Bearer {token_resp.json()['access_token']}"},
+            )
+            user_resp.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Google auth failed: {exc}") from exc
+
+    profile = user_resp.json()
+    email: str = profile.get("email", "")
+    if not email:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Google did not return an email.")
+    name: str | None = profile.get("name") or profile.get("given_name")
+
+    user = await _find_or_create_user(db, email, name=name)
+    token = security.create_access_token(str(user.id))
+    return _auth_redirect(token)
+
+
+# ── GitHub OAuth ───────────────────────────────────────────────────────────────
+
+
+@router.get("/github", include_in_schema=False)
+async def github_login() -> RedirectResponse:
+    redirect_uri = f"{settings.FRONTEND_URL.rstrip('/')}/api/v1/auth/github/callback"
+    response = RedirectResponse("", status_code=302)
+    state = _set_state_cookie(response)
+    url = (
+        "https://github.com/login/oauth/authorize"
+        f"?client_id={settings.GITHUB_CLIENT_ID}"
+        f"&redirect_uri={redirect_uri}"
+        "&scope=user%3Aemail"
+        f"&state={state}"
+    )
+    response.headers["location"] = url
+    return response
+
+
+@router.get("/github/callback", include_in_schema=False)
+async def github_callback(
+    code: str,
+    state: str,
+    db: AsyncSession = Depends(deps.get_db),
+    cookie_state: str | None = Cookie(None, alias=_STATE_COOKIE),
+) -> RedirectResponse:
+    _validate_state(state, cookie_state)
+    redirect_uri = f"{settings.FRONTEND_URL.rstrip('/')}/api/v1/auth/github/callback"
+    try:
+        async with httpx.AsyncClient() as client:
+            token_resp = await client.post(
+                "https://github.com/login/oauth/access_token",
+                headers={"Accept": "application/json"},
+                data={
+                    "client_id": settings.GITHUB_CLIENT_ID,
+                    "client_secret": settings.GITHUB_CLIENT_SECRET,
+                    "code": code,
+                    "redirect_uri": redirect_uri,
+                },
+            )
+            token_resp.raise_for_status()
+            access_token = token_resp.json().get("access_token", "")
+            gh_headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/vnd.github+json",
+            }
+            emails_resp = await client.get(
+                "https://api.github.com/user/emails",
+                headers=gh_headers,
+            )
+            emails_resp.raise_for_status()
+            user_profile_resp = await client.get(
+                "https://api.github.com/user",
+                headers=gh_headers,
+            )
+            user_profile_resp.raise_for_status()
+    except Exception as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"GitHub auth failed: {exc}") from exc
+
+    primary = next(
+        (e["email"] for e in emails_resp.json() if e.get("primary") and e.get("verified")),
+        None,
+    )
+    if not primary:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "GitHub did not return a verified primary email."
+        )
+    gh_profile = user_profile_resp.json()
+    gh_name: str | None = gh_profile.get("name") or gh_profile.get("login")
+
+    user = await _find_or_create_user(db, primary, name=gh_name)
+    token = security.create_access_token(str(user.id))
+    return _auth_redirect(token)
+
+
+# ── User settings ──────────────────────────────────────────────────────────────
+
+
 class UserSettings(BaseModel):
-    sync_komoot_to_strava: bool | None = None
-    sync_strava_to_komoot: bool | None = None
-    hide_from_home_default: bool | None = None
-    komoot_poll_interval_min: int | None = None
+    name: str | None = None
 
 
 @router.patch("/me/settings")
@@ -268,32 +552,38 @@ async def update_user_settings(
     payload: UserSettings,
     user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(deps.get_db),
-) -> dict[str, Any]:
-    """Update the current user's sync preferences."""
-    if payload.sync_komoot_to_strava is not None:
-        user.sync_komoot_to_strava = payload.sync_komoot_to_strava
-    if payload.sync_strava_to_komoot is not None:
-        user.sync_strava_to_komoot = payload.sync_strava_to_komoot
-    if payload.hide_from_home_default is not None:
-        user.hide_from_home_default = payload.hide_from_home_default
-    if payload.komoot_poll_interval_min is not None:
-        from app.db.models.subscription import Subscription as _Subscription
-
-        sub = (
-            await db.execute(select(_Subscription).where(_Subscription.user_id == user.id))
-        ).scalar_one_or_none()
-        tier = sub.tier if sub else "free"
-        min_interval = 120 if tier == "free" else 10
-        if payload.komoot_poll_interval_min < min_interval:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                f"Poll interval must be at least {min_interval} minutes on your plan.",
-            )
-        user.komoot_poll_interval_min = payload.komoot_poll_interval_min
+) -> dict:
+    """Update the current user's profile settings."""
+    if payload.name is not None:
+        user.name = payload.name.strip() or None
     await db.commit()
-    return {
-        "sync_komoot_to_strava": user.sync_komoot_to_strava,
-        "sync_strava_to_komoot": user.sync_strava_to_komoot,
-        "hide_from_home_default": user.hide_from_home_default,
-        "komoot_poll_interval_min": user.komoot_poll_interval_min,
-    }
+    return {"name": user.name}
+
+
+@router.post("/me/delete", status_code=status.HTTP_200_OK)
+async def delete_account(
+    user: User = Depends(deps.get_current_user),
+    db: AsyncSession = Depends(deps.get_db),
+) -> dict:
+    """Permanently delete the authenticated user and all associated data."""
+    from app.db.models.connection import Connection
+    from app.db.models.subscription import ApiKey, Subscription
+    from app.db.models.sync import SyncedActivity, SyncRule, UserSyncState
+
+    uid = user.id
+    # Delete child rows in dependency order before the user row
+    await db.execute(delete(SyncedActivity).where(SyncedActivity.user_id == uid))
+    await db.execute(delete(UserSyncState).where(UserSyncState.user_id == uid))
+    await db.execute(delete(SyncRule).where(SyncRule.user_id == uid))
+    await db.execute(delete(ApiKey).where(ApiKey.user_id == uid))
+    await db.execute(delete(Subscription).where(Subscription.user_id == uid))
+    await db.execute(delete(Connection).where(Connection.user_id == uid))
+    # StravaToken is cascade-deleted via FK on user_id if ON DELETE CASCADE,
+    # otherwise delete explicitly
+    result = await db.execute(select(StravaToken).where(StravaToken.user_id == uid))
+    token = result.scalar_one_or_none()
+    if token:
+        await db.delete(token)
+    await db.delete(user)
+    await db.commit()
+    return {"message": "Account deleted."}

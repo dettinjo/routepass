@@ -9,9 +9,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 
+UTC = UTC
+
 if TYPE_CHECKING:
+    from app.db.models.connection import Connection
+    from app.db.models.pipeline import Pipeline
     from app.db.models.subscription import Subscription
-    from app.db.models.sync import SyncedActivity, SyncRule
 
 
 class StravaApp(Base):
@@ -69,28 +72,7 @@ class User(Base):
     )
     is_active: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
     is_admin: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
-
-    # Komoot credentials (encrypted)
-    komoot_email_encrypted: Mapped[bytes | None] = mapped_column(sa.LargeBinary, nullable=True)
-    komoot_password_encrypted: Mapped[bytes | None] = mapped_column(sa.LargeBinary, nullable=True)
-    komoot_key_version: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=1)
-    komoot_user_id: Mapped[str | None] = mapped_column(sa.String, nullable=True)
-    komoot_connected_at: Mapped[datetime | None] = mapped_column(
-        sa.DateTime(timezone=True), nullable=True
-    )
-    komoot_poll_interval_min: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=60)
-    next_komoot_poll_at: Mapped[datetime | None] = mapped_column(
-        sa.DateTime(timezone=True), nullable=True
-    )
-    last_komoot_poll_at: Mapped[datetime | None] = mapped_column(
-        sa.DateTime(timezone=True), nullable=True
-    )
-
-    # Sync preferences
-    sync_komoot_to_strava: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
-    sync_strava_to_komoot: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
-    hide_from_home_default: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
-    timezone: Mapped[str] = mapped_column(sa.String, nullable=False, default="timezone.utc")
+    name: Mapped[str | None] = mapped_column(sa.String, nullable=True)
 
     # Relationships
     subscription: Mapped[Subscription] = relationship(
@@ -99,10 +81,10 @@ class User(Base):
     strava_token: Mapped[StravaToken] = relationship(
         "StravaToken", back_populates="user", uselist=False
     )
-    sync_rules: Mapped[list[SyncRule]] = relationship("SyncRule", back_populates="user")
-    synced_activities: Mapped[list[SyncedActivity]] = relationship(
-        "SyncedActivity", back_populates="user"
-    )
+    sync_rules: Mapped[list] = relationship("SyncRule", back_populates="user")
+    synced_activities: Mapped[list] = relationship("SyncedActivity", back_populates="user")
+    connections: Mapped[list[Connection]] = relationship("Connection", back_populates="user")
+    pipelines: Mapped[list[Pipeline]] = relationship("Pipeline", back_populates="user")
 
 
 class StravaToken(Base):

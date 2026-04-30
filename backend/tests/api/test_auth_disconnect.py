@@ -15,8 +15,6 @@ async def test_disconnect_integrations(async_client: AsyncClient):
     fake_user = User(
         id="00000000-0000-0000-0000-000000000000",
         email="test@test.com",
-        komoot_user_id="123456",
-        sync_komoot_to_strava=True,
     )
     fake_token = StravaToken(
         user_id=fake_user.id,
@@ -51,8 +49,6 @@ async def test_disconnect_integrations(async_client: AsyncClient):
 
     komoot_response = await async_client.delete("/api/v1/auth/komoot/disconnect")
     assert komoot_response.status_code == 200
-    assert fake_user.komoot_user_id is None
-    assert fake_user.sync_komoot_to_strava is False
 
     strava_response = await async_client.delete("/api/v1/auth/strava/disconnect")
     assert strava_response.status_code == 200
