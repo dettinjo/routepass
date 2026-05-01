@@ -84,19 +84,28 @@ async def test_strava_callback_stores_encrypted_tokens(async_client: AsyncClient
 
     fake_strava_app = StravaApp(id=1, client_id="12345", is_active=True)
 
+    class FakeScalars:
+        def __init__(self, items):
+            self._items = items
+
+        def all(self):
+            return self._items
+
     class FakeStravaAppResult:
-        def scalar_one_or_none(self):
-            return fake_strava_app
+        """A4: returns all active apps via .scalars().all()."""
+
+        def scalars(self):
+            return FakeScalars([fake_strava_app])
 
     class FakeNoneResult:
         def scalar_one_or_none(self):
             return None
 
     # execute() is called in order:
-    #   1. select(StravaApp)          → fake_strava_app
-    #   2. select(StravaToken) by user_id  → None  (new token path)
-    #   3. select(StravaToken) by athlete_id (orphan check) → None
-    #   4. select(ConnectionModel)    → None  (new connection row)
+    #   1. select(StravaApp).where(is_active) → [fake_strava_app]  (A4 multi-app)
+    #   2. select(StravaToken) by user_id     → None  (new token path)
+    #   3. select(StravaToken) by athlete_id  → None  (orphan check)
+    #   4. select(ConnectionModel)            → None  (new connection row)
     _execute_results = iter(
         [
             FakeStravaAppResult(),
@@ -132,7 +141,13 @@ async def test_strava_callback_stores_encrypted_tokens(async_client: AsyncClient
     mock_client.__aexit__.return_value = None
     mock_client.post.return_value = fake_response
 
-    with patch("app.api.v1.auth.httpx.AsyncClient", return_value=mock_client):
+    with (
+        patch("app.api.v1.auth.httpx.AsyncClient", return_value=mock_client),
+        patch(
+            "app.core.rate_limit.rate_limit_guard.pick_least_loaded_app",
+            new=AsyncMock(return_value=1),
+        ),
+    ):
         response = await async_client.post(
             "/api/v1/auth/strava/callback",
             json={"code": "test_code"},

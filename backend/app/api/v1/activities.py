@@ -33,6 +33,7 @@ from app.db.models.subscription import Subscription
 from app.db.models.sync import SyncedActivity
 from app.db.models.user import StravaApp, User
 from app.services.komoot import KomootClient
+from app.services.storage import StorageService
 from app.services.strava import StravaClient
 from app.services.strava import streams_to_gpx as _strava_streams_to_gpx
 
@@ -302,7 +303,8 @@ def _serialize_activity(act: SyncedActivity) -> dict:
         "resolved_at": act.resolved_at.isoformat() if act.resolved_at else None,
         "platforms": platforms,
         "is_synced": len(platforms) >= 2,
-        "has_gpx": act.gpx_data is not None
+        "has_gpx": act.gpx_storage_key is not None
+        or act.gpx_data is not None
         or (bool(act.komoot_tour_id) and not (act.komoot_tour_id or "").startswith("seed_"))
         or (act.source == "strava" and bool(act.strava_activity_id)),
     }
@@ -680,10 +682,27 @@ async def import_gpx_activities(
             duration_seconds=total_duration_s or None,
             started_at=started_at,
             synced_at=datetime.now(UTC),
-            gpx_data=raw,
         )
         db.add(activity)
-        await db.flush()
+        await db.flush()  # populate activity.id before storage upload
+
+        # Dual-write: try object storage first; fall back to DB column
+        try:
+            storage_key = await StorageService.put_gpx(
+                user_id=str(user.id),
+                activity_id=str(activity.id),
+                data=raw,
+            )
+        except Exception as exc:
+            _logger.warning("StorageService.put_gpx failed — falling back to DB: %s", exc)
+            storage_key = None
+
+        if storage_key:
+            activity.gpx_storage_key = storage_key
+            # gpx_data stays NULL when stored externally
+        else:
+            activity.gpx_data = raw
+
         created.append({"id": str(activity.id), "name": name})
 
     if created:
@@ -728,7 +747,7 @@ async def trigger_activity_sync(
         if activity.komoot_tour_id and not activity.komoot_tour_id.startswith("seed_"):
             return {"status": "ok", "message": "Activity is already on Komoot."}
 
-        if not activity.gpx_data:
+        if not activity.gpx_data and not activity.gpx_storage_key:
             return {
                 "status": "error",
                 "message": (
@@ -750,7 +769,9 @@ async def trigger_activity_sync(
     if activity.strava_activity_id:
         return {"status": "ok", "message": "Activity is already on Strava."}
 
-    has_gpx = bool(activity.gpx_data) or bool(activity.komoot_tour_id)
+    has_gpx = (
+        bool(activity.gpx_storage_key) or bool(activity.gpx_data) or bool(activity.komoot_tour_id)
+    )
     if not has_gpx:
         return {
             "status": "error",
@@ -935,7 +956,27 @@ async def download_activity_gpx(
     if activity is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Activity not found.")
 
-    # Imported / seeded activities have the GPX stored directly
+    # Resolution order:
+    # 1. Object storage key (cloud / new imports)
+    # 2. DB column (self-hosted / legacy rows)
+    if activity.gpx_storage_key:
+        try:
+            gpx_bytes = await StorageService.get_gpx(activity.gpx_storage_key)
+            return Response(
+                content=gpx_bytes,
+                media_type="application/gpx+xml",
+                headers={
+                    "Content-Disposition": f'attachment; filename="activity-{activity_id}.gpx"'
+                },
+            )
+        except Exception as exc:
+            _logger.error(
+                "StorageService.get_gpx failed for activity %s: %s — falling back",
+                activity_id,
+                exc,
+            )
+            # Fall through to DB column if storage fetch fails
+
     if activity.gpx_data:
         return Response(
             content=activity.gpx_data,

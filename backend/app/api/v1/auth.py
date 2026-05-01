@@ -209,15 +209,21 @@ async def strava_oauth_callback(
 
     athlete_id = int(data["athlete"]["id"])
 
-    app_result = await db.execute(
-        select(StravaApp).where(StravaApp.is_active == True).limit(1)  # noqa: E712
+    # Pick the least-loaded Strava app to spread OAuth tokens across the app pool.
+    from app.core.rate_limit import rate_limit_guard as _rlg
+
+    apps_result = await db.execute(
+        select(StravaApp).where(StravaApp.is_active == True)  # noqa: E712
     )
-    strava_app = app_result.scalar_one_or_none()
-    if strava_app is None:
+    all_apps = apps_result.scalars().all()
+    if not all_apps:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "No Strava app configured. Contact the administrator.",
         )
+    app_ids = [a.id for a in all_apps]
+    chosen_app_id = await _rlg.pick_least_loaded_app(app_ids)
+    strava_app = next((a for a in all_apps if a.id == chosen_app_id), all_apps[0])
 
     # Async SQLAlchemy does not support lazy loading, so user.strava_token is
     # always None. Explicitly query by user_id and also by athlete_id to handle

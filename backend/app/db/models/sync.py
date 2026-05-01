@@ -87,6 +87,9 @@ class SyncedActivity(Base):
     conflict_reason: Mapped[str | None] = mapped_column(sa.String, nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True), nullable=True)
     gpx_data: Mapped[bytes | None] = mapped_column(sa.LargeBinary, nullable=True)
+    # Object storage key for the GPX file (A5). When set, gpx_data is cleared.
+    # When STORAGE_BACKEND=db, this is always NULL and gpx_data holds the bytes.
+    gpx_storage_key: Mapped[str | None] = mapped_column(sa.String, nullable=True, index=True)
     pipeline_id: Mapped[UUID | None] = mapped_column(
         sa.UUID(as_uuid=True),
         sa.ForeignKey("pipelines.id", ondelete="SET NULL"),

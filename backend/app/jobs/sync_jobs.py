@@ -450,18 +450,25 @@ async def source_poll_scheduler(ctx: dict) -> None:
         return
 
     async with AsyncSessionLocal() as db:
-        # Fetch active StravaApp id for Strava budget check
+        # Check if ALL Strava apps are over the free-tier threshold (>800 calls/day).
+        # Per-user enforcement happens inside RateLimitGuard.call(); the scheduler
+        # only needs to skip free-tier enqueue when every app is saturated.
         app_result = await db.execute(
-            select(StravaApp.id).where(StravaApp.is_active == True).limit(1)  # noqa: E712
+            select(StravaApp.id).where(StravaApp.is_active == True)  # noqa: E712
         )
-        strava_app_id = app_result.scalar_one_or_none()
+        all_app_ids = [row[0] for row in app_result.all()]
 
-        daily_count = await rate_limit_guard.daily_count(strava_app_id) if strava_app_id else 0
-        budget_exhausted_for_free = daily_count > 800
-        if budget_exhausted_for_free:
-            logger.warning(
-                "Daily Strava budget at %d — free-tier polling suspended this cycle.", daily_count
-            )
+        budget_exhausted_for_free = False
+        if all_app_ids:
+            counts = [await rate_limit_guard.daily_count(aid) for aid in all_app_ids]
+            min_count = min(counts)
+            budget_exhausted_for_free = min_count > 800
+            if budget_exhausted_for_free:
+                logger.warning(
+                    "All Strava apps at free-tier budget threshold (min daily=%d) "
+                    "— skipping free tier this cycle.",
+                    min_count,
+                )
 
         # Eligible users: active users that have at least one active source Connection.
         # Poll throttling is handled via Redis TTL per connection (until E5 per-connection
@@ -502,10 +509,9 @@ async def source_poll_scheduler(ctx: dict) -> None:
             enqueued += 1
 
         logger.info(
-            "Scheduler: enqueued=%d, skipped_free_budget=%d (daily=%d)",
+            "Scheduler: enqueued=%d, skipped_free_budget=%d",
             enqueued,
             skipped_budget,
-            daily_count,
         )
 
 
