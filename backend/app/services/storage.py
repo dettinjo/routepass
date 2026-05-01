@@ -72,6 +72,22 @@ class StorageService:
             raise
 
     @classmethod
+    async def generate_presigned_url(cls, key: str, expires_in: int = 300) -> str:
+        """Return a presigned GET URL for a stored GPX object (default TTL: 5 min)."""
+        try:
+            async with _get_s3_client() as client:
+                url = await client.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": settings.STORAGE_BUCKET, "Key": key},
+                    ExpiresIn=expires_in,
+                )
+            logger.debug("StorageService.generate_presigned_url: %s (ttl=%ds)", key, expires_in)
+            return url
+        except Exception as exc:
+            logger.error("StorageService.generate_presigned_url failed for key %s: %s", key, exc)
+            raise
+
+    @classmethod
     async def delete_gpx(cls, key: str) -> None:
         """Delete a stored GPX object. No-op when using DB backend."""
         if settings.STORAGE_BACKEND == "db":

@@ -605,9 +605,26 @@ async def delete_account(
             except Exception as exc:
                 _logger.warning("delete_account: Stripe cancellation failed: %s", exc)
 
-    # 2. Delete user row — ON DELETE CASCADE purges all child tables
+    # 2. Purge GPX blobs from object storage before cascade delete (non-fatal).
+    # Must happen before the DB row is gone so we can still query the keys.
+    if settings.DEPLOYMENT_MODE == "cloud" or settings.STORAGE_BACKEND != "db":
+        from app.db.models.sync import SyncedActivity
+        from app.services.storage import StorageService
+
+        keys_result = await db.execute(
+            select(SyncedActivity.gpx_storage_key).where(
+                SyncedActivity.user_id == user.id,
+                SyncedActivity.gpx_storage_key.isnot(None),
+            )
+        )
+        for (key,) in keys_result.all():
+            try:
+                await StorageService.delete_gpx(key)
+            except Exception as exc:
+                _logger.warning("delete_account: failed to purge storage key %s: %s", key, exc)
+
+    # 3. Delete user row — ON DELETE CASCADE purges all child tables
     # (synced_activities, connections, sync_rules, subscriptions, api_keys, strava_tokens, …)
-    # TODO(A5-ph1): before deletion, purge gpx_storage_key blobs from object storage
     await db.execute(delete(User).where(User.id == user.id))
     await db.commit()
     _logger.info("Account deleted for user %s", user.id)

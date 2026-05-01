@@ -21,11 +21,13 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import RedirectResponse
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core import security
+from app.core.config import settings
 from app.core.rate_limit import rate_limit_guard
 from app.core.sports import GPX_SPORT_TYPE_MAP
 from app.db.models.connection import Connection
@@ -907,6 +909,18 @@ async def delete_activity(
     # If any platform deletion failed the activity is still live there — keep
     # the row so it stays visible in the overview and the user can retry.
     if not failed:
+        # Purge object storage blob before removing DB row (non-fatal).
+        # Orphaned blobs that fail here are caught by a bucket lifecycle rule.
+        if activity.gpx_storage_key:
+            try:
+                await StorageService.delete_gpx(activity.gpx_storage_key)
+            except Exception as exc:
+                _logger.warning(
+                    "delete_activity: failed to purge storage key %s: %s",
+                    activity.gpx_storage_key,
+                    exc,
+                )
+
         await db.delete(activity)
         await db.commit()
 
@@ -931,6 +945,15 @@ async def clear_seed_activities(
     activities = result.scalars().all()
     count = len(activities)
     for act in activities:
+        if act.gpx_storage_key:
+            try:
+                await StorageService.delete_gpx(act.gpx_storage_key)
+            except Exception as exc:
+                _logger.warning(
+                    "clear_seed: failed to purge storage key %s: %s",
+                    act.gpx_storage_key,
+                    exc,
+                )
         await db.delete(act)
     await db.commit()
     return {"deleted": count}
@@ -958,9 +981,15 @@ async def download_activity_gpx(
 
     # Resolution order:
     # 1. Object storage key (cloud / new imports)
+    #    Cloud (STORAGE_BACKEND != "db"): redirect to presigned URL (TTL 5 min).
+    #    Bytes never flow through the API server, reducing bandwidth costs.
     # 2. DB column (self-hosted / legacy rows)
     if activity.gpx_storage_key:
         try:
+            if settings.STORAGE_BACKEND != "db":
+                url = await StorageService.generate_presigned_url(activity.gpx_storage_key)
+                return RedirectResponse(url, status_code=302)
+            # STORAGE_BACKEND=db should never produce a storage key, but handle defensively
             gpx_bytes = await StorageService.get_gpx(activity.gpx_storage_key)
             return Response(
                 content=gpx_bytes,
@@ -971,7 +1000,7 @@ async def download_activity_gpx(
             )
         except Exception as exc:
             _logger.error(
-                "StorageService.get_gpx failed for activity %s: %s — falling back",
+                "StorageService failed for activity %s: %s — falling back",
                 activity_id,
                 exc,
             )
