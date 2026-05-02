@@ -8,7 +8,6 @@ from arq.cron import cron
 from app.core.config import settings
 from app.db.session import engine
 from app.jobs.sync_jobs import (
-    poll_komoot_user,
     poll_user_sources,
     process_strava_activity,
     run_pipeline,
@@ -42,7 +41,6 @@ class WorkerSettings:
 
     functions = [
         poll_user_sources,
-        poll_komoot_user,  # backwards-compat alias for in-flight ARQ jobs
         process_strava_activity,
         run_pipeline,
         sync_gpx_to_strava,

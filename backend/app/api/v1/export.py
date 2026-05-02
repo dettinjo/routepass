@@ -5,7 +5,7 @@ import json
 import logging
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +14,7 @@ from app.api import deps
 from app.db.models.connection import Connection
 from app.db.models.sync import SyncedActivity, SyncRule
 from app.db.models.user import User
+from app.services.audit import write_audit
 
 UTC = UTC
 
@@ -24,6 +25,7 @@ router = APIRouter(tags=["export"])
 
 @router.get("/me")
 async def export_my_data(
+    request: Request,
     user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(deps.get_db),
 ) -> StreamingResponse:
@@ -87,6 +89,8 @@ async def export_my_data(
     }
 
     logger.info("Data export requested by user %s", user.id)
+    await write_audit(db, user.id, "export_requested", request)
+    await db.commit()
 
     buf = io.BytesIO(json.dumps(export, indent=2).encode())
     return StreamingResponse(

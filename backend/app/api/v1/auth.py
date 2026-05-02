@@ -4,7 +4,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 
 import httpx
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import delete, select
@@ -15,6 +15,7 @@ from app.core import security
 from app.core.config import settings
 from app.db.models.subscription import Subscription
 from app.db.models.user import StravaApp, StravaToken, User
+from app.services.audit import write_audit
 
 UTC = UTC
 
@@ -50,6 +51,7 @@ class StravaCallback(BaseModel):
 @router.post("/register", response_model=TokenResponse)
 async def register_user(
     payload: RegisterRequest,
+    request: Request,
     db: AsyncSession = Depends(deps.get_db),
 ) -> TokenResponse:
     """Create a new user account and issue an access token."""
@@ -83,6 +85,8 @@ async def register_user(
         status="active",
     )
     db.add(subscription)
+    await db.commit()
+    await write_audit(db, user.id, "account_created", request)
     await db.commit()
 
     access_token = security.create_access_token(str(user.id))
@@ -184,6 +188,7 @@ async def get_strava_login_url(
 @router.post("/strava/callback")
 async def strava_oauth_callback(
     payload: StravaCallback,
+    request: Request,
     user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(deps.get_db),
 ) -> dict:
@@ -285,6 +290,7 @@ async def strava_oauth_callback(
             )
         )
 
+    await write_audit(db, user.id, "strava_connected", request, {"athlete_id": athlete_id})
     await db.commit()
     return {"status": "success", "message": "Strava account connected"}
 
@@ -292,6 +298,7 @@ async def strava_oauth_callback(
 @router.post("/komoot")
 async def setup_komoot_connection(
     payload: KomootCredentials,
+    request: Request,
     user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(deps.get_db),
 ) -> dict:
@@ -330,12 +337,14 @@ async def setup_komoot_connection(
             )
         )
 
+    await write_audit(db, user.id, "komoot_connected", request)
     await db.commit()
     return {"status": "success", "message": "Komoot connected successfully"}
 
 
 @router.delete("/strava/disconnect")
 async def disconnect_strava(
+    request: Request,
     user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(deps.get_db),
 ) -> dict:
@@ -344,12 +353,14 @@ async def disconnect_strava(
     token = result.scalar_one_or_none()
     if token is not None:
         await db.delete(token)
-        await db.commit()
+    await write_audit(db, user.id, "strava_disconnected", request)
+    await db.commit()
     return {"status": "success", "message": "Strava account disconnected"}
 
 
 @router.delete("/komoot/disconnect")
 async def disconnect_komoot(
+    request: Request,
     user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(deps.get_db),
 ) -> dict:
@@ -366,7 +377,8 @@ async def disconnect_komoot(
     ).scalar_one_or_none()
     if existing:
         await db.delete(existing)
-        await db.commit()
+    await write_audit(db, user.id, "komoot_disconnected", request)
+    await db.commit()
     return {"status": "success", "message": "Komoot account disconnected"}
 
 
@@ -579,6 +591,7 @@ async def update_user_settings(
 
 @router.delete("/account", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_account(
+    request: Request,
     user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(deps.get_db),
 ) -> None:
@@ -623,8 +636,12 @@ async def delete_account(
             except Exception as exc:
                 _logger.warning("delete_account: failed to purge storage key %s: %s", key, exc)
 
-    # 3. Delete user row — ON DELETE CASCADE purges all child tables
+    # 3. Write audit BEFORE cascade delete (user_id set to NULL after delete via SET NULL FK)
+    await write_audit(db, user.id, "account_deleted", request)
+
+    # 4. Delete user row — ON DELETE CASCADE purges all child tables
     # (synced_activities, connections, sync_rules, subscriptions, api_keys, strava_tokens, …)
+    # ON DELETE SET NULL keeps the audit row with user_id=NULL for compliance.
     await db.execute(delete(User).where(User.id == user.id))
     await db.commit()
     _logger.info("Account deleted for user %s", user.id)

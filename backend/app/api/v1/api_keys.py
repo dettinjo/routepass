@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +12,9 @@ from app.api import deps
 from app.core.security import generate_api_key
 from app.db.models.subscription import ApiKey
 from app.db.models.user import User
+from app.services.audit import write_audit
+
+UTC = UTC
 
 router = APIRouter(tags=["api-keys"])
 
@@ -26,7 +28,7 @@ async def list_api_keys(
     user: User = Depends(deps.get_current_user),
     _tier: None = Depends(deps.require_tier("pro")),
     db: AsyncSession = Depends(deps.get_db),
-) -> dict[str, Any]:
+) -> dict:
     """List all active and revoked API keys for the current user."""
     stmt = select(ApiKey).where(ApiKey.user_id == user.id).order_by(ApiKey.created_at.desc())
     result = await db.execute(stmt)
@@ -50,10 +52,11 @@ async def list_api_keys(
 @router.post("")
 async def create_api_key(
     payload: ApiKeyCreate,
+    request: Request,
     user: User = Depends(deps.get_current_user),
     _tier: None = Depends(deps.require_tier("pro")),
     db: AsyncSession = Depends(deps.get_db),
-) -> dict[str, str]:
+) -> dict:
     """Generate a new Developer API Key for integrations."""
     # Enforce limit of 5 keys per user for safety
     stmt = select(ApiKey).where(ApiKey.user_id == user.id, ApiKey.revoked_at == None)  # noqa
@@ -77,6 +80,7 @@ async def create_api_key(
         name=payload.name,
     )
     db.add(new_key)
+    await write_audit(db, user.id, "api_key_created", request, {"name": payload.name})
     await db.commit()
 
     return {
@@ -91,10 +95,11 @@ async def create_api_key(
 @router.delete("/{key_id}")
 async def revoke_api_key(
     key_id: UUID,
+    request: Request,
     user: User = Depends(deps.get_current_user),
     _tier: None = Depends(deps.require_tier("pro")),
     db: AsyncSession = Depends(deps.get_db),
-) -> dict[str, str]:
+) -> dict:
     """Revoke an API key without deleting its audit history."""
     result = await db.execute(select(ApiKey).where(ApiKey.id == key_id, ApiKey.user_id == user.id))
     key = result.scalar_one_or_none()
@@ -102,5 +107,6 @@ async def revoke_api_key(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "API key not found.")
 
     key.revoked_at = datetime.now(UTC)
+    await write_audit(db, user.id, "api_key_revoked", request, {"key_prefix": key.key_prefix})
     await db.commit()
     return {"status": "success"}

@@ -240,10 +240,6 @@ async def poll_user_sources(ctx: dict, user_id: str) -> None:
             await db.commit()
 
 
-# Backwards-compat alias — any ARQ jobs still queued under the old name will resolve correctly.
-poll_komoot_user = poll_user_sources
-
-
 # ── Source-platform helpers ───────────────────────────────────────────────────
 
 
@@ -513,10 +509,6 @@ async def source_poll_scheduler(ctx: dict) -> None:
             enqueued,
             skipped_budget,
         )
-
-
-# Backwards-compat alias — the cron entry in worker.py still references this name.
-komoot_poll_scheduler = source_poll_scheduler
 
 
 async def run_pipeline(ctx: dict, pipeline_id: str, user_id: str) -> None:

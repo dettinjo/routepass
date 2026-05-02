@@ -34,7 +34,9 @@ class SyncedActivity(Base):
             name="ck_synced_activities_sync_status",
         ),
         sa.CheckConstraint(
-            "source IN ('komoot', 'strava', 'import', 'garmin', 'polar', 'wahoo')",
+            "source IN ("
+            "'komoot', 'strava', 'garmin', 'polar', 'wahoo', 'intervals_icu', 'runalyze', 'import'"
+            ")",
             name="ck_synced_activities_source",
         ),
         # Composite unique: one row per (user, komoot_tour, destination_platform).
@@ -129,8 +131,10 @@ class UserSyncState(Base):
 class SyncRule(Base):
     __tablename__ = "sync_rules"
     __table_args__ = (
+        # Postgres DB uses a regex constraint (migration 010); this enumeration
+        # is SQLite-safe for tests and covers all currently known directions.
         sa.CheckConstraint(
-            "direction IN ('komoot_to_strava', 'strava_to_komoot', 'both')",
+            "direction = 'both' OR (direction LIKE '%_to_%' AND length(direction) > 4)",
             name="ck_sync_rules_direction",
         ),
         sa.Index("ix_sync_rules_user_order", "user_id", "rule_order"),
