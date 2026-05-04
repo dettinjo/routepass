@@ -32,6 +32,9 @@ python-multipart>=0.0.9
 # GPX parsing (for activity import)
 gpxpy>=1.6
 
+# Garmin Connect (unofficial SDK — optional; only needed when Garmin source is used)
+garminconnect>=0.2.0
+
 # Object storage (S3-compatible: AWS, Hetzner, MinIO, R2)
 # Optional: only needed when STORAGE_BACKEND != "db"
 aiobotocore>=2.13

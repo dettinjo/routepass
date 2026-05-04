@@ -11,10 +11,7 @@
     "check": "npm run lint && npm run typecheck"
   },
   "dependencies": {
-    "next": "14.2.29",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-
+    "@hookform/resolvers": "^3.9.1",
     "@radix-ui/react-alert-dialog": "^1.1.4",
     "@radix-ui/react-avatar": "^1.1.2",
     "@radix-ui/react-dialog": "^1.1.4",
@@ -27,18 +24,24 @@
     "@radix-ui/react-tabs": "^1.1.2",
     "@radix-ui/react-toast": "^1.2.4",
     "@radix-ui/react-tooltip": "^1.1.6",
-
+    "@react-leaflet/core": "^2.1.0",
+    "@tabler/icons-react": "^3.41.1",
     "@tanstack/react-query": "^5.62.8",
-    "@hookform/resolvers": "^3.9.1",
-    "react-hook-form": "^7.54.2",
-    "zod": "^3.24.1",
-    "zustand": "^5.0.2",
-
+    "@types/leaflet": "^1.9.21",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "tailwind-merge": "^2.6.0",
+    "framer-motion": "^12.38.0",
+    "leaflet": "^1.9.4",
     "lucide-react": "^0.468.0",
-    "recharts": "^2.14.1"
+    "next": "14.2.29",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-hook-form": "^7.54.2",
+    "react-leaflet": "^4.2.1",
+    "recharts": "^2.14.1",
+    "tailwind-merge": "^2.6.0",
+    "zod": "^3.24.1",
+    "zustand": "^5.0.2"
   },
   "devDependencies": {
     "@types/node": "^20",

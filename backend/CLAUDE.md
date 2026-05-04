@@ -173,7 +173,7 @@ plaintext = get_fernet().decrypt(encrypted).decode()
 ```python
 class RateLimitGuard:
     """Wraps ALL outbound Strava API calls. Tracks per-app 15-min + daily budgets in Redis."""
-    
+
     async def call(self, app_id: int, tier: str, fn: Callable, *args, **kwargs):
         # 1. INCR Redis f"strava:{app_id}:rl:15min:{window}" TTL=900
         # 2. INCR Redis f"strava:{app_id}:rl:daily:{date}" TTL=86400
@@ -185,15 +185,62 @@ class RateLimitGuard:
 ### ARQ Jobs
 ```python
 # In sync_jobs.py
-async def poll_komoot_user(ctx: dict, user_id: str) -> None:
-    """Fetches new Komoot tours and uploads them to Strava for one user."""
+
+# Primary job — registered in worker.py functions list
+async def poll_user_sources(ctx: dict, user_id: str) -> None:
+    """Per-user ingestion from ALL connected source platforms.
+
+    Phase A: ingest from sources
+      - Komoot: fetch tours since last_komoot_sync_at watermark, upsert as SyncedActivity
+      - Strava: fetch activities since last_strava_sync_at watermark, upsert as SyncedActivity
+    Phase B: push to destinations
+      - For each Komoot-sourced activity without strava_activity_id: enqueue sync_gpx_to_strava
+
+    Watermarks (UserSyncState.last_komoot_sync_at / last_strava_sync_at) prevent re-ingesting
+    activities on every poll. Unique constraints enforce idempotency at the DB layer.
+    """
 
 async def process_strava_activity(ctx: dict, user_id: str, activity_id: str) -> None:
-    """Handles Strava webhook event — syncs activity to Komoot (beta)."""
+    """Handles a real-time Strava webhook event — ingests the single activity immediately."""
 
-async def komoot_poll_scheduler(ctx: dict) -> None:
-    """Cron: queries users with next_komoot_poll_at <= now(), enqueues poll jobs."""
+async def source_poll_scheduler(ctx: dict) -> None:
+    """Cron (every 5 min): finds users due for a poll, enqueues poll_user_sources per user.
+    A user is due when: next_poll_at <= now() OR they have any active source connection.
+    """
+
+async def sync_gpx_to_strava(ctx: dict, activity_id: str, user_id: str) -> None:
+    """Uploads a GPX track to Strava for a single activity (Phase B)."""
+
+async def sync_activity_to_komoot(ctx: dict, activity_id: str, user_id: str) -> None:
+    """Uploads a GPX track to Komoot for a single activity."""
+
+# Backwards-compat aliases (kept so in-flight ARQ jobs don't error)
+poll_komoot_user = poll_user_sources
+komoot_poll_scheduler = source_poll_scheduler
 ```
+
+### Activity Hub Model
+
+`SyncedActivity` is the central hub — every ingestible activity from every platform lands here:
+
+| `source` | `komoot_tour_id` | `strava_activity_id` | Meaning |
+|----------|-----------------|---------------------|---------|
+| `komoot` | set | NULL | Komoot-only; not yet pushed to Strava |
+| `komoot` | set | set | Komoot tour pushed to Strava |
+| `strava` | NULL | set | Strava-native activity (ingested from webhook or backfill) |
+| `import` | `seed_*` | NULL | Test/seed activity (GPX stored in `gpx_data`) |
+| `import` | NULL | NULL | User-uploaded GPX |
+
+**Dedup** is enforced at the DB layer:
+- `uq_synced_activities_user_komoot` → `(user_id, komoot_tour_id)` UNIQUE
+- `uq_synced_activities_user_strava` → `(user_id, strava_activity_id)` UNIQUE
+
+**GPX resolution** in `GET /activities/{id}/gpx`:
+1. `gpx_data` column (import/seed) — return stored bytes
+2. `source=strava` — fetch `latlng,altitude,time` streams via Strava API, convert to GPX on the fly
+3. `source=komoot` with real `komoot_tour_id` — fetch GPX live from Komoot API
+
+`has_gpx` in the serializer is `True` when any of the three paths above will succeed.
 
 ## SQLAlchemy Model Conventions
 - All PKs: `id: Mapped[UUID] = mapped_column(default=uuid4)`

@@ -13,6 +13,7 @@ import { apiPost } from '@/lib/api'
 import { useAuthStore } from '@/store/auth'
 import type { TokenResponse, UserMe } from '@/types/api'
 import { useState } from 'react'
+import { GoogleIcon, GitHubIcon } from '@/components/platform-icons'
 
 const schema = z.object({
   email:    z.string().email('Enter a valid email address'),
@@ -20,6 +21,16 @@ const schema = z.object({
 })
 
 type FormData = z.infer<typeof schema>
+
+function SocialDivider() {
+  return (
+    <div className="flex items-center gap-3 my-5">
+      <div className="flex-1 h-px bg-border" />
+      <span className="text-caption text-text-disabled">or continue with</span>
+      <div className="flex-1 h-px bg-border" />
+    </div>
+  )
+}
 
 export default function LoginPage() {
   const router = useRouter()
@@ -35,27 +46,28 @@ export default function LoginPage() {
   async function onSubmit(data: FormData) {
     setServerError(null)
     try {
-      // FastAPI OAuth2 password flow expects form-encoded body
-      const form = new FormData()
-      form.append('username', data.email)
-      form.append('password', data.password)
-
       const tokenRes = await fetch('/api/v1/auth/login', {
         method: 'POST',
-        body: new URLSearchParams({ username: data.email, password: data.password }),
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: JSON.stringify({ email: data.email, password: data.password }),
+        headers: { 'Content-Type': 'application/json' },
       })
       if (!tokenRes.ok) {
         const err = await tokenRes.json()
-        throw new Error(err.detail ?? 'Login failed')
+        // FastAPI validation errors return detail as an array of objects
+        const detail = Array.isArray(err.detail)
+          ? (err.detail[0]?.msg ?? 'Login failed')
+          : (err.detail ?? 'Login failed')
+        throw new Error(String(detail))
       }
       const { access_token } = (await tokenRes.json()) as TokenResponse
 
-      const me = await fetch('/api/v1/auth/me', {
+      const meRes = await fetch('/api/v1/auth/me', {
         headers: { Authorization: `Bearer ${access_token}` },
-      }).then((r) => r.json() as Promise<UserMe>)
+      })
+      if (!meRes.ok) throw new Error('Failed to load user profile')
+      const me = (await meRes.json()) as UserMe
 
-      login(access_token, me)
+      login(access_token, me)  // login() now sets the cookie too
       router.push('/dashboard')
     } catch (err) {
       setServerError(err instanceof Error ? err.message : 'Login failed. Try again.')
@@ -69,10 +81,30 @@ export default function LoginPage() {
       </CardHeader>
       <CardContent>
         {serverError && (
-          <Alert variant="error" className="mb-6">
+          <Alert variant="error" className="mb-5">
             {serverError}
           </Alert>
         )}
+
+        {/* Social auth providers */}
+        <div className="grid grid-cols-2 gap-2">
+          <a
+            href="/api/v1/auth/google"
+            className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-md border border-border bg-surface hover:bg-surface-raised transition-colors text-body-sm font-medium text-text-primary"
+          >
+            <GoogleIcon size={18} />
+            <span>Google</span>
+          </a>
+          <a
+            href="/api/v1/auth/github"
+            className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-md border border-border bg-surface hover:bg-surface-raised transition-colors text-body-sm font-medium text-text-primary"
+          >
+            <GitHubIcon size={18} mono />
+            <span>GitHub</span>
+          </a>
+        </div>
+
+        <SocialDivider />
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>
           <FormField label="Email" htmlFor="email" required error={errors.email?.message}>

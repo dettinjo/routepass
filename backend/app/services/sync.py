@@ -3,6 +3,10 @@ from __future__ import annotations
 import logging
 import re
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.services.garmin import GarminClient
 
 import sqlalchemy as sa
 from sqlalchemy import select
@@ -11,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.rate_limit import rate_limit_guard
 from app.db.models.sync import SyncedActivity, SyncRule, UserSyncState
 from app.db.models.user import StravaApp, User
+from app.services.activity_record import ActivityRecord
 from app.services.komoot import KomootClient, Tour
 from app.services.strava import StravaClient
 
@@ -23,33 +28,29 @@ UTC = UTC
 logger = logging.getLogger(__name__)
 
 
-def _match_condition(tour: Tour, conditions: dict) -> bool:
-    """Return True if all conditions match the tour. All conditions must pass (AND logic)."""
-    distance_km = (tour.distance_m or 0) / 1000.0
-    elevation_m = tour.elevation_up_m or 0
+def _match_condition(record: ActivityRecord, conditions: dict) -> bool:
+    """Return True if all conditions match the record. All conditions must pass (AND logic)."""
+    distance_km = (record.distance_m or 0) / 1000.0
+    elevation_m = record.elevation_gain_m or 0
+    sport = record.sport_type or ""
 
     for key, value in conditions.items():
-        if key == "sport_type":
+        if key in ("sport_type", "sport"):
             # {"sport_type": {"is": ["e_road_cycling", "e_touringbicycle"]}}
             # {"sport_type": {"is_not": ["hike"]}}
+            # Legacy plain equality: {"sport_type": "E-Bike"}
             if isinstance(value, dict):
                 if "is" in value:
                     allowed = [s.lower() for s in value["is"]]
-                    if tour.sport.lower() not in allowed:
+                    if sport.lower() not in allowed:
                         return False
                 if "is_not" in value:
                     blocked = [s.lower() for s in value["is_not"]]
-                    if tour.sport.lower() in blocked:
+                    if sport.lower() in blocked:
                         return False
             else:
-                # Legacy: {"sport_type": "E-Bike"} — plain equality
-                if tour.sport.lower() != str(value).lower():
+                if sport.lower() != str(value).lower():
                     return False
-
-        elif key == "sport":
-            # Legacy alias kept for backwards compatibility
-            if tour.sport.lower() != str(value).lower():
-                return False
 
         elif key == "distance_km":
             if isinstance(value, dict):
@@ -74,64 +75,91 @@ def _match_condition(tour: Tour, conditions: dict) -> bool:
                 return False
 
         elif key == "name_contains":
-            if str(value).lower() not in tour.name.lower():
+            if str(value).lower() not in record.name.lower():
                 return False
 
     return True
 
 
-def _apply_action(tour: Tour, actions: dict, user: User) -> tuple:
-    """Apply rule actions to a tour.
+def _apply_action(record: ActivityRecord, actions: dict, user: User) -> tuple:
+    """Apply rule actions to an activity record.
 
-    Returns (skip, modified_tour, extra_kwargs) where extra_kwargs are passed to
-    the Strava update call (e.g. hide_from_home override, description suffix).
+    Returns (skip, modified_record, extra_kwargs) where extra_kwargs are passed
+    to the destination upload call (e.g. hide_from_home override).
     """
+    from dataclasses import replace
+
     extras: dict = {}
 
     if actions.get("skip") or actions.get("sync_to") == "None":
-        return True, tour, extras
+        return True, record, extras
 
     if "set_sport_type" in actions:
-        tour = Tour(
-            id=tour.id,
-            name=tour.name,
-            description=tour.description,
-            sport=tour.sport,
-            strava_sport=actions["set_sport_type"],
-            date=tour.date,
-            distance_m=tour.distance_m,
-            elevation_up_m=tour.elevation_up_m,
-        )
+        # Store the destination-mapped sport in extra so ingestors can use it.
+        new_extra = {**record.extra, "strava_sport": actions["set_sport_type"]}
+        record = replace(record, extra=new_extra)
 
     if "name_template" in actions:
         tmpl = actions["name_template"]
         try:
             new_name = tmpl.format(
-                name=tour.name,
-                distance=(tour.distance_m or 0) / 1000,
-                elevation=int(tour.elevation_up_m or 0),
+                name=record.name,
+                distance=(record.distance_m or 0) / 1000,
+                elevation=int(record.elevation_gain_m or 0),
             )
-            tour = Tour(
-                id=tour.id,
-                name=new_name,
-                description=tour.description,
-                sport=tour.sport,
-                strava_sport=tour.strava_sport,
-                date=tour.date,
-                distance_m=tour.distance_m,
-                elevation_up_m=tour.elevation_up_m,
-            )
+            record = replace(record, name=new_name)
         except Exception:
             pass
 
     if "append_description" in actions:
-        suffix = actions["append_description"]
-        extras["description_suffix"] = suffix
+        extras["description_suffix"] = actions["append_description"]
 
     if "set_hide_from_home" in actions:
         extras["hide_from_home"] = bool(actions["set_hide_from_home"])
 
-    return False, tour, extras
+    return False, record, extras
+
+
+# ── Platform → ActivityRecord converters ─────────────────────────────────────
+
+
+def _komoot_tour_to_record(tour: Tour) -> ActivityRecord:
+    """Convert a Komoot Tour to the platform-agnostic ActivityRecord."""
+    return ActivityRecord(
+        platform="komoot",
+        external_id=tour.id,
+        name=tour.name,
+        description=tour.description or "",
+        sport_type=tour.sport,
+        started_at=tour.date,
+        distance_m=tour.distance_m,
+        elevation_gain_m=tour.elevation_up_m,
+        duration_s=tour.duration_seconds,
+        extra={"strava_sport": tour.strava_sport},
+    )
+
+
+def _garmin_activity_to_record(activity: dict) -> ActivityRecord:
+    """Convert a raw Garmin Connect activity dict to ActivityRecord."""
+    started = None
+    try:
+        ts = activity.get("startTimeLocal") or activity.get("startTimeGMT") or ""
+        if ts:
+            started = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except Exception:
+        pass
+
+    return ActivityRecord(
+        platform="garmin",
+        external_id=str(activity.get("activityId", "")),
+        name=activity.get("activityName") or "",
+        sport_type=activity.get("activityType", {}).get("typeKey", ""),
+        started_at=started or datetime.now(UTC),
+        distance_m=activity.get("distance"),
+        elevation_gain_m=activity.get("elevationGain"),
+        duration_s=activity.get("duration"),
+        extra={"garmin_activity_id": activity.get("activityId")},
+    )
 
 
 class SyncService:
@@ -405,32 +433,32 @@ class SyncService:
             if not act.komoot_tour_id:
                 continue
             try:
-                # Build a Tour-like object for rule evaluation
-                from app.services.komoot import Tour
-
-                tour = Tour(
-                    id=act.komoot_tour_id,
+                # Build a platform-agnostic record for rule evaluation
+                rec = ActivityRecord(
+                    platform="komoot",
+                    external_id=act.komoot_tour_id,
                     name=act.activity_name or "",
                     description="",
-                    sport=act.sport_type or "",
-                    strava_sport=act.sport_type or "",
-                    date=act.started_at or datetime.now(UTC),
+                    sport_type=act.sport_type or "",
+                    started_at=act.started_at or datetime.now(UTC),
                     distance_m=act.distance_m or 0,
-                    elevation_up_m=act.elevation_up_m or 0,
+                    elevation_gain_m=act.elevation_up_m or 0,
+                    extra={"strava_sport": act.sport_type or ""},
                 )
 
                 skip_tour = False
                 rule_extras: dict = {}
                 for rule in rules:
-                    if _match_condition(tour, rule.conditions):
-                        skip_tour, tour, rule_extras = _apply_action(tour, rule.actions, user)
+                    if _match_condition(rec, rule.conditions):
+                        skip_tour, rec, rule_extras = _apply_action(rec, rule.actions, user)
                         if skip_tour:
-                            logger.info("Rule skipped tour %s for Strava", tour.id)
+                            logger.info("Rule skipped tour %s for Strava", rec.external_id)
                         break
 
                 if skip_tour:
                     continue
 
+                strava_sport = rec.extra.get("strava_sport") or rec.sport_type
                 gpx_bytes = await komoot.download_gpx(act.komoot_tour_id)
 
                 upload_id = await rate_limit_guard.call(
@@ -438,9 +466,9 @@ class SyncService:
                     tier_str,
                     strava.upload_gpx,
                     gpx_bytes=gpx_bytes,
-                    name=tour.name,
-                    description=tour.description or "",
-                    sport_type=tour.strava_sport,
+                    name=rec.name,
+                    description=rec.description or "",
+                    sport_type=strava_sport,
                     external_id=f"komoot_{act.komoot_tour_id}",
                 )
                 strava_activity_id = await rate_limit_guard.call(
@@ -547,12 +575,14 @@ class SyncService:
 
         for tour in tours:
             try:
+                rec = _komoot_tour_to_record(tour)
+
                 # Evaluate rules (first match wins)
                 skip_tour = False
                 rule_extras: dict = {}
                 for rule in rules:
-                    if _match_condition(tour, rule.conditions):
-                        skip_tour, tour, rule_extras = _apply_action(tour, rule.actions, user)
+                    if _match_condition(rec, rule.conditions):
+                        skip_tour, rec, rule_extras = _apply_action(rec, rule.actions, user)
                         if skip_tour:
                             logger.info("Rule '%s' skipped tour %s", rule.name, tour.id)
                         else:
@@ -569,6 +599,7 @@ class SyncService:
 
                 logger.info("Syncing tour %s for %s", tour.id, user.id)
 
+                strava_sport = rec.extra.get("strava_sport") or rec.sport_type
                 gpx_bytes = await komoot.download_gpx(tour.id)
                 external_id = f"komoot_{tour.id}"
 
@@ -580,9 +611,9 @@ class SyncService:
                     tier_str,
                     strava.upload_gpx,
                     gpx_bytes=gpx_bytes,
-                    name=tour.name,
-                    description=tour.description,
-                    sport_type=tour.strava_sport,
+                    name=rec.name,
+                    description=rec.description,
+                    sport_type=strava_sport,
                     external_id=external_id,
                 )
 
@@ -619,7 +650,7 @@ class SyncService:
                     destination_activity_id=activity_id,
                     sync_direction="komoot_to_strava",
                     sync_status="completed",
-                    activity_name=tour.name,
+                    activity_name=rec.name,
                     sport_type=tour.sport,
                     distance_m=tour.distance_m,
                     elevation_up_m=tour.elevation_up_m,
@@ -646,3 +677,82 @@ class SyncService:
         logger.info("Sync complete for user %s — %d tours synced", user.id, synced_count)
 
         return synced_count
+
+    async def ingest_garmin_activities(
+        self,
+        user: User,
+        garmin: GarminClient,  # type: ignore[name-defined]
+        since: datetime | None = None,
+    ) -> int:
+        """Fetch Garmin Connect activities and store them in the hub DB.
+
+        Uses a watermark (`since`) to do incremental syncs — first run looks back 90
+        days, subsequent runs only fetch what's newer. Returns count of new rows stored.
+        """
+
+        if since is None:
+            since = datetime.now(UTC) - timedelta(days=90)
+            logger.info("Initial Garmin ingest for user %s — looking back to %s", user.id, since)
+        else:
+            logger.info(
+                "Garmin ingest for user %s since %s (per-connection watermark)", user.id, since
+            )
+
+        try:
+            activities = await garmin.get_activities_since(since=since)
+        except Exception as exc:
+            logger.error("Garmin ingest: failed to fetch for user %s: %s", user.id, exc)
+            return 0
+
+        ingested = 0
+        for activity in activities:
+            garmin_id = str(activity.get("activityId", ""))
+            if not garmin_id:
+                continue
+
+            try:
+                existing = await self.db.execute(
+                    select(SyncedActivity).where(
+                        SyncedActivity.user_id == user.id,
+                        # garmin activities are stored via komoot_tour_id as "garmin_<id>"
+                        # to avoid schema changes until a dedicated column exists.
+                        SyncedActivity.komoot_tour_id == f"garmin_{garmin_id}",
+                    )
+                )
+                if existing.scalar_one_or_none():
+                    continue
+
+                rec = _garmin_activity_to_record(activity)
+
+                self.db.add(
+                    SyncedActivity(
+                        user_id=user.id,
+                        source="garmin",
+                        # Re-use komoot_tour_id as a generic external-id slot until
+                        # a dedicated garmin_activity_id column is added (A5-ph3 deferred).
+                        komoot_tour_id=f"garmin_{garmin_id}",
+                        sync_direction=None,
+                        destination_platform=None,
+                        sync_status="completed",
+                        activity_name=rec.name,
+                        sport_type=rec.sport_type,
+                        distance_m=rec.distance_m,
+                        elevation_up_m=rec.elevation_gain_m,
+                        started_at=rec.started_at,
+                        duration_seconds=(
+                            int(rec.duration_s) if rec.duration_s is not None else None
+                        ),
+                    )
+                )
+                ingested += 1
+                await self.db.commit()
+            except Exception as exc:
+                logger.error(
+                    "Garmin ingest: failed to store activity %s for user %s: %s",
+                    garmin_id,
+                    user.id,
+                    exc,
+                )
+
+        logger.info("Garmin ingest: %d new activities stored for user %s", ingested, user.id)
+        return ingested

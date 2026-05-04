@@ -1,4 +1,4 @@
-# komoot-strava-sync — Google Gemini Instructions
+# RoutePass — Google Gemini Instructions
 
 ## Start of Every Session
 

@@ -160,6 +160,35 @@ async def poll_user_sources(ctx: dict, user_id: str) -> None:
                                 conn.id,
                                 exc,
                             )
+
+                elif conn.platform == "garmin":
+                    garmin_client = _build_garmin_client_from_connection(conn)
+                    if garmin_client:
+                        try:
+                            await sync_service.ingest_garmin_activities(
+                                user=user,
+                                garmin=garmin_client,
+                                since=conn_state.last_synced_at,
+                            )
+                            conn_state.last_synced_at = datetime.now(UTC)
+                            conn_state.last_error = None
+                            conn_state.last_error_at = None
+                            await db.commit()
+                        except Exception as exc:
+                            conn_state.last_error = str(exc)
+                            conn_state.last_error_at = datetime.now(UTC)
+                            await db.commit()
+                            logger.error(
+                                "poll_user_sources: Garmin ingest failed for conn %s: %s",
+                                conn.id,
+                                exc,
+                            )
+                    else:
+                        logger.warning(
+                            "poll_user_sources: Garmin conn %s has no valid credentials",
+                            conn.id,
+                        )
+
                 else:
                     logger.info(
                         "poll_user_sources: platform '%s' not yet implemented — skipping",
@@ -256,6 +285,23 @@ def _build_komoot_client_from_connection(conn: Connection) -> KomootClient | Non
             return KomootClient(email=email, password=password, user_id=uid)
     except Exception as exc:
         logger.warning("Failed to decrypt Komoot connection %s: %s", conn.id, exc)
+    return None
+
+
+def _build_garmin_client_from_connection(conn: Connection) -> object | None:
+    """Return a GarminClient from a Connection record's encrypted credentials."""
+    if not conn.credentials_enc:
+        return None
+    try:
+        from app.services.garmin import GarminClient
+
+        creds = json.loads(security.decrypt(conn.credentials_enc))
+        email = creds.get("email")
+        password = creds.get("password")
+        if email and password:
+            return GarminClient(email=email, password=password)
+    except Exception as exc:
+        logger.warning("Failed to decrypt Garmin connection %s: %s", conn.id, exc)
     return None
 
 

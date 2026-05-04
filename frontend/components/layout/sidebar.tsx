@@ -7,6 +7,7 @@ import {
   Activity,
   RefreshCw,
   Plug,
+  GitMerge,
   Filter,
   Key,
   CreditCard,
@@ -31,8 +32,8 @@ interface NavItem {
 const PRIMARY_NAV: NavItem[] = [
   { href: '/dashboard',    label: 'Dashboard',    icon: LayoutDashboard },
   { href: '/activities',   label: 'Activities',   icon: Activity },
-  { href: '/sync',         label: 'Sync',         icon: RefreshCw },
   { href: '/connections',  label: 'Connections',  icon: Plug },
+  { href: '/pipelines',    label: 'Pipelines',    icon: GitMerge },
   { href: '/rules',        label: 'Rules',        icon: Filter,   proOnly: true },
   { href: '/api-keys',     label: 'API Keys',     icon: Key,      proOnly: true },
 ]

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -8,6 +8,8 @@ import pytest
 from app.core import security
 from app.db.models.user import StravaToken, User
 from app.jobs.sync_jobs import _get_valid_strava_access_token
+
+UTC = timezone.utc
 
 
 @pytest.mark.asyncio

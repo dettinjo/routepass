@@ -8,6 +8,8 @@ import os
 import sys
 from datetime import UTC, datetime, timedelta
 
+UTC = UTC
+
 # Fix python path for script execution
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 

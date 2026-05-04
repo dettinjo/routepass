@@ -19,50 +19,55 @@ Tone: calm confidence. Not aggressive (Strava's orange energy). Not corporate (G
 
 ## Color Palette
 
-### Core Tokens
+> **Design pivot (Session 5):** RoutePass switched to a **dark-first** design system inspired by Vercel and n8n. The defaults in `globals.css` and `tailwind.config.ts` are now dark. Light mode is available as an opt-in `.light` class but is not the shipped default. The source of truth is `globals.css` — `DESIGN.md` mirrors it.
 
-| Token | Hex | Usage |
-|-------|-----|-------|
-| `--color-primary` | `#16533A` | Primary buttons, active nav, key CTAs |
-| `--color-primary-hover` | `#124430` | Hover state for primary actions |
-| `--color-primary-light` | `#E8F5F0` | Subtle primary tint (selected rows, focus rings) |
-| `--color-accent` | `#3ECFAF` | Highlights, badges, sync-active indicators, links |
+### Core Tokens (dark default)
+
+| Token | Value | Usage |
+|-------|-------|-------|
+| `--color-primary` | `#3ECFAF` | Primary buttons, active nav, key CTAs (mint on dark) |
+| `--color-primary-hover` | `#2EB89A` | Hover state for primary actions |
+| `--color-primary-light` | `rgba(62,207,175,0.1)` | Subtle primary tint (selected rows, focus rings) |
+| `--color-accent` | `#3ECFAF` | Same as primary on dark — highlights, badges |
 | `--color-accent-hover` | `#2EB89A` | Hover on accent elements |
-| `--color-bg` | `#F5F7F5` | App background (slightly warm off-white) |
-| `--color-surface` | `#FFFFFF` | Cards, modals, panels |
-| `--color-surface-raised` | `#FAFAFA` | Secondary surfaces, table rows |
-| `--color-border` | `#E2E8E4` | Default borders (slightly green-tinted grey) |
-| `--color-border-strong` | `#C8D4CE` | Dividers, focused inputs |
-| `--color-text-primary` | `#111827` | Body copy, headings |
-| `--color-text-secondary` | `#6B7280` | Captions, helper text, labels |
-| `--color-text-disabled` | `#9CA3AF` | Disabled states |
-| `--color-text-inverse` | `#FFFFFF` | Text on dark/primary surfaces |
+| `--color-bg` | `#0a0a0a` | App background |
+| `--color-surface` | `#111111` | Cards, modals, panels |
+| `--color-surface-raised` | `#171717` | Secondary surfaces, table rows |
+| `--color-border` | `#242424` | Default borders |
+| `--color-border-strong` | `#303030` | Dividers, focused inputs |
+| `--color-text-primary` | `#ededed` | Body copy, headings |
+| `--color-text-secondary` | `#737373` | Captions, helper text, labels |
+| `--color-text-disabled` | `#525252` | Disabled states |
+| `--color-text-inverse` | `#0a0a0a` | Text on mint/light surfaces |
 
-### Semantic Tokens
+### Semantic Tokens (dark-tuned)
 
-| Token | Hex | Usage |
-|-------|-----|-------|
-| `--color-success` | `#059669` | Sync complete, connected status |
-| `--color-success-light` | `#ECFDF5` | Success alert backgrounds |
-| `--color-warning` | `#D97706` | Rate limit warnings, quota alerts |
-| `--color-warning-light` | `#FFFBEB` | Warning alert backgrounds |
-| `--color-error` | `#DC2626` | Errors, disconnected/failed states |
-| `--color-error-light` | `#FEF2F2` | Error alert backgrounds |
-| `--color-info` | `#2563EB` | Informational notes |
-| `--color-info-light` | `#EFF6FF` | Info alert backgrounds |
+| Token | Value | Usage |
+|-------|-------|-------|
+| `--color-success` | `#34d399` | Sync complete, connected status |
+| `--color-success-light` | `rgba(52,211,153,0.12)` | Success alert backgrounds |
+| `--color-warning` | `#fbbf24` | Rate limit warnings, quota alerts |
+| `--color-warning-light` | `rgba(251,191,36,0.12)` | Warning alert backgrounds |
+| `--color-error` | `#f87171` | Errors, disconnected/failed states |
+| `--color-error-light` | `rgba(248,113,113,0.12)` | Error alert backgrounds |
+| `--color-info` | `#60a5fa` | Informational notes |
+| `--color-info-light` | `rgba(96,165,250,0.12)` | Info alert backgrounds |
 
-### Dark Mode (future)
+### Light Mode Override (`.light` class)
 
-Reserve these token names now. Implement when requested. Light mode ships first.
+Applied via the `.light` CSS class — not the default. Forest green becomes the primary on light.
 
-| Token | Dark value |
-|-------|------------|
-| `--color-bg` | `#0F1511` |
-| `--color-surface` | `#1A2420` |
-| `--color-surface-raised` | `#1F2D28` |
-| `--color-text-primary` | `#F0F4F2` |
-| `--color-text-secondary` | `#9DB5AC` |
-| `--color-border` | `#2A3D35` |
+| Token | Value |
+|-------|-------|
+| `--color-primary` | `#16533A` |
+| `--color-primary-hover` | `#124430` |
+| `--color-primary-light` | `#E8F5F0` |
+| `--color-bg` | `#F5F7F5` |
+| `--color-surface` | `#FFFFFF` |
+| `--color-surface-raised` | `#FAFAFA` |
+| `--color-border` | `#E2E8E4` |
+| `--color-border-strong` | `#C8D4CE` |
+| `--color-text-primary` | `#111827` |
 
 ---
 
@@ -146,23 +151,18 @@ Base unit: **4px**. All spacing is a multiple of 4.
 
 ## Iconography
 
-Library: **Lucide React** (`lucide-react`). No other icon library.
+### UI Icons
+
+Library: **Lucide React** (`lucide-react`). No other icon library for UI chrome.
 
 - Default icon size: `16px` (inline) / `20px` (standalone in buttons) / `24px` (navigation)
 - Stroke width: `1.5px` default (Lucide default) — do not change globally
 - Color: always inherit from text color (`currentColor`) unless explicitly semantic
 
-Key icon choices:
-
 | Concept | Icon |
 |---------|------|
 | Sync / Refresh | `RefreshCw` |
-| Komoot connection | `Map` (placeholder until custom asset) |
-| Strava connection | `Activity` |
-| Intervals.icu | `BarChart3` |
-| Runalyze | `TrendingUp` |
-| Polar | `Heart` |
-| Outdooractive | `Compass` |
+| Pipelines | `GitMerge` |
 | Success / connected | `CheckCircle2` |
 | Error / disconnected | `XCircle` |
 | Warning | `AlertTriangle` |
@@ -171,6 +171,72 @@ Key icon choices:
 | Rules | `Filter` |
 | Billing | `CreditCard` |
 | Logout | `LogOut` |
+
+### Platform Brand Icons
+
+Every platform (and RoutePass itself) has a dedicated SVG icon set under `public/icons/`:
+
+```
+public/icons/
+├── Regular/    ← full-colour brand icons (use on dark surfaces)
+├── White/      ← white monochrome (use on coloured or dark backgrounds)
+└── Black/      ← black monochrome (use on light backgrounds)
+```
+
+**Never render a platform using a Lucide icon.** Always use the brand SVG.
+
+#### Icon components (`components/platform-icons.tsx`, `components/brand-box.tsx`)
+
+| Component | Purpose |
+|-----------|---------|
+| `<BrandIcon brand="strava" variant="regular" size={24} />` | Bare SVG icon, sized |
+| `<BrandBox brand="komoot" size={40} />` | Icon in a tinted square container (icon = 58% of box) |
+| `<BrandBadge brand="intervals_icu" variant="ghost" />` | Clickable badge — ghost / outline / filled |
+| `<PlatformIcon platform="garmin" size={20} />` | Alias for `BrandIcon` (legacy API) |
+| `<RoutePassIcon size={24} />` | RoutePass icon specifically |
+
+`variant="inactive"` renders the white icon at 30% opacity — use for disconnected/coming-soon states.
+
+#### Brand registry (`lib/brand-registry.ts`)
+
+Single source of truth for all brand metadata. Every entry has:
+
+```ts
+{
+  id: string
+  name: string          // display name, e.g. "Garmin Connect"
+  url: string           // canonical URL for badge links
+  colors: { primary }   // hex — used for tint backgrounds and hover states
+  assets: {
+    regular: string     // path under /public
+    white: string
+    black: string
+  }
+}
+```
+
+#### Supported platforms
+
+| Key | Name | Primary colour |
+|-----|------|---------------|
+| `routepass` | RoutePass | `#3ECFAF` |
+| `strava` | Strava | `#FC4C02` |
+| `komoot` | Komoot | `#6AA127` |
+| `garmin` | Garmin Connect | `#2eace2` |
+| `polar` | Polar Flow | `#C8173D` |
+| `wahoo` | Wahoo | `#A3A3A3` |
+| `suunto` | Suunto | `#e1001a` |
+| `intervals_icu` | Intervals.icu | `#dd0447` |
+| `runalyze` | Runalyze | `#7dbe63` |
+| `trainingpeaks` | TrainingPeaks | `#3074f8` |
+| `webhook` | Webhook | `#c93762` |
+| `local` | Local | `#4F46E5` |
+
+### App Icon
+
+**File:** `frontend/app/icon.svg`
+
+Two abstract mountain silhouettes (forest green `#16533a`) occupy the lower half of a square canvas. A bold mint route line (`#3ecfaf`) originates from a filled circle at bottom-left, arcs upward through the mountain pass, and terminates in an arrowhead at top-right. Dark-mode adaptation: mountains switch to white via `@media (prefers-color-scheme: dark)`; the mint route line is always mint.
 
 ---
 

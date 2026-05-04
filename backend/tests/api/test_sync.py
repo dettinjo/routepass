@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -9,6 +9,8 @@ from app.db.models.sync import SyncRule, UserSyncState
 from app.db.models.user import StravaApp, User
 from app.services.komoot import Tour
 from app.services.sync import SyncService
+
+UTC = timezone.utc
 
 
 @pytest.mark.asyncio

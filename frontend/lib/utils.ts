@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from 'clsx'
 import { twMerge } from 'tailwind-merge'
+import sportMappings from '../../shared/sport-mappings.json'
 
 // Merge Tailwind classes without conflicts — use everywhere instead of raw clsx
 export function cn(...inputs: ClassValue[]) {
@@ -49,30 +50,7 @@ export function formatDuration(seconds: number): string {
   return `${h}h ${m}m`
 }
 
-// Map Komoot/Strava sport type slug to a human-readable label
-const SPORT_LABELS: Record<string, string> = {
-  Ride:                 'Cycling',
-  MountainBikeRide:     'Mountain Bike',
-  GravelRide:           'Gravel Ride',
-  EBikeRide:            'E-Bike',
-  EMountainBikeRide:    'E-MTB',
-  VirtualRide:          'Virtual Ride',
-  Run:                  'Running',
-  TrailRun:             'Trail Run',
-  Walk:                 'Walking',
-  Hike:                 'Hiking',
-  Swim:                 'Swimming',
-  Kayaking:             'Kayaking',
-  Canoeing:             'Canoeing',
-  StandUpPaddling:      'SUP',
-  Skiing:               'Skiing',
-  NordicSki:            'Nordic Skiing',
-  Snowboard:            'Snowboarding',
-  InlineSkate:          'Inline Skating',
-  IceSkate:             'Ice Skating',
-  Workout:              'Workout',
-}
-
+export const SPORT_LABELS: Record<string, string> = sportMappings.labels
 export function sportLabel(sportType: string): string {
   return SPORT_LABELS[sportType] ?? sportType
 }
