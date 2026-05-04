@@ -36,7 +36,7 @@ format:
 check: lint test
 
 migrate:
-	$(VENV_ACTIVATE) && cd backend && alembic upgrade head
+	$(VENV_ACTIVATE) && cd backend && alembic upgrade heads
 
 migrate-gen:
 	$(VENV_ACTIVATE) && cd backend && alembic revision --autogenerate -m "$(name)"
