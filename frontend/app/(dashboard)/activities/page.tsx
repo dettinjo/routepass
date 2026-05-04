@@ -983,7 +983,7 @@ function GpxTab({ onClose }: { onClose: () => void }) {
     limit: 500,
     filters: { source: 'import' },
   })
-  const existingImports: Activity[] = existingData?.data ?? []
+  const existingImports: Activity[] = useMemo(() => existingData?.data ?? [], [existingData])
 
   // Keep a ref so handleFiles can always read the latest list without being
   // recreated every time the query refreshes.
@@ -1777,24 +1777,12 @@ export default function ActivitiesPage() {
   const connectedPlatforms = useMemo(() => getConnectedPlatforms(user as UserMe | null), [user])
 
   // ── Sync trigger ─────────────────────────────────────────────────────────────
-  const { mutate: triggerSync, isPending: triggerPending } = useTriggerSync()
+  const { mutate: triggerSync, isPending: isSyncing } = useTriggerSync()
   const { data: syncStatus } = useSyncStatus()
-  const [syncing, setSyncing] = useState(false)
-  const triggeredRef = useRef(false)
-
-  useEffect(() => {
-    if (triggeredRef.current) return
-    triggeredRef.current = true
-    setSyncing(true)
-    triggerSync(undefined, { onSettled: () => setSyncing(false) })
-  }, [triggerSync])
 
   const handleManualRefresh = useCallback(() => {
-    setSyncing(true)
-    triggerSync(undefined, { onSettled: () => setSyncing(false) })
+    triggerSync()
   }, [triggerSync])
-
-  const isSyncing = syncing || triggerPending
 
   // ── Pagination ────────────────────────────────────────────────────────────────
   const [skip, setSkip] = useState(0)
@@ -1872,7 +1860,7 @@ export default function ActivitiesPage() {
   const [showImport, setShowImport] = useState(false)
 
   const { data, isLoading, isFetching } = useActivities({ skip, limit: PAGE_SIZE, filters })
-  const rawActivities = data?.data ?? []
+  const rawActivities = useMemo(() => data?.data ?? [], [data])
   const hasPrev       = skip > 0
   const hasNext       = (data?.count ?? 0) === PAGE_SIZE
 
