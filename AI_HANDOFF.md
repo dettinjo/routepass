@@ -61,14 +61,16 @@ Welcome! If you are an AI assistant taking over this project, read this document
 
 ---
 
-## 🧠 Current Project State (as of 2026-05-02)
+## 🧠 Current Project State (as of 2026-05-04)
 
 **Branch**: `feature/implement-plan-phase1`
-**Tests**: 86/86 passing (`make check` clean)
+**Tests**: 103/103 passing (`make check` clean)
 **Last 10 commits** (most recent first):
 
 | SHA | Description |
 |-----|-------------|
+| `b6e6219` | feat: Garmin Connect source (E6) and platform-agnostic rule engine (F6) |
+| `060600c` | docs: update AI_HANDOFF with complete implementation plan status |
 | `95fdb34` | feat: audit log, constraint fixes, ARQ cleanup (C5/F2/F5/E7) |
 | `701ec34` | feat: presigned URL downloads and cascading storage purge (C1/C2) |
 | `46e80de` | feat: GPX object storage (A5-ph1) and multi-app OAuth routing (A4) |
@@ -77,8 +79,6 @@ Welcome! If you are an AI assistant taking over this project, read this document
 | `9f630f2` | feat: multi-origin CORS via FRONTEND_URLS env var (B5) |
 | `009cf14` | feat: implement Strava→Intervals.icu and Strava→Runalyze pipeline handlers (E3/E4) |
 | `39b244d` | feat: GDPR data export, improved account deletion, credential isolation (C3/C4) |
-| `34ef85f` | fix: set sync_direction=None at Komoot ingest time (E1/E2) |
-| `26a0e22` | feat: DEPLOYMENT_MODE, multi-destination schema, ARQ dedup, instance endpoint (A1/A2/A3/B1/B2/B3) |
 
 ---
 
@@ -128,7 +128,7 @@ All tasks in `IMPLEMENTATION_PLAN.md` that are marked **launch-critical** are no
 | E3: Strava→Intervals.icu handler | ✅ Done |
 | E4: Strava→Runalyze handler | ✅ Done |
 | E5: Per-connection sync watermarks (ConnectionSyncState) | ✅ Done |
-| E6: Garmin Connect source | ⏳ Deferred |
+| E6: Garmin Connect source | ✅ Done |
 | E7: Remove backward-compat ARQ aliases | ✅ Done |
 
 ### Area F — Legacy Komoot Decoupling
@@ -139,7 +139,7 @@ All tasks in `IMPLEMENTATION_PLAN.md` that are marked **launch-critical** are no
 | F3: Platform-agnostic /sync/status | ✅ Done |
 | F4: Deprecate POST /sync/rebuild-history (returns 410) | ✅ Done |
 | F5: Extend SyncedActivity.source constraint (migration 010) | ✅ Done |
-| F6: Platform-agnostic rule engine | ⏳ Deferred |
+| F6: Platform-agnostic rule engine | ✅ Done |
 
 ---
 
@@ -212,24 +212,24 @@ Run `make migrate` to apply all pending migrations on a fresh DB.
 |------|----------|-------|
 | D1–D8: Coolify/Hetzner deployment | HIGH (pre-launch) | Manual infra setup; see D9 env var reference in IMPLEMENTATION_PLAN.md |
 | A5-ph2: Drop gpx_data column | Medium | After A5-ph1 is live for ≥2 deploys and all rows migrated |
-| E6: Garmin Connect source | Medium | `_SOURCE_PLATFORMS` has "garmin" entry; job skips with log line |
-| F6: Platform-agnostic rule engine | Medium | Rule engine still uses Komoot Tour attributes; needed before Garmin rules work |
 | B4: Frontend instance-aware UI | Low | Hide cloud-only features in self-hosted mode |
 | Outbound webhooks backend | Medium | `WebhookSubscription` model exists; no dispatch logic yet |
 | Test coverage: run_pipeline handlers | Medium | No tests for Intervals.icu/Runalyze pipeline execution |
+| Garmin: dedicated garmin_activity_id column | Low | Currently piggybacking `komoot_tour_id` as `garmin_<id>`; clean up with migration once E6 is live |
 
 ---
 
 ## 🧪 Test Coverage
 
-86 tests passing across:
+103 tests passing across:
 - `test_activities.py`, `test_activities_import.py`
+- `test_activity_record.py` (new — ActivityRecord, _match_condition, _apply_action, platform converters)
 - `test_api_keys.py`, `test_auth.py`, `test_auth_accounts.py`, `test_auth_disconnect.py`, `test_auth_social.py`
 - `test_billing.py`, `test_connections.py`, `test_pipelines.py`
 - `test_integration.py` (full workflow: register → connect → sync → activities → rules → billing → webhooks)
 - `test_rules.py`, `test_sync.py`, `test_sync_jobs.py`, `test_sync_status.py`, `test_webhooks.py`
 
-Still missing: `run_pipeline` job execution, `IntervalsIcuClient`, `RunalyzeClient`, Garmin ingest.
+Still missing: `run_pipeline` job execution, `IntervalsIcuClient`, `RunalyzeClient`, end-to-end Garmin ingest.
 
 ---
 
@@ -267,3 +267,26 @@ Actions logged: `account_created`, `account_deleted`, `strava_connected`, `strav
 - FK `user_id` → `users.id` ON DELETE SET NULL — rows survive account deletion for compliance.
 - `write_audit()` is non-blocking: catches and logs any DB errors without aborting the primary operation.
 - IP extracted from `X-Forwarded-For` header (proxy-aware) or `request.client.host`.
+
+---
+
+## 🏃 Garmin Connect Source (E6) + Platform-Agnostic Rule Engine (F6)
+
+### ActivityRecord (`app/services/activity_record.py`)
+Platform-agnostic dataclass used by the rule engine. Fields mirror `SyncedActivity` where possible.
+Converters: `_komoot_tour_to_record(tour)` and `_garmin_activity_to_record(activity_dict)` in `sync.py`.
+
+### Rule Engine
+`_match_condition(record: ActivityRecord, conditions: dict)` and `_apply_action(record, actions, user)` now operate on `ActivityRecord` instead of `Tour`. Condition keys supported: `sport_type`, `sport` (alias), `distance_km`, `elevation_m`, `name_contains`. Existing stored rule JSON format is fully preserved.
+
+### GarminClient (`app/services/garmin.py`)
+Wraps `garminconnect` SDK via `asyncio.to_thread`. Lazy login on first use. Methods: `get_activities_since(since, limit=100)`, `download_gpx(activity_id)`. Requires `garminconnect>=0.2.0` in requirements.txt.
+
+### DB storage for Garmin
+Garmin activities are stored as `source="garmin"`, re-using `komoot_tour_id` as `garmin_<activityId>` to avoid a schema migration until a dedicated column is added. This is a known shortcut — add a `garmin_activity_id` column (new migration) when Garmin ships publicly.
+
+### Credentials format (Garmin Connection)
+```json
+{"email": "user@example.com", "password": "<encrypted>"}
+```
+Same Fernet-encrypted credentials blob in the `Connection` table as Komoot.
