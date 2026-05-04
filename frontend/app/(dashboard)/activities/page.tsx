@@ -1779,6 +1779,17 @@ export default function ActivitiesPage() {
   // ── Sync trigger ─────────────────────────────────────────────────────────────
   const { mutate: triggerSync, isPending: isSyncing } = useTriggerSync()
   const { data: syncStatus } = useSyncStatus()
+  // Fire one background sync on mount so the list is fresh.
+  // useRef guard prevents re-firing on Strict Mode's simulated remount.
+  // isSyncing uses the mutation's own isPending — no separate state needed,
+  // which avoids the React Query v5 issue where per-mutate onSettled callbacks
+  // are suppressed when the component unmounts before the response arrives.
+  const triggeredRef = useRef(false)
+  useEffect(() => {
+    if (triggeredRef.current) return
+    triggeredRef.current = true
+    triggerSync()
+  }, [triggerSync])
 
   const handleManualRefresh = useCallback(() => {
     triggerSync()
