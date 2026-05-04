@@ -53,8 +53,25 @@ import {
 } from '@/hooks/use-activities'
 import { useSyncStatus } from '@/hooks/use-sync-status'
 import { formatDistance, formatDuration, formatRelative, sportLabel } from '@/lib/utils'
+import dynamic from 'next/dynamic'
 import type { Activity, ActivityFilters, UserMe } from '@/types/api'
-import { ActivityMap, parseGpxPoints } from './activity-map'
+import { parseGpxPoints } from './gpx-utils'
+
+// Leaflet must never run on the server. `next/dynamic` with `ssr: false` ensures
+// the entire activity-map module (and its `import('leaflet')` call) is excluded
+// from SSR and the initial JS bundle, eliminating the ChunkLoadError.
+const ActivityMap = dynamic(
+  () => import('./activity-map').then((m) => m.ActivityMap),
+  {
+    ssr: false,
+    loading: () => (
+      <div
+        className="w-full rounded-lg bg-muted animate-pulse border border-border"
+        style={{ height: 260 }}
+      />
+    ),
+  }
+)
 
 const PAGE_SIZE = 25
 
