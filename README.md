@@ -1,58 +1,60 @@
 # RoutePass
 
+<!-- portfolio:date=2026-04-15 -->
+
 <p align="center">
-  <img src="img/logo.webp" alt="RoutePass logo" width="300" />
+  <img src="img/logo.webp" alt="RoutePass logo" width="240" />
 </p>
 
-RoutePass is a SaaS for bidirectional sync between Komoot and Strava. It features a multi-tenant FastAPI backend, automated rule evaluation, and a modern architecture designed for reliability and security.
+## Overview
 
-## Current State
+RoutePass is a sync hub for fitness platforms — connect Strava, Komoot, Garmin, Intervals.icu, and more, then define pipelines that route every new activity from any source to any destination automatically. Every platform is a peer: the same activity can fan out to several destinations, or several sources can funnel into one, with per-pipeline rules (sport type, distance, elevation, name) deciding what gets transformed, renamed, or skipped along the way.
 
-- `backend/`: active FastAPI + PostgreSQL + Redis + ARQ codebase (Python 3.9+)
-- `frontend/`: active Next.js 15 App Router codebase (Dashboard, Landing, Auth)
-- `legacy/`: old standalone single-user implementation kept for reference
+It grew out of a much narrower tool — a single-purpose Komoot→Strava sync script — into a multi-tenant FastAPI backend with a Next.js dashboard, async background workers, and a rule engine that treats "source" and "destination" as interchangeable roles rather than fixed directions.
 
-The backend and frontend are complete with working API routes, background jobs, full test coverage, and a responsive UI.
+## Features
 
-## What Is Verified
+- **Any source, any destination** — Strava, Komoot, and Intervals.icu/Runalyze/Garmin can each act as source or destination for a pipeline; no hardcoded direction.
+- **Multi-pipeline routing** — fan one source out to several destinations, or fold several sources into one, with an independent rule chain per pipe.
+- **Rule engine** — filter and transform activities per pipeline by sport type, distance, elevation, or name before they're pushed downstream.
+- **Rate-limit safe** — all outbound Strava calls go through a shared, Redis-backed rate limiter (`RateLimitGuard`) so one busy user can't exhaust the app's API quota for everyone else.
+- **Privacy by design** — Komoot credentials and Strava tokens are encrypted at rest (AES-256 Fernet); GPX downloads use short-lived presigned URLs instead of streaming through the API; GDPR data export and account deletion are built in, with an audit log that survives account deletion for compliance.
+- **Self-hostable** — MIT-licensed. `DEPLOYMENT_MODE=selfhosted` strips billing/tier gating entirely so a single-instance deploy runs with all features unlocked, using your own Strava API app.
+- **REST API + webhooks** — programmatic access via API keys, plus outbound signed webhooks and inbound Strava push-event handling for real-time sync instead of polling.
 
-- `make check` (linting + pytest) passes: **49 passed**
-- Database schema applies successfully to a clean PostgreSQL 16 container
-- Strava tokens are stored encrypted and refreshed automatically
-- Rate limiting is strictly enforced via Redis-backed `RateLimitGuard`
-- Bidirectional sync logic with rule engine is fully tested
+## Tech stack
 
-## Quick Start
+**Backend** — FastAPI (async) · SQLAlchemy 2.0 (async, PostgreSQL) · Alembic · Redis + ARQ (background jobs) · JWT auth · Fernet encryption
+
+**Frontend** — Next.js 15 (App Router) · TypeScript · Tailwind CSS · React Query · Framer Motion
+
+**Infra** — Docker Compose · Coolify · self-hosted on Hetzner, this instance running in `selfhosted` deployment mode as a public demo
+
+## Try it
+
+The public instance at [routepass.online](https://routepass.online) runs this repository's `main` branch in self-hosted mode: register for free, connect Strava, and set up a pipeline. Billing/tier gating is disabled on this demo — every feature is unlocked.
+
+## Quick Start (local development)
 
 ### 1. Create an env file
-
-For backend development:
 
 ```bash
 cp .env.saas.template .env.saas
 ```
 
-For self-hosted-style backend runs:
+Fill in the required variables (`SECRET_KEY`, `KOMOOT_ENCRYPTION_KEY`, `STRAVA_CLIENT_ID`/`STRAVA_CLIENT_SECRET` from a [Strava API app](https://www.strava.com/settings/api)).
+
+### 2. Start the stack
 
 ```bash
-cp .env.selfhosted.template .env.selfhosted
-```
-
-Fill in the required variables in `.env.saas`.
-
-### 2. Start the backend stack
-
-```bash
-make dev
+make dev       # api + worker + db + redis + frontend
 make dev-logs
 ```
-
-This starts the `db`, `redis`, `api`, and `worker` services.
 
 ### 3. Run checks
 
 ```bash
-make check
+make check     # ruff + mypy + pytest
 ```
 
 ## Useful Commands
@@ -69,29 +71,19 @@ make migrate      # Run alembic migrations
 
 ## Architecture Notes
 
-### Backend
-
-- FastAPI async API
-- SQLAlchemy 2.0 async ORM (PostgreSQL)
-- Redis + ARQ workers for background jobs
-- Strava calls guarded by `RateLimitGuard`
-- Komoot and Strava credentials encrypted with AES-256 Fernet
-
-### Important Constraints
-
-- Komoot uses an unofficial API; all calls are wrapped for safe failure.
-- Strava rate limits are shared per app and strictly managed.
-- Reverse sync (Strava → Komoot) records metadata while waiting for a viable GPX upload path.
+- FastAPI async API with SQLAlchemy 2.0 async ORM (PostgreSQL)
+- Redis + ARQ workers for background sync jobs (`poll_user_sources`, per-connection watermarks, real-time Strava webhook ingestion)
+- All outbound Strava calls guarded by `RateLimitGuard` (shared quota, multi-app fan-out)
+- Komoot's API is unofficial and unauthenticated by OAuth — credentials are encrypted with AES-256 Fernet, never stored in plaintext
+- GPX object storage is pluggable: DB column by default (self-hosted), S3/R2-compatible for larger deployments
 
 ## Repository Documentation
 
-- `AI_HANDOFF.md`: **Single Source of Truth** for current implementation state
-- `CODEX.md`: Codex workflow and repo-specific guardrails
-- `CLAUDE.md`: Claude-oriented project instructions
-- `GEMINI.md`: Gemini-oriented project instructions
-- `docs/setup_guide.md`: User account-linking guidance
-- `docs/PROJECT_LEGACY.md`: Original product planning history
+- `AI_HANDOFF.md`: current implementation state, migration chain, test coverage
+- `IMPLEMENTATION_PLAN.md`: full launch plan (scalability, deployment, privacy, multi-directional sync)
+- `docs/setup_guide.md`: user account-linking guidance
+- `docs/PROJECT_LEGACY.md`: original single-user tool this project grew out of
 
 ## License
 
-See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

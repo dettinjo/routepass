@@ -1,0 +1,121 @@
+# Coolify production deployment for routepass.online.
+#
+# Self-hosted single-instance demo: DEPLOYMENT_MODE=selfhosted disables Stripe
+# billing and tier gating so the public demo is fully usable without payment
+# provider secrets. Secrets are injected by Coolify (Application > Environment
+# Variables), never baked into the image or committed here.
+#
+# Migrations run as part of the api/worker startup command since the app does
+# not run them automatically on boot.
+name: routepass
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: sh -c "alembic upgrade head && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - SECRET_KEY=${SECRET_KEY}
+      - KOMOOT_ENCRYPTION_KEY=${KOMOOT_ENCRYPTION_KEY}
+      - STRAVA_CLIENT_ID=${STRAVA_CLIENT_ID}
+      - STRAVA_CLIENT_SECRET=${STRAVA_CLIENT_SECRET}
+      - STRAVA_WEBHOOK_VERIFY_TOKEN=${STRAVA_WEBHOOK_VERIFY_TOKEN}
+      - DEPLOYMENT_MODE=selfhosted
+      - ENVIRONMENT=production
+      - FRONTEND_URL=${FRONTEND_URL}
+      - FRONTEND_URLS=${FRONTEND_URL}
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks:
+      - default
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: sh -c "alembic upgrade head && python -m arq app.jobs.worker.WorkerSettings"
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - SECRET_KEY=${SECRET_KEY}
+      - KOMOOT_ENCRYPTION_KEY=${KOMOOT_ENCRYPTION_KEY}
+      - STRAVA_CLIENT_ID=${STRAVA_CLIENT_ID}
+      - STRAVA_CLIENT_SECRET=${STRAVA_CLIENT_SECRET}
+      - STRAVA_WEBHOOK_VERIFY_TOKEN=${STRAVA_WEBHOOK_VERIFY_TOKEN}
+      - DEPLOYMENT_MODE=selfhosted
+      - ENVIRONMENT=production
+      - FRONTEND_URL=${FRONTEND_URL}
+      - FRONTEND_URLS=${FRONTEND_URL}
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks:
+      - default
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile.coolify
+      args:
+        INTERNAL_API_URL: http://api:8000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      - api
+    networks:
+      - default
+      - coolify
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    environment:
+      POSTGRES_DB: routepass
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d routepass"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - default
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes: [redis_data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - default
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+  coolify:
+    external: true
