@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import security
 from app.db.models.subscription import ApiKey
-from app.db.models.sync import SyncedActivity, SyncRule, UserSyncState
+from app.db.models.sync import SyncedActivity, SyncRule
 from app.db.models.user import User
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -80,8 +80,7 @@ async def test_get_me_returns_profile(
     assert data["tier"] == "free"
     assert data["komoot_connected"] is False
     assert data["strava_connected"] is False
-    assert "sync_komoot_to_strava" in data
-    assert "komoot_poll_interval_min" in data
+    assert "connections" in data
 
 
 @pytest.mark.asyncio
@@ -98,25 +97,25 @@ async def test_update_settings(
     resp = await async_client.patch(
         "/api/v1/auth/me/settings",
         headers=free_user_headers,
-        json={"hide_from_home_default": False, "komoot_poll_interval_min": 120},
+        json={"name": "Updated Name"},
     )
     assert resp.status_code == 200
     data = resp.json()
-    assert data["hide_from_home_default"] is False
-    assert data["komoot_poll_interval_min"] == 120
+    assert data["name"] == "Updated Name"
 
 
 @pytest.mark.asyncio
-async def test_update_settings_poll_interval_too_low_returns_400(
+async def test_update_settings_unknown_fields_ignored(
     async_client: AsyncClient, free_user: User, free_user_headers: dict
 ):
-    # Free users must use >= 120 min; 30 min is below the free-tier minimum
+    # Unknown/removed fields must not cause a server error — Pydantic strips extras
     resp = await async_client.patch(
         "/api/v1/auth/me/settings",
         headers=free_user_headers,
-        json={"komoot_poll_interval_min": 30},
+        json={"name": "Valid Name", "unknown_field": "ignored"},
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "Valid Name"
 
 
 @pytest.mark.asyncio
@@ -137,7 +136,8 @@ async def test_sync_status_initial(
     data = resp.json()
     assert data["komoot_connected"] is False
     assert data["strava_connected"] is False
-    assert data["total_synced_count"] == 0
+    assert data["connections"] == []
+    assert data["active_pipelines"] == 0
     assert data["latest_activity"] is None
 
 
@@ -148,8 +148,6 @@ async def test_sync_status_reflects_sync_state(
     free_user_headers: dict,
     db: AsyncSession,
 ):
-    state = UserSyncState(user_id=free_user.id, total_synced_count=7)
-    db.add(state)
     activity = SyncedActivity(
         user_id=free_user.id,
         komoot_tour_id="tour_123",
@@ -164,7 +162,6 @@ async def test_sync_status_reflects_sync_state(
     resp = await async_client.get("/api/v1/sync/status", headers=free_user_headers)
     assert resp.status_code == 200
     data = resp.json()
-    assert data["total_synced_count"] == 7
     assert data["latest_activity"]["komoot_tour_id"] == "tour_123"
 
 
@@ -403,7 +400,7 @@ async def test_api_key_create_list_revoke(
     )
     assert create_resp.status_code == 200
     data = create_resp.json()
-    assert data["raw_key"].startswith("kss_")
+    assert data["raw_key"].startswith("rp_")
     assert "raw_key" in data
     key_id = data["id"]
 

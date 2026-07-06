@@ -1,285 +1,292 @@
-# AI Handoff & Governance
+# RoutePass AI Handoff & Governance
 
-Welcome! If you are an AI assistant taking over this project, read this document carefully before touching the codebase. It contains the workflow rules, architectural constraints, and the precise current project state.
+Welcome! If you are an AI assistant taking over this project, read this document carefully before touching the codebase. It contains the workflow rules, architectural constraints, and the precise current project state for **RoutePass** (formerly `komoot-strava-sync`).
 
 ---
 
 ## 📐 General Code Rules
 
 1. **Python Compatibility**:
-   - The runtime is **Python 3.9** (the system Python on the developer's Mac). All type hints must use `from __future__ import annotations` and `typing.Optional` / `typing.Union` — do NOT use the `X | Y` union syntax or `str | None` shorthand.
-   - Every file starts with `from __future__ import annotations`.
-   - Run formatting and linting using `ruff`. The backend is located in the `backend/` directory.
-   - Explicit error handling only. No bare `except: pass`.
+   - The runtime is **Python 3.11** (backend venv).
+   - All code MUST use `from __future__ import annotations`.
+   - Use `X | Y` shorthand is fine; `datetime.UTC` is fine.
+   - Backend is in `backend/`.
 
 2. **Frameworks**:
    - Backend API: **FastAPI** (Async)
-   - Database ORM: **SQLAlchemy 2.0** with `AsyncSession`. Never use synchronous queries.
-   - Background Jobs: **ARQ** + **Redis**. Defer all network I/O (Komoot, Strava) to ARQ workers.
-   - External HTTP: `httpx.AsyncClient` only. Never use synchronous `requests`.
-   - Settings: **pydantic-settings** (`BaseSettings`) loaded from `.env`. Never read `os.environ` directly in route handlers or services.
+   - Database ORM: **SQLAlchemy 2.0** with `AsyncSession`.
+   - Background Jobs: **ARQ** + **Redis**.
+   - External HTTP: `httpx.AsyncClient` only.
+   - Settings: **pydantic-settings** (`BaseSettings`).
 
 3. **Architectural Constraints**:
-   - The root `app/` directory contains the **legacy synchronous scripts**. They are frozen — do not modify or import from them. The modern SaaS backend lives entirely inside `backend/app/`.
-   - Database interactions use dependency injection: `db: AsyncSession = Depends(get_db)`.
-   - Credentials (Komoot password, Strava tokens) are **always stored encrypted** (AES-256 Fernet). Decrypt only in-memory when needed inside a job.
+   - Credentials are **always stored encrypted** (AES-256 Fernet via `security.encrypt/decrypt`).
+   - Rate limiting is mandatory for Strava: use `RateLimitGuard.call()`.
+   - All handlers and services are async; no blocking I/O.
+   - ALL Strava OAuth flows route through `RateLimitGuard.pick_least_loaded_app()` to spread load across the app pool.
+
+4. **Important Paths**:
+   - Real project root: `/Users/joeldettinger/Documents/Coding/Privat/routepass/`
+   - The shell cwd resets to a different path — always use absolute paths in Bash.
 
 ---
 
 ## 🔄 AI Handoff Workflow
 
-1. Read `backend/CLAUDE.md` — compact architecture reference with code patterns.
-2. Read the **Current Project State** section below to know exactly where to pick up.
-3. Run `cd backend && python -m pytest tests/ -v` to confirm the green baseline before making changes.
+1. Read `backend/CLAUDE.md` for compact architecture reference.
+2. View `AI_HANDOFF.md` (this file) for current state.
+3. `cd /Users/joeldettinger/Documents/Coding/Privat/routepass && make check` — must pass **86 tests**.
 4. Update this **Current State** section before concluding your session.
 
 ---
 
-## 📁 Backend File Map
+## 📁 Repository Structure
 
 ```
-backend/
-├── app/
-│   ├── core/
-│   │   ├── config.py           # pydantic-settings: all env vars declared here
-│   │   ├── security.py         # JWT encode/decode, Fernet encrypt/decrypt, API key hashing
-│   │   └── rate_limit.py       # RateLimitGuard wrapping Strava 15-min + daily limits via Redis
-│   ├── db/
-│   │   ├── session.py          # engine + AsyncSessionLocal + get_db() dependency
-│   │   └── models/
-│   │       ├── user.py         # User, StravaApp, StravaToken
-│   │       ├── sync.py         # SyncedActivity, UserSyncState, SyncRule, JobAuditLog
-│   │       └── subscription.py # Subscription, ApiKey, WebhookSubscription
-│   ├── api/
-│   │   ├── deps.py             # get_current_user, require_tier, get_current_api_key_user
-│   │   └── v1/
-│   │       ├── router.py       # Mounts all sub-routers
-│   │       ├── auth.py         # Strava OAuth2 + Komoot vault setup
-│   │       ├── sync.py         # POST /trigger, POST /rebuild-history
-│   │       ├── activities.py   # GET /activities (paginated sync history)
-│   │       ├── rules.py        # GET+POST /rules (Pro tier)
-│   │       ├── api_keys.py     # GET+POST /api-keys (Pro tier)
-│   │       ├── billing.py      # POST /billing/checkout + /billing/portal
-│   │       └── webhooks.py     # POST+GET /webhooks/stripe + /webhooks/strava
-│   ├── services/
-│   │   ├── komoot.py           # KomootClient: get_tours(), download_gpx()
-│   │   ├── strava.py           # StravaClient: upload_gpx(), poll_upload(), update_activity(), get_activities()
-│   │   └── sync.py             # SyncService: sync_komoot_to_strava() with rule evaluation
-│   ├── jobs/
-│   │   ├── sync_jobs.py        # ARQ jobs: poll_komoot_user, process_strava_activity, komoot_poll_scheduler
-│   │   └── worker.py           # ARQ WorkerSettings
-│   └── main.py                 # FastAPI app factory with lifespan (ARQ pool init)
-├── tests/
-│   ├── conftest.py             # Env bootstrap + async_client fixture (no real infra needed)
-│   └── api/
-│       ├── test_activities.py
-│       ├── test_api_keys.py
-│       ├── test_auth.py
-│       ├── test_billing.py
-│       ├── test_rules.py       # NEW: CRUD tests for sync rules
-│       ├── test_sync.py        # NEW: Rule-evaluation unit test (mocks rate_limit_guard)
-│       └── test_webhooks.py
-├── scripts/
-│   └── live_test.py            # Standalone E2E script using real credentials (sqlite in-memory)
-├── alembic/                    # DB migration files
-└── CLAUDE.md                   # Compact architecture guide for AI agents
+.
+├── backend/                  # FastAPI SaaS backend
+│   ├── app/
+│   │   ├── api/v1/           # REST endpoints (auth, sync, activities, connections, pipelines, rules, billing, api-keys, webhooks, export)
+│   │   ├── core/             # config, security (JWT + Fernet), rate_limit
+│   │   ├── db/models/        # User, StravaApp, StravaToken, Subscription, ApiKey, SyncedActivity, SyncRule,
+│   │   │                     # Connection, Pipeline, ConnectionSyncState, UserAuditLog, JobAuditLog
+│   │   ├── jobs/             # ARQ: poll_user_sources, process_strava_activity, run_pipeline, source_poll_scheduler
+│   │   ├── services/         # KomootClient, StravaClient, SyncService, StorageService, IntervalsIcuClient, RunalyzeClient, audit
+│   │   └── main.py           # FastAPI app factory, Scalar docs at /docs
+│   ├── alembic/versions/     # 001–011, all applied in dev
+│   └── tests/                # 86 tests, all passing
+├── frontend/                 # Next.js 15 App Router
+└── legacy/                   # Frozen standalone implementation
 ```
 
 ---
 
-## 📅 Current Project State
+## 🧠 Current Project State (as of 2026-05-04)
 
-**Last Updated**: 2026-04-18
+**Branch**: `feature/implement-plan-phase1`
+**Tests**: 103/103 passing (`make check` clean)
+**Last 10 commits** (most recent first):
 
-**Backend Status**: ⚠️ **Substantially implemented, but docs still lag in places**. The backend has real route, service, and worker code, and the current local baseline is green. The main remaining risk is documentation drift and deeper integration coverage rather than obvious route gaps.
-
-### Recent Fixes (2026-04-17)
-
-- Added `CODEX.md`, a repo-local Codex skill, and a `Makefile` so Codex can follow a consistent workflow similar to the existing Claude setup.
-- Rewrote `backend/alembic/versions/001_initial_schema.py` so a fresh database schema now matches the current ORM models much more closely.
-- Strava OAuth callback now stores `access_token` and `refresh_token` encrypted with Fernet instead of raw `.encode()` bytes.
-- Added automatic Strava token refresh in the worker path before Komoot→Strava sync jobs and before reverse-sync webhook processing.
-- Added a compatibility read path for legacy raw token bytes so older rows can still be refreshed and normalized.
-- Strava webhook processing now resolves the local user by `strava_tokens.strava_athlete_id` instead of treating `owner_id` as a local user UUID.
-- Reverse-sync activity fetch now goes through `RateLimitGuard.call()` using the normal Strava client rather than an ad hoc direct HTTP request.
-- Added tests covering encrypted token persistence and token refresh behavior.
-
-### Recent Verification (2026-04-18)
-
-- Installed the missing local Python test dependencies needed to run the backend checks in this environment (`pytest`, `alembic`, `aiosqlite`, and related backend requirements).
-- `cd backend && python -m pytest tests/ -v` now passes: **12 passed**.
-- The rewritten initial migration was validated against a clean temporary PostgreSQL 16 container using `python -m alembic upgrade head`.
-- Post-migration sanity check confirmed the expected tables plus `alembic_version=001`.
-- Cleaned up repo setup drift: root `README.md` now describes the current backend-centric state, `.env.saas.template` and `.env.selfhosted.template` were added, `backend/requirements.txt` now includes `aiosqlite`, and `docker-compose.yml` no longer references the missing `frontend/` service.
-- `docker compose config` succeeds against the updated backend-only compose file when a real `.env.saas` file exists. In this repo, the existing root `.env` contains a password with `$`, which still causes interpolation warnings in Docker Compose unless values are escaped or Compose is pointed at a different env file.
-- `Makefile` now uses `docker compose --env-file .env.saas` for backend dev commands, and the env templates now include `POSTGRES_PASSWORD`. `.gitignore` was updated so the new env template files remain tracked.
-- Added the next batch of product-facing API endpoints: `GET /sync/status`, `GET /activities/{id}`, `PUT/DELETE /rules/{id}`, `DELETE /api-keys/{id}`, and disconnect endpoints for Strava and Komoot.
-- `cd backend && python -m pytest tests/ -v` now passes with the expanded route coverage: **17 passed**.
-- Added account auth endpoints for `POST /auth/register`, `POST /auth/login`, and `POST /auth/refresh`, plus `GET /billing/subscription`.
-- `cd backend && python -m pytest tests/ -v` now passes with the expanded auth/billing route coverage: **19 passed**.
-- Added `GET /activities/{id}/gpx`, which downloads GPX on demand from Komoot for user-owned synced activities that still have a `komoot_tour_id` and valid stored Komoot credentials.
-- `cd backend && python -m pytest tests/ -v` now passes with GPX download coverage: **20 passed**.
-
-### Recent Fixes (2026-04-18 session 2)
-
-- Replaced `passlib`+`bcrypt` usage with direct `bcrypt` calls (`bcrypt.hashpw`/`bcrypt.checkpw`) in `app/core/security.py`. `passlib` triggers a wrap-bug detection probe with a 72-byte secret that `bcrypt >= 4.0` now rejects with `ValueError`, breaking all password hashing/verification at test time.
-- Fixed `get_current_user` in `deps.py` to cast the JWT subject string to `uuid.UUID` before the SQLAlchemy query (SQLite's `aiosqlite` driver requires a Python UUID object, not a string, when the column is `sa.UUID(as_uuid=True)`).
-- Added `selectinload(User.strava_token)` to the `get_current_user` query so that relationship attributes accessed in route handlers (e.g. `user.strava_token` in `/auth/me` and `/sync/status`) don't trigger async lazy-load failures (`MissingGreenlet`).
-- Changed path parameters in `activities.py`, `rules.py`, and `api_keys.py` from `str` to `uuid.UUID` — FastAPI validates and parses them, and SQLAlchemy receives proper UUID objects directly.
-- Fixed `billing.py`: tier validation (`/checkout`) and Stripe customer check (`/portal`) now happen before the Stripe-key guard, so invalid-tier and no-customer-id requests return 400 even when Stripe is not configured.
-- Added a comprehensive integration test file (`tests/api/test_integration.py`) that runs against a real in-memory SQLite DB (no mocks) with shared `db`, `async_client`, `free_user`, `pro_user`, `free_user_headers`, `pro_user_headers` fixtures in `tests/conftest.py`.
-- `make check` passes: **48 passed, 0 failed**.
+| SHA | Description |
+|-----|-------------|
+| `b6e6219` | feat: Garmin Connect source (E6) and platform-agnostic rule engine (F6) |
+| `060600c` | docs: update AI_HANDOFF with complete implementation plan status |
+| `95fdb34` | feat: audit log, constraint fixes, ARQ cleanup (C5/F2/F5/E7) |
+| `701ec34` | feat: presigned URL downloads and cascading storage purge (C1/C2) |
+| `46e80de` | feat: GPX object storage (A5-ph1) and multi-app OAuth routing (A4) |
+| `6f06861` | refactor: platform-agnostic /sync/status response (F3) |
+| `c0c4071` | feat: per-connection sync watermarks — ConnectionSyncState table (E5) |
+| `9f630f2` | feat: multi-origin CORS via FRONTEND_URLS env var (B5) |
+| `009cf14` | feat: implement Strava→Intervals.icu and Strava→Runalyze pipeline handlers (E3/E4) |
+| `39b244d` | feat: GDPR data export, improved account deletion, credential isolation (C3/C4) |
 
 ---
 
-### ✅ Fully Implemented Features
+## ✅ IMPLEMENTATION PLAN STATUS
 
-#### 1. Authentication & Security (`auth.py`, `security.py`, `deps.py`)
-- **Account auth**: `POST /auth/register` creates a user plus a default free subscription and returns a bearer token. `POST /auth/login` verifies email/password and returns a bearer token. `POST /auth/refresh` issues a fresh bearer token for an authenticated user.
-- **Strava OAuth2 flow**: `GET /auth/strava/login` redirects to Strava; callback at `POST /auth/strava/callback` exchanges code for tokens and stores the resulting Strava tokens encrypted in `strava_tokens`.
-- **Komoot Vault**: `POST /auth/komoot` accepts `{email, password}` and stores them as AES-256 Fernet ciphertext in the DB (`komoot_email_encrypted`, `komoot_password_encrypted`). The plaintext is never persisted.
-- **Disconnect endpoints**: `DELETE /auth/strava/disconnect` removes the stored Strava token, and `DELETE /auth/komoot/disconnect` clears stored Komoot credentials and disables Komoot→Strava sync.
-- **JWT auth**: All protected routes use `Depends(deps.get_current_user)` which validates the Bearer token and loads the `User` model.
-- **Tier gating**: `Depends(deps.require_tier("pro"))` queries `Subscription` and raises HTTP 402 if the user's tier is insufficient.
-- **API Key auth**: `X-API-Key` header validated by `get_current_api_key_user` — keys are stored as SHA-256 hashes, never in plaintext.
+All tasks in `IMPLEMENTATION_PLAN.md` that are marked **launch-critical** are now complete.
 
-#### 2. Komoot → Strava Sync (Full Pipeline)
-- `KomootClient.get_tours(since)` paginates the Komoot v007 API, filters by date, maps sport types to Strava equivalents via `SPORT_TYPE_MAP` (~25 types supported).
-- `KomootClient.download_gpx(tour_id)` fetches the GPX bytes.
-- `SyncService.sync_komoot_to_strava()` orchestrates:
-  1. Loads/creates `UserSyncState` for the user.
-  2. **Fetches active `SyncRule` rows** for the user and evaluates them before each tour. If a rule's `conditions.sport` matches the tour sport and `actions.sync_to == "None"`, the tour is **skipped**.
-  3. Checks `SyncedActivity` for duplicates (idempotent by `komoot_tour_id`).
-  4. Downloads GPX and uploads to Strava via `StravaClient`, wrapped in `rate_limit_guard.call()`.
-  5. Polls upload status until `activity_id` is available.
-  6. Sets `hide_from_home` on the Strava activity.
-  7. Writes a `SyncedActivity` record with full metadata (name, sport, distance, elevation, start time).
-  8. Updates `UserSyncState` timestamps and counts.
+### Area A — Scalability
+| Task | Status |
+|------|--------|
+| A1: Migration 007 multi-destination sync schema | ✅ Done |
+| A2: ARQ dedup key + scheduler Redis lock | ✅ Done |
+| A3: DB connection pool config | ✅ Done |
+| A4: Strava multi-app fan-out via pick_least_loaded_app | ✅ Done |
+| A5-ph1: GPX object storage (S3/R2 via aiobotocore, dual-write) | ✅ Done |
+| A5-ph2: Drop gpx_data column after migration | ⏳ Deferred — run after A5-ph1 is live for 2+ deploys |
 
-#### 3. Strava → Komoot Reverse Sync (Scaffolded — Komoot API limitation)
-- Strava pushes activity events to `POST /webhooks/strava` (registered via Strava Webhook API).
-- The webhook enqueues `process_strava_activity(athlete_id, activity_id)` to ARQ and the worker resolves the user through `strava_tokens.strava_athlete_id`.
-- The job fetches the full Strava activity JSON, creates a `SyncedActivity` record with `sync_direction="strava_to_komoot"` and `sync_status="pending"`.
-- **Why pending**: Komoot does not expose a public GPX upload API. The record is persisted and ready — when a Komoot upload endpoint is discovered (reverse-engineered or official), plug it into the `process_strava_activity` job after the metadata fetch.
+### Area B — Deployment Split
+| Task | Status |
+|------|--------|
+| B1: DEPLOYMENT_MODE config | ✅ Done |
+| B2: Deployment guards | ✅ Done |
+| B3: /api/v1/instance endpoint | ✅ Done |
+| B4: Frontend instance-aware UI | ⏳ Deferred |
+| B5: Multi-origin CORS (FRONTEND_URLS) | ✅ Done |
+| B6: Deprecate LICENSE_SERVER_URL | ✅ Done |
 
-#### 4. Rebuild History / Sync from External (`POST /sync/rebuild-history`)
-- Crawls the authenticated user's Strava activity history (`GET /athlete/activities`).
-- Identifies activities with `external_id` starting with `komoot_` (the tag the sync engine sets on every upload).
-- Backfills matching `SyncedActivity` rows so the sync engine treats them as already-synced on the next run.
-- Safe to call multiple times (upsert-style: existing records are skipped).
-- Accepts `lookback_days` query param (default 180, max 730).
+### Area C — Privacy & Integrity
+| Task | Status |
+|------|--------|
+| C1: Presigned URL GPX downloads (never stream through API) | ✅ Done |
+| C2: Cascading storage purge on activity/account delete | ✅ Done |
+| C3: GDPR data export + account deletion | ✅ Done |
+| C4: Credential isolation hardening | ✅ Done |
+| C5: UserAuditLog table + writes on sensitive actions | ✅ Done |
 
-#### 5. Activity History Feed (`GET /activities`, `GET /activities/{id}`, `GET /activities/{id}/gpx`)
-- Paginated endpoint returning `SyncedActivity` rows for the authenticated user.
-- Detail endpoint returning a single user-scoped `SyncedActivity` including duration/conflict fields when present.
-- GPX download endpoint streams `application/gpx+xml` directly from Komoot on demand for synced activities tied to a Komoot tour.
-- GPX download requires the current user to still have Komoot credentials stored; otherwise it returns HTTP 409.
-- Returns: `id`, `komoot_tour_id`, `strava_activity_id`, `sync_direction`, `sync_status`, `activity_name`, `sport_type`, `distance_m`, `elevation_up_m`, `started_at`, `synced_at`.
-- Status values: `pending`, `processing`, `completed`, `failed`, `conflict`.
+### Area D — Coolify/Hetzner Infra
+| Task | Status |
+|------|--------|
+| D1–D8: Server, Coolify, Docker Compose, Object Storage, CI/CD, Backups, Init container | ⏳ Manual deployment steps — not yet done |
 
-#### 6. Sync Status (`GET /api/v1/sync/status`)
-- Returns connection flags, enabled sync directions, latest `UserSyncState` fields, and the user's most recent synced activity.
-- This is the main lightweight dashboard/status endpoint for the current backend.
+### Area E — Multi-directional Sync
+| Task | Status |
+|------|--------|
+| E1: Fix sync_direction at ingest | ✅ Done |
+| E2: Write destination_platform on success | ✅ Done |
+| E3: Strava→Intervals.icu handler | ✅ Done |
+| E4: Strava→Runalyze handler | ✅ Done |
+| E5: Per-connection sync watermarks (ConnectionSyncState) | ✅ Done |
+| E6: Garmin Connect source | ✅ Done |
+| E7: Remove backward-compat ARQ aliases | ✅ Done |
 
-#### 7. Individual Sync Rules (`GET /api/v1/rules`, `POST /api/v1/rules`, `PUT /api/v1/rules/{id}`, `DELETE /api/v1/rules/{id}`)
-- **Requires Pro tier**.
-- Rules are JSON objects with `conditions` (e.g. `{"sport": "E-Bike"}`) and `actions` (e.g. `{"sync_to": "None"}`).
-- Up to **15 rules per user**, evaluated in `rule_order` order.
-- The `SyncService` evaluates rules at runtime — sport-type matching is case-insensitive.
-- Supported `direction` values: `komoot_to_strava`, `strava_to_komoot`, `both`.
-
-#### 8. Developer API Keys (`GET /api/v1/api-keys`, `POST /api/v1/api-keys`, `DELETE /api/v1/api-keys/{id}`)
-- **Requires Pro tier**.
-- Generates a `kss_`-prefixed raw key returned **once** at creation time.
-- Stores only the SHA-256 hash and a `key_prefix` (first 8 chars + `...`) for display.
-- Limit of 5 active keys per user.
-- Delete is implemented as revoke: it sets `revoked_at` rather than removing the DB row.
-
-#### 9. Billing (Stripe)
-- `GET /billing/subscription` returns the current subscription snapshot for the authenticated user, defaulting to a synthetic free-tier view when no subscription row exists.
-- `POST /billing/checkout` creates a Stripe Checkout Session for `pro` or `business` tier; returns `{url}` to redirect the user.
-- `POST /billing/portal` creates a Stripe Billing Portal session for managing existing subscriptions.
-- `POST /webhooks/stripe` handles `checkout.session.completed`, `customer.subscription.deleted`, and `customer.subscription.updated` events to update the local `Subscription` table.
-
-#### 10. ARQ Background Workers
-- `poll_komoot_user(ctx, user_id)`: Loads the user + token, refreshes the Strava token if it is near expiry, instantiates clients, runs `SyncService.sync_komoot_to_strava()`.
-- `process_strava_activity(ctx, athlete_id, activity_id)`: Resolves the user from the Strava athlete id, refreshes the token if needed, and records inbound Strava activities for future reverse sync.
-- `komoot_poll_scheduler(ctx)`: Cron job that queries users with `next_komoot_poll_at <= now` and enqueues `poll_komoot_user` for each.
-
-#### 11. Rate Limiting (`core/rate_limit.py`)
-- `RateLimitGuard` tracks per-`strava_app_id` request counts in Redis.
-- Hard limits: 100 req / 15 min, 1000 req / day.
-- Pro users get elevated limits.
-- All Strava API calls in `SyncService` pass through `rate_limit_guard.call()`.
+### Area F — Legacy Komoot Decoupling
+| Task | Status |
+|------|--------|
+| F1: Remove Komoot columns from User model | ✅ Already clean |
+| F2: Generalize SyncRule.direction constraint (migration 010) | ✅ Done |
+| F3: Platform-agnostic /sync/status | ✅ Done |
+| F4: Deprecate POST /sync/rebuild-history (returns 410) | ✅ Done |
+| F5: Extend SyncedActivity.source constraint (migration 010) | ✅ Done |
+| F6: Platform-agnostic rule engine | ✅ Done |
 
 ---
 
-### 📋 DB Models Summary
+## 📦 Migration Chain
 
-| Model | Table | Key columns |
+```
+001_initial_schema
+002_add_connections_and_pipelines
+003_drop_legacy_user_columns
+004_add_user_name
+005_add_activity_source
+006_add_gpx_data
+007_multi_destination_sync
+008_connection_sync_state
+009_add_gpx_storage_key
+010_extend_source_and_direction_constraints   ← F5 + F2
+011_add_user_audit_log                         ← C5
+```
+
+Run `make migrate` to apply all pending migrations on a fresh DB.
+
+---
+
+## ✅ FULLY IMPLEMENTED (end-to-end, tested)
+
+### Backend API Endpoints
+| Area | Endpoints | Notes |
 |---|---|---|
-| `User` | `users` | `id (UUID)`, `email`, `komoot_email_encrypted`, `komoot_password_encrypted`, `komoot_user_id`, `sync_komoot_to_strava`, `hide_from_home_default` |
-| `StravaApp` | `strava_apps` | `client_id`, `client_secret (bytes)`, `display_name`, `daily_requests` |
-| `StravaToken` | `strava_tokens` | `user_id→users`, `strava_app_id→strava_apps`, `access_token (bytes)`, `refresh_token (bytes)`, `expires_at` |
-| `Subscription` | `subscriptions` | `user_id→users`, `tier (free/pro/business)`, `status`, `stripe_customer_id`, `stripe_subscription_id` |
-| `ApiKey` | `api_keys` | `user_id→users`, `key_hash`, `key_prefix`, `name`, `revoked_at`, `expires_at` |
-| `SyncedActivity` | `synced_activities` | `user_id→users`, `komoot_tour_id`, `strava_activity_id`, `sync_direction`, `sync_status`, `activity_name`, `sport_type`, `distance_m`, `elevation_up_m`, `started_at`, `duration_seconds` |
-| `UserSyncState` | `user_sync_state` | `user_id→users (PK)`, `last_komoot_sync_at`, `last_successful_sync_at`, `total_synced_count`, `last_error` |
-| `SyncRule` | `sync_rules` | `user_id→users`, `name`, `direction`, `conditions (JSON)`, `actions (JSON)`, `rule_order`, `is_active` |
+| Auth | POST /register, /login, /refresh, GET /me, PATCH /me | JWT, bcrypt; register/strava/komoot/disconnect/account-delete all write UserAuditLog |
+| Social Auth | GET /auth/google, /google/callback, /auth/github, /github/callback | CSRF state cookie |
+| Strava OAuth | GET /strava/login, POST /strava/callback, DELETE /strava/disconnect | Multi-app routing via pick_least_loaded_app |
+| Komoot credentials | POST /auth/komoot, DELETE /auth/komoot/disconnect | Fernet-encrypted in Connection table |
+| Account | DELETE /auth/account | Cascade: purge S3 blobs → delete User row (ON DELETE CASCADE) → audit log survives with user_id=NULL |
+| Sync | GET /sync/status, POST /sync/trigger | Platform-agnostic; ConnectionSyncState watermarks |
+| Activities | GET /activities, /activities/ids, GET /activities/{id}, DELETE /activities/{id} | Pagination, filtering, GPX purge on delete |
+| GPX Download | GET /activities/{id}/gpx | Presigned URL redirect (cloud) or stream from DB column (self-hosted) |
+| GPX Import | POST /activities/import, /activities/seed | Dual-write: S3 key or gpx_data column |
+| Export | GET /export/me | GDPR Art.20 JSON archive; writes export_requested audit |
+| Rules | CRUD /rules | Tier enforcement; direction validated via regex `^[a-z_]+_to_[a-z_]+$` |
+| API Keys | CRUD /api-keys | Pro only; writes api_key_created/revoked audit |
+| Billing | GET /billing/status, POST /billing/checkout, /portal | Stripe |
+| Webhooks | POST /webhooks/strava, /webhooks/stripe | Verified, tested |
+| Connections | CRUD /connections | Encrypted credentials blob |
+| Pipelines | CRUD /pipelines, POST /pipelines/{id}/sync | Full CRUD + ARQ trigger |
+| Instance | GET /api/v1/instance | DEPLOYMENT_MODE, feature flags |
 
----
-
-### 🧪 Test Status
-
-`python -m pytest tests/ -v` passes in the current local Python 3.11 environment after installing backend dependencies. Current result: **20 passed**.
-
-| Test file | What it covers |
+### ARQ Background Jobs
+| Job | Status |
 |---|---|
-| `test_activities.py` | Activity list, activity detail, and GPX download endpoints |
-| `test_api_keys.py` | Create key, list keys, revoke key |
-| `test_auth.py` | Strava login URL generation, Komoot credential storage |
-| `test_auth_accounts.py` | Register, login, and refresh token flows |
-| `test_auth_disconnect.py` | Disconnecting Komoot and Strava integrations |
-| `test_sync_jobs.py` | Refreshes expiring Strava tokens before workers use them |
-| `test_billing.py` | Subscription status and Stripe Checkout session creation |
-| `test_rules.py` | Create/list/update/delete sync rules |
-| `test_sync.py` | Rule engine blocks E-Bike tour, passes Running tour |
-| `test_sync_status.py` | Sync status aggregate endpoint |
-| `test_webhooks.py` | Stripe bad-signature rejection, Strava verify challenge, Strava activity push |
+| `poll_user_sources` | Phase A: ingests Komoot + Strava via ConnectionSyncState watermarks; Phase B: pushes un-synced activities |
+| `process_strava_activity` | Real-time Strava webhook → hub ingestion |
+| `source_poll_scheduler` | Cron every 5 min; budget-aware across all active StravaApps |
+| `sync_gpx_to_strava` | GPX → Strava upload |
+| `sync_activity_to_komoot` | GPX → Komoot upload |
+| `run_pipeline` | Komoot→Strava, Komoot/Strava→Intervals.icu, Komoot/Strava→Runalyze |
 
-**Key `conftest.py` pattern**: env vars are set via `os.environ` before any app import. `get_current_user` is overridden per test via `app.dependency_overrides`. The `FakeDB` class dispatches `scalar_one_or_none()` / `scalars().all()` based on `str(stmt).lower()` content.
-
----
-
-### 🚩 Known Limitations / Next Steps
-
-| Area | Status | Notes |
-|---|---|---|
-| **Strava → Komoot upload** | ⏸ Blocked | Komoot has no public upload API. Reverse-engineered mobile session is the only path. DB record is persisted and waiting. |
-| **Alembic migrations** | ✅ Initial migration verified on clean Postgres | The initial migration was rewritten and successfully applied to a clean PostgreSQL 16 container. If schema changes continue, the next step is comparing ORM metadata to DB state after future edits. |
-| **Token refresh** | ✅ Implemented in worker paths | `poll_komoot_user()` and `process_strava_activity()` now refresh near-expiry Strava tokens before making API calls. The API layer still does not expose a dedicated token maintenance endpoint, which is fine for current behavior. |
-| **Docs drift** | ⚠️ Ongoing | `PROJECT.md`, `README.md`, and some planning notes still contain stale assumptions. Validate against code before trusting written docs. |
-| **Docker env handling** | ⚠️ Mostly fixed for normal dev flow | `make dev` now uses `--env-file .env.saas`, which avoids depending on the legacy root `.env`. Remaining cleanup is optional hardening around direct raw `docker compose` usage in this repo if contributors still invoke it manually. |
-| **Frontend** | ❌ Not started | See `frontend_ui_prompt.md` in the project root for a complete spec. React/Vite. Connects to `/api/v1/*`. |
-| **Komoot → Strava idempotency** | ✅ Robust | `SyncedActivity` has `UNIQUE (user_id, komoot_tour_id)`. Strava also rejects duplicate `external_id` values natively. |
-| **Docker Compose** | ✅ Present | `docker-compose.saas.yml` runs `api`, `worker`, `postgres`, `redis`. Backend requires these services to be running for the full sync pipeline. |
+### New Services / Models Added This Session
+| Module | Purpose |
+|--------|---------|
+| `app/services/storage.py` | S3-compatible GPX blob storage (put/get/delete/presigned_url) |
+| `app/services/audit.py` | `write_audit()` helper — non-blocking UserAuditLog writer |
+| `app/db/models/audit.py` | `UserAuditLog` model — ON DELETE SET NULL for GDPR compliance |
+| `app/db/models/sync.py` | `ConnectionSyncState` added; source + direction constraints updated |
 
 ---
 
-### 🔑 Required Environment Variables
+## ⚠️ REMAINING / DEFERRED WORK
 
-| Variable | Required | Purpose |
-|---|---|---|
-| `DATABASE_URL` | ✅ | `postgresql+asyncpg://...` |
-| `REDIS_URL` | ✅ | `redis://redis:6379` |
-| `SECRET_KEY` | ✅ | JWT signing key |
-| `KOMOOT_ENCRYPTION_KEY` | ✅ | Fernet key for Komoot credential encryption |
-| `STRAVA_CLIENT_ID` | ✅ | Strava developer app |
-| `STRAVA_CLIENT_SECRET` | ✅ | Strava developer app |
-| `STRIPE_SECRET_KEY` | Optional | Billing |
-| `STRIPE_WEBHOOK_SECRET` | Optional | Billing |
-| `STRIPE_PRICE_PRO` | Optional | Price ID for Pro tier |
-| `STRIPE_PRICE_BUSINESS` | Optional | Price ID for Business tier |
-| `STRAVA_WEBHOOK_VERIFY_TOKEN` | Optional | Strava webhook challenge |
+| Item | Priority | Notes |
+|------|----------|-------|
+| D1–D8: Coolify/Hetzner deployment | HIGH (pre-launch) | Manual infra setup; see D9 env var reference in IMPLEMENTATION_PLAN.md |
+| A5-ph2: Drop gpx_data column | Medium | After A5-ph1 is live for ≥2 deploys and all rows migrated |
+| B4: Frontend instance-aware UI | Low | Hide cloud-only features in self-hosted mode |
+| Outbound webhooks backend | Medium | `WebhookSubscription` model exists; no dispatch logic yet |
+| Test coverage: run_pipeline handlers | Medium | No tests for Intervals.icu/Runalyze pipeline execution |
+| Garmin: dedicated garmin_activity_id column | Low | Currently piggybacking `komoot_tour_id` as `garmin_<id>`; clean up with migration once E6 is live |
 
-Test credentials for development are saved in the root `.env` file.
+---
+
+## 🧪 Test Coverage
+
+103 tests passing across:
+- `test_activities.py`, `test_activities_import.py`
+- `test_activity_record.py` (new — ActivityRecord, _match_condition, _apply_action, platform converters)
+- `test_api_keys.py`, `test_auth.py`, `test_auth_accounts.py`, `test_auth_disconnect.py`, `test_auth_social.py`
+- `test_billing.py`, `test_connections.py`, `test_pipelines.py`
+- `test_integration.py` (full workflow: register → connect → sync → activities → rules → billing → webhooks)
+- `test_rules.py`, `test_sync.py`, `test_sync_jobs.py`, `test_sync_status.py`, `test_webhooks.py`
+
+Still missing: `run_pipeline` job execution, `IntervalsIcuClient`, `RunalyzeClient`, end-to-end Garmin ingest.
+
+---
+
+## 🐛 Notable Fixes This Session
+
+| Issue | Fix |
+|-------|-----|
+| `FakeStravaAppResult` missing `.scalars()` | Updated test to support new A4 multi-app query pattern |
+| `FakeDB` missing `.flush()` in api_keys test | Added flush() and type-filtered list query to prevent UserAuditLog polluting ApiKey list |
+| `daily_count` undefined in sync_jobs.py | Removed stale format arg from scheduler logger.info call |
+| Migration numbering conflict (A5-ph1 vs E5 both wanted 008) | A5-ph1 became 009; combined F2+F5 into 010 |
+| SQLite incompatibility with Postgres `~` regex in CHECK constraint | SyncRule model uses SQLite-safe LIKE pattern; migration uses Postgres regex |
+
+---
+
+## 🏗️ Object Storage (A5-ph1)
+
+**Config**: `STORAGE_BACKEND=db` (default, self-hosted) or `s3`/`r2` (cloud).
+
+When `STORAGE_BACKEND != "db"`:
+- `POST /activities/import` → upload to S3, set `gpx_storage_key`, clear `gpx_data`
+- `GET /activities/{id}/gpx` → generate presigned URL (5 min TTL), return 302 redirect
+- `DELETE /activities/{id}` → purge S3 blob before DB delete
+- `DELETE /auth/account` → bulk-purge all user's S3 blobs before cascade delete
+
+Bucket must be private + server-side encrypted. Key pattern: `gpx/{user_id}/{activity_id}.gpx`.
+
+---
+
+## 🔐 UserAuditLog (C5)
+
+Actions logged: `account_created`, `account_deleted`, `strava_connected`, `strava_disconnected`,
+`komoot_connected`, `komoot_disconnected`, `api_key_created`, `api_key_revoked`, `export_requested`.
+
+- FK `user_id` → `users.id` ON DELETE SET NULL — rows survive account deletion for compliance.
+- `write_audit()` is non-blocking: catches and logs any DB errors without aborting the primary operation.
+- IP extracted from `X-Forwarded-For` header (proxy-aware) or `request.client.host`.
+
+---
+
+## 🏃 Garmin Connect Source (E6) + Platform-Agnostic Rule Engine (F6)
+
+### ActivityRecord (`app/services/activity_record.py`)
+Platform-agnostic dataclass used by the rule engine. Fields mirror `SyncedActivity` where possible.
+Converters: `_komoot_tour_to_record(tour)` and `_garmin_activity_to_record(activity_dict)` in `sync.py`.
+
+### Rule Engine
+`_match_condition(record: ActivityRecord, conditions: dict)` and `_apply_action(record, actions, user)` now operate on `ActivityRecord` instead of `Tour`. Condition keys supported: `sport_type`, `sport` (alias), `distance_km`, `elevation_m`, `name_contains`. Existing stored rule JSON format is fully preserved.
+
+### GarminClient (`app/services/garmin.py`)
+Wraps `garminconnect` SDK via `asyncio.to_thread`. Lazy login on first use. Methods: `get_activities_since(since, limit=100)`, `download_gpx(activity_id)`. Requires `garminconnect>=0.2.0` in requirements.txt.
+
+### DB storage for Garmin
+Garmin activities are stored as `source="garmin"`, re-using `komoot_tour_id` as `garmin_<activityId>` to avoid a schema migration until a dedicated column is added. This is a known shortcut — add a `garmin_activity_id` column (new migration) when Garmin ships publicly.
+
+### Credentials format (Garmin Connection)
+```json
+{"email": "user@example.com", "password": "<encrypted>"}
+```
+Same Fernet-encrypted credentials blob in the `Connection` table as Komoot.

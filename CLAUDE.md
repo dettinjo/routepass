@@ -1,4 +1,4 @@
-# komoot-strava-sync — Claude Code Instructions
+# RoutePass — Claude Code Instructions
 
 ## Read Before Starting Any Session
 

@@ -3,53 +3,37 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Optional
 
 import httpx
+
+from app.core.sports import KOMOOT_TO_STRAVA, STRAVA_TO_KOMOOT
+
+UTC = timezone.utc
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.komoot.de/api/v007"
 
-# Maps Komoot sport type strings → Strava sport_type strings.
-SPORT_TYPE_MAP: dict[str, str] = {
-    "touringbicycle": "Ride",
-    "road_cycling": "Ride",
-    "citybike": "Ride",
-    "e_touringbicycle": "EBikeRide",
-    "e_road_cycling": "EBikeRide",
-    "e_mtb": "EMountainBikeRide",
-    "e_mtb_easy": "EMountainBikeRide",
-    "mtb": "MountainBikeRide",
-    "mtb_easy": "MountainBikeRide",
-    "mtb_advanced": "MountainBikeRide",
-    "downhillbike": "MountainBikeRide",
-    "racebike": "Ride",
-    "jogging": "Run",
-    "running": "Run",
-    "trail_running": "TrailRun",
-    "hike": "Hike",
-    "hiking": "Hike",
-    "nordic_walking": "Walk",
-    "walking": "Walk",
-    "skitouring": "BackcountrySki",
-    "skitour": "BackcountrySki",
-    "snowshoe": "Snowshoe",
-    "nordic_ski": "NordicSki",
-    "crosscountryskiing": "NordicSki",
-    "swimming": "Swim",
-    "kayaking": "Kayaking",
-    "canoeing": "Canoeing",
-    "rowing": "Rowing",
-    "climbing": "RockClimbing",
-    "yoga": "Yoga",
-    "_default": "Workout",
-}
+# All valid Komoot sport type identifiers (the keys of KOMOOT_TO_STRAVA minus sentinel)
+_KOMOOT_SPORTS: frozenset[str] = frozenset(k for k in KOMOOT_TO_STRAVA if k != "_default")
 
 
-def _strava_sport(komoot_sport: str) -> str:
-    return SPORT_TYPE_MAP.get(komoot_sport, SPORT_TYPE_MAP["_default"])
+def to_strava_sport(sport: str) -> str:
+    """Convert any stored sport type (Komoot or Strava) to a Strava sport_type string."""
+    # Already Strava format — return as-is (identity for all known Strava types)
+    if sport in STRAVA_TO_KOMOOT:
+        return sport
+    return KOMOOT_TO_STRAVA.get(sport, KOMOOT_TO_STRAVA.get("_default", "Workout"))
+
+
+def to_komoot_sport(sport: str) -> str:
+    """Convert any stored sport type (Komoot or Strava) to a Komoot sport string."""
+    # Already Komoot format
+    if sport in _KOMOOT_SPORTS:
+        return sport
+    return STRAVA_TO_KOMOOT.get(sport, "touringbike")
 
 
 @dataclass
@@ -62,6 +46,7 @@ class Tour:
     date: datetime
     distance_m: float
     elevation_up_m: float
+    duration_seconds: Optional[int] = None
 
 
 def _parse_date(raw: str) -> datetime:
@@ -84,7 +69,7 @@ class KomootClient:
         self.user_id = user_id
 
         # We will reuse this client per instance method call.
-        self._client_kwargs: dict[str, Any] = {
+        self._client_kwargs: dict = {
             "auth": (email, password),
             "headers": {"Accept": "application/hal+json, application/json"},
             "timeout": httpx.Timeout(30.0),
@@ -97,7 +82,7 @@ class KomootClient:
             response.raise_for_status()
             return response.json()
 
-    async def _iter_tour_pages(self) -> AsyncGenerator[dict[str, Any], None]:
+    async def _iter_tour_pages(self) -> AsyncGenerator:
         """Yield raw tour dicts from all pages."""
         page = 0
         while True:
@@ -117,9 +102,9 @@ class KomootClient:
             if page >= total_pages:
                 break
 
-    async def get_tours(self, since: datetime) -> list[Tour]:
+    async def get_tours(self, since: datetime) -> list:
         """Return recorded tours newer than `since`, sorted oldest-first."""
-        results: list[Tour] = []
+        results: list = []
         async for raw in self._iter_tour_pages():
             try:
                 date = _parse_date(raw["date"])
@@ -139,16 +124,32 @@ class KomootClient:
                     name=raw.get("name", "Komoot Activity"),
                     description=description,
                     sport=sport,
-                    strava_sport=_strava_sport(sport),
+                    strava_sport=to_strava_sport(sport),
                     date=date,
                     distance_m=float(raw.get("distance", 0)),
                     elevation_up_m=float(raw.get("elevation_up", 0)),
+                    duration_seconds=int(raw["duration"]) if raw.get("duration") else None,
                 )
             )
 
         results.sort(key=lambda t: t.date)
         logger.info("Found %d new Komoot tours since %s", len(results), since.isoformat())
         return results
+
+    async def delete_tour(self, tour_id: str) -> None:
+        """Delete a tour from Komoot. Returns silently if the API doesn't support deletion."""
+        url = f"{BASE_URL}/tours/{tour_id}"
+        async with httpx.AsyncClient(
+            auth=(self.email, self.password),
+            timeout=httpx.Timeout(30.0),
+        ) as client:
+            resp = await client.delete(url)
+            if resp.status_code == 405:
+                # Komoot's unofficial API may not expose DELETE — log and move on
+                logger.warning("Komoot DELETE /tours/%s → 405 (not supported)", tour_id)
+                return
+            resp.raise_for_status()
+            logger.debug("Deleted Komoot tour %s", tour_id)
 
     async def download_gpx(self, tour_id: str) -> bytes:
         """Download the GPX file for a tour and return the raw bytes."""
@@ -158,3 +159,63 @@ class KomootClient:
             response.raise_for_status()
             logger.debug("Downloaded GPX for tour %s (%d bytes)", tour_id, len(response.content))
             return response.content
+
+    async def upload_tour(
+        self,
+        gpx_bytes: bytes,
+        name: str,
+        sport_type: str,
+        description: str = "",
+    ) -> str:
+        """Upload a GPX file to Komoot as a recorded tour and return the new tour ID.
+
+        Uses the unofficial Komoot API v007. The GPX is sent as application/gpx+xml
+        with sport and name passed as query parameters.
+        Raises httpx.HTTPStatusError on API errors, ValueError if the response
+        contains no tour ID.
+        """
+        logger.info(
+            "Uploading GPX to Komoot: %r (%d bytes, sport=%s)", name, len(gpx_bytes), sport_type
+        )
+
+        # Komoot v007 upload quirks (discovered empirically):
+        # - Endpoint: POST /tours/ (not /users/{id}/tours/ — that returns 405)
+        # - Content-Type must be application/octet-stream (not application/gpx+xml)
+        # - data_type=gpx query param is required; without it the server returns
+        #   "data_type must not be null"
+        headers = {
+            "Accept": "application/hal+json, application/json",
+            "Content-Type": "application/octet-stream",
+        }
+
+        async with httpx.AsyncClient(
+            auth=(self.email, self.password),
+            timeout=httpx.Timeout(60.0),
+        ) as client:
+            resp = await client.post(
+                f"{BASE_URL}/tours/",
+                params={"sport": sport_type, "name": name, "data_type": "gpx"},
+                content=gpx_bytes,
+                headers=headers,
+            )
+            if not resp.is_success:
+                logger.error(
+                    "Komoot upload %s — body: %s",
+                    resp.status_code,
+                    resp.text[:500],
+                )
+            resp.raise_for_status()
+            data = resp.json()
+            logger.debug("Komoot upload response: %s", data)
+
+            # Komoot may nest the tour under _embedded or return id at top level
+            tour_id = (
+                data.get("id")
+                or (data.get("_embedded") or {}).get("tour", {}).get("id")
+                or (data.get("tour") or {}).get("id")
+            )
+            if not tour_id:
+                raise ValueError(f"Komoot upload returned no tour ID: {data!r}")
+
+            logger.info("Komoot tour created — id=%s", tour_id)
+            return str(tour_id)

@@ -1,6 +1,6 @@
-# Contributing to komoot-strava-sync
+# Contributing to RoutePass
 
-First off, thank you for considering contributing to `komoot-strava-sync`!
+First off, thank you for considering contributing to `RoutePass`!
 
 ## How can I contribute?
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
@@ -8,6 +8,8 @@ from httpx import AsyncClient
 
 from app.db.models.subscription import Subscription
 from app.db.models.user import User
+
+UTC = timezone.utc
 
 
 @pytest.mark.asyncio

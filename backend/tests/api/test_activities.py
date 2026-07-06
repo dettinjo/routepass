@@ -7,8 +7,11 @@ import pytest
 from httpx import AsyncClient
 
 from app.core import security
+from app.db.models.connection import Connection
 from app.db.models.sync import SyncedActivity
 from app.db.models.user import User
+
+UTC = UTC
 
 
 @pytest.mark.asyncio
@@ -81,15 +84,14 @@ async def test_get_activity_detail(async_client: AsyncClient):
 @pytest.mark.asyncio
 async def test_download_activity_gpx(async_client: AsyncClient):
     """Test downloading GPX for a synced Komoot-backed activity."""
+    import json
+
     from app.api import deps
     from app.main import app
 
     fake_user = User(
         id="00000000-0000-0000-0000-000000000000",
         email="test@test.com",
-        komoot_email_encrypted=security.encrypt("komoot@example.com"),
-        komoot_password_encrypted=security.encrypt("secret-password"),
-        komoot_user_id="komoot-user-1",
     )
     fake_activity = SyncedActivity(
         id="22222222-2222-2222-2222-222222222222",
@@ -102,6 +104,22 @@ async def test_download_activity_gpx(async_client: AsyncClient):
         sport_type="Ride",
         synced_at=datetime.now(UTC),
     )
+    # Provide a fake Komoot Connection so the endpoint can resolve credentials
+    fake_komoot_conn = Connection(
+        user_id=fake_user.id,
+        platform="komoot",
+        display_name="Komoot",
+        status="active",
+        credentials_enc=security.encrypt(
+            json.dumps(
+                {
+                    "email": "komoot@example.com",
+                    "password": "secret-password",
+                    "user_id": "komoot-user-1",
+                }
+            )
+        ),
+    )
 
     app.dependency_overrides[deps.get_current_user] = lambda: fake_user
 
@@ -113,8 +131,16 @@ async def test_download_activity_gpx(async_client: AsyncClient):
             return self._scalar
 
     class FakeDB:
+        def __init__(self):
+            self.calls = 0
+
         async def execute(self, stmt):
-            return FakeResult(scalar_val=fake_activity)
+            self.calls += 1
+            if self.calls == 1:
+                # select(SyncedActivity)
+                return FakeResult(scalar_val=fake_activity)
+            # select(Connection) for komoot credentials
+            return FakeResult(scalar_val=fake_komoot_conn)
 
     app.dependency_overrides[deps.get_db] = lambda: FakeDB()
 

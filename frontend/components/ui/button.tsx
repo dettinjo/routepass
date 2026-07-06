@@ -19,19 +19,37 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
+        // Primary — mint bg, dark text (high contrast on any bg)
         primary: [
-          'bg-primary text-text-inverse',
+          'bg-primary text-text-inverse font-semibold',
           'hover:bg-primary-hover',
           'shadow-sm',
         ],
-        secondary: [
-          'bg-surface text-text-primary border border-border-strong',
-          'hover:bg-surface-raised',
+        // Accent — alias for primary (same visual, semantic distinction)
+        accent: [
+          'bg-accent text-text-inverse font-semibold',
+          'hover:bg-accent-hover',
           'shadow-sm',
+        ],
+        // Secondary — subtle bordered button on dark bg
+        secondary: [
+          'bg-surface-raised text-text-primary border border-border-strong',
+          'hover:bg-surface hover:border-border-strong',
+          'shadow-sm',
+        ],
+        // Secondary-dark — used for ghost-like CTAs on pure black sections
+        'secondary-dark': [
+          'bg-white/[0.06] text-text-primary border border-border-strong',
+          'hover:bg-white/[0.1]',
         ],
         ghost: [
           'bg-transparent text-text-secondary',
           'hover:bg-primary-light hover:text-primary',
+        ],
+        // Ghost for hero sections with explicit dark bg override
+        'ghost-dark': [
+          'bg-transparent text-text-secondary',
+          'hover:bg-white/[0.06] hover:text-text-primary',
         ],
         danger: [
           'bg-error text-text-inverse',

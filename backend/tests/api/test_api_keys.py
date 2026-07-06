@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from datetime import UTC
+from datetime import UTC, datetime
 
 import pytest
 from httpx import AsyncClient
 
+from app.db.models.subscription import ApiKey
 from app.db.models.user import User
+
+UTC = UTC
 
 
 @pytest.mark.asyncio
@@ -46,15 +49,17 @@ async def test_create_and_list_api_keys(async_client: AsyncClient):
             if "subscriptions" in stmt_str:
                 return FakeResult(scalar_val=fake_sub)
             if "api_keys" in stmt_str:
-                return FakeResult(items=mock_db_state)
+                # Only return ApiKey rows — audit log rows also land in mock_db_state
+                return FakeResult(items=[o for o in mock_db_state if isinstance(o, ApiKey)])
             return FakeResult()
 
         def add(self, obj):
-            from datetime import datetime
-
             if not getattr(obj, "created_at", None):
                 obj.created_at = datetime.now(UTC)
             mock_db_state.append(obj)
+
+        async def flush(self):
+            pass
 
         async def commit(self):
             pass
@@ -67,7 +72,7 @@ async def test_create_and_list_api_keys(async_client: AsyncClient):
     assert response.status_code == 200
     data = response.json()
     assert "raw_key" in data
-    assert data["raw_key"].startswith("kss_")
+    assert data["raw_key"].startswith("rp_")
     assert data["name"] == "Zapier Integration"
 
     # List keys
@@ -84,7 +89,7 @@ async def test_create_and_list_api_keys(async_client: AsyncClient):
 async def test_revoke_api_key(async_client: AsyncClient):
     """Test revoking an existing API key."""
     from app.api import deps
-    from app.db.models.subscription import ApiKey, Subscription
+    from app.db.models.subscription import Subscription
     from app.main import app
 
     fake_user = User(id="00000000-0000-0000-0000-000000000000", is_active=True)
@@ -93,7 +98,7 @@ async def test_revoke_api_key(async_client: AsyncClient):
         id="11111111-1111-1111-1111-111111111111",
         user_id=fake_user.id,
         key_hash="abc",
-        key_prefix="kss_test...",
+        key_prefix="rp_test...",
         name="Integration",
     )
 
@@ -112,6 +117,12 @@ async def test_revoke_api_key(async_client: AsyncClient):
             if "subscriptions" in stmt_str:
                 return FakeResult(scalar_val=fake_sub)
             return FakeResult(scalar_val=existing_key)
+
+        def add(self, obj):
+            pass
+
+        async def flush(self):
+            pass
 
         async def commit(self):
             pass

@@ -1,10 +1,10 @@
 'use client'
 
 import Link from 'next/link'
-import { RefreshCw, LogOut, Settings2, User } from 'lucide-react'
-import { StatusDot } from '@/components/ui'
+import { LogOut, Settings2, User } from 'lucide-react'
 import { useAuthStore } from '@/store/auth'
 import { useRouter } from 'next/navigation'
+import { RoutePassIcon } from '@/components/platform-icons'
 
 export function Topbar() {
   const user   = useAuthStore((s) => s.user)
@@ -24,29 +24,22 @@ export function Topbar() {
       {/* Logo */}
       <Link
         href="/dashboard"
-        className="flex items-center gap-2.5 text-heading-sm text-primary font-semibold hover:opacity-80 transition-opacity"
+        className="flex items-center gap-2.5 text-primary hover:opacity-80 transition-opacity"
         aria-label="RoutePass home"
       >
-        {/* Swap this <span> for the SVG icon once the asset is available */}
-        <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary">
-          <RefreshCw className="h-4 w-4 text-text-inverse" aria-hidden />
-        </span>
-        RoutePass
+        <RoutePassIcon size={28} />
+        <span className="text-[28px] font-semibold font-display tracking-tight leading-none">RoutePass</span>
       </Link>
 
       {/* Right side */}
       <div className="flex items-center gap-4">
-        {/* Sync status indicator */}
-        {user && (
-          <div className="hidden sm:flex items-center gap-1.5 text-caption text-text-secondary">
-            <StatusDot status="active" />
-            <span>Sync active</span>
-          </div>
-        )}
-
         {/* User menu */}
         {user ? (
-          <UserMenu email={user.email} onLogout={handleLogout} />
+          <UserMenu
+            displayName={user.name || user.email.split('@')[0]}
+            email={user.email}
+            onLogout={handleLogout}
+          />
         ) : (
           <Link href="/login" className="text-body-sm text-primary hover:underline">
             Sign in
@@ -57,7 +50,7 @@ export function Topbar() {
   )
 }
 
-function UserMenu({ email, onLogout }: { email: string; onLogout: () => void }) {
+function UserMenu({ displayName, email, onLogout }: { displayName: string; email: string; onLogout: () => void }) {
   // Minimal dropdown — replace with Radix DropdownMenu when building full interactivity
   return (
     <div className="relative group">
@@ -68,7 +61,7 @@ function UserMenu({ email, onLogout }: { email: string; onLogout: () => void }) 
         <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary-light">
           <User className="h-4 w-4 text-primary" aria-hidden />
         </span>
-        <span className="hidden md:block max-w-[140px] truncate">{email}</span>
+        <span className="hidden md:block max-w-[140px] truncate">{displayName}</span>
       </button>
 
       {/* Dropdown */}

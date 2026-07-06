@@ -1,4 +1,4 @@
-# komoot-strava-sync — OpenAI Codex Instructions
+# RoutePass — OpenAI Codex Instructions
 
 ## Session Start Protocol
 
@@ -66,10 +66,10 @@ Always run `make check` after any backend change before concluding a session.
 
 ## Non-Negotiable Constraints
 
-1. **No direct Strava calls** — all Strava HTTP traffic must go through `RateLimitGuard.call()`.  
+1. **No direct Strava calls** — all Strava HTTP traffic must go through `RateLimitGuard.call()`.
    Bypassing this breaks rate limits for *all* users sharing the app.
 
-2. **No plaintext credentials** — encrypt with `get_fernet().encrypt()` before any DB write.  
+2. **No plaintext credentials** — encrypt with `get_fernet().encrypt()` before any DB write.
    Decrypt only in-memory inside a job or service.
 
 3. **No blocking I/O** — all handlers and services are async. Use `httpx.AsyncClient`, never `requests`.

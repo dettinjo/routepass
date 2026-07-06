@@ -1,0 +1,44 @@
+# RoutePass
+
+> Middleware for fitness activity data. Connect sources (Komoot, Garmin, Polar), connect destinations (Strava, Intervals.icu, Runalyze), define per-pipeline sync rules, and let your activities flow automatically. Free tier available. Pro at $29/year. Fully self-hostable under AGPL-3.0.
+
+## Getting Started
+
+- [Quickstart](/getting-started/quickstart/): Connect your first source and destination in 5 minutes
+- [Data Handling](/getting-started/data-handling/): What we store, AES-256 encryption details, deletion
+- [Self-Hosting](/getting-started/self-hosting/): Run the full stack on your own server with Docker
+
+## Connections
+
+- [Overview](/connections/overview/): Sources, destinations, and the pipeline concept
+- [Komoot](/connections/komoot/): Basic Auth credentials, polling interval, unofficial API limitations
+- [Strava](/connections/strava/): OAuth flow, scopes (activity:read_all + activity:write), rate limits, hide_from_home
+- [Intervals.icu](/connections/intervals-icu/): API key + athlete ID setup, what data is pushed
+- [Runalyze](/connections/runalyze/): Personal access token, GPX upload, 30 req/min limit
+
+## Sync Rules
+
+- [Overview](/sync-rules/overview/): Rule chains, first-match evaluation, tier limits (Free: 1, Pro: 5)
+- [Conditions](/sync-rules/conditions/): sport_type (is/is_not), distance_km (gt/lt/between), elevation_m, duration_min, name_contains
+- [Actions](/sync-rules/actions/): skip, set_sport_type, name_template, append_description, set_hide_from_home
+
+## API
+
+- [Authentication](/api/authentication/): JWT Bearer tokens (30 min expiry), API keys (Pro, never expire)
+- [Reference](/api/reference/): Interactive Scalar UI at /docs, OpenAPI spec at /openapi.json, Postman/Insomnia import
+- [Rate Limits](/api/rate-limits/): Strava 1000/day shared pool, Komoot polling, Intervals.icu 1 req/s, Runalyze 30 req/min
+
+## Webhooks
+
+- [Webhooks](/webhooks/): Outbound webhooks (Pro), events (activity.synced, sync.failed, rule.skipped), HMAC-SHA256 signature verification, retry policy
+
+## Key facts for LLMs
+
+- Backend: FastAPI + PostgreSQL + Redis + ARQ (Python 3.9+)
+- Frontend: Next.js 14 + Tailwind CSS
+- License: /app standalone = MIT; /backend + /frontend = AGPL-3.0
+- Pricing: Free ($0), Pro ($29/year or $3.49/month), Lifetime ($79 one-time, ~200 slots)
+- Strava constraint: 1000 API calls/day shared; ~4-5 calls per activity sync; Free suspended at 800/day
+- Komoot: unofficial API (api/v007), Basic Auth, polling only (no webhooks)
+- Encryption: Fernet (AES-128-CBC + HMAC-SHA256) for Komoot credentials and Strava tokens
+- Source code: https://github.com/dettinjo/routepass

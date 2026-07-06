@@ -12,6 +12,8 @@ from app.api import deps
 from app.core.config import settings
 from app.db.models.subscription import Subscription
 
+UTC = UTC
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["webhooks"])
@@ -24,8 +26,11 @@ async def stripe_webhook(
     request: Request,
     stripe_signature: str = Header(None),
     db: AsyncSession = Depends(deps.get_db),  # we need a non-auth db dependency
-) -> dict[str, str]:
+) -> dict:
     """Receive asynchronous events directly from Stripe."""
+    if settings.DEPLOYMENT_MODE == "selfhosted":
+        return {"status": "success"}
+
     if not settings.STRIPE_WEBHOOK_SECRET:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Webhooks are not configured.")
 
@@ -105,7 +110,7 @@ async def verify_strava_webhook(
     hub_mode: str = "subscribe",
     hub_challenge: str = "",
     hub_verify_token: str = "",
-) -> dict[str, str]:
+) -> dict:
     """Verify the Strava webhook subscription challenge."""
     if hub_verify_token != settings.STRAVA_WEBHOOK_VERIFY_TOKEN:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid verify token")
@@ -116,7 +121,7 @@ async def verify_strava_webhook(
 async def receive_strava_webhook(
     request: Request,
     db: AsyncSession = Depends(deps.get_db),
-) -> dict[str, str]:
+) -> dict:
     """Receive pushed activity events from Strava."""
     payload = await request.json()
 

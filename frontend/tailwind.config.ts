@@ -1,11 +1,11 @@
 // RoutePass — Tailwind CSS configuration
-// All values map 1:1 to the tokens in DESIGN.md.
+// Dark-first design system. All values mirror globals.css custom properties.
 // Never add one-off colors inline — extend this config instead.
 
 import type { Config } from 'tailwindcss'
 
 const config: Config = {
-  darkMode: ['class'], // reserved — dark mode ships later
+  darkMode: ['class'], // .light class opt-in for light overrides
   content: [
     './pages/**/*.{ts,tsx}',
     './components/**/*.{ts,tsx}',
@@ -23,51 +23,51 @@ const config: Config = {
     extend: {
       // ── Brand Colors ────────────────────────────────────────────────────────
       colors: {
-        // Primary — forest green
+        // Primary — mint green (on dark backgrounds this is the CTA color)
         primary: {
-          DEFAULT: '#16533A',
-          hover:   '#124430',
-          light:   '#E8F5F0',
+          DEFAULT: '#3ECFAF',
+          hover:   '#2EB89A',
+          light:   'rgba(62,207,175,0.1)',
         },
-        // Accent — trail mint
+        // Accent — same as primary on dark
         accent: {
           DEFAULT: '#3ECFAF',
           hover:   '#2EB89A',
         },
-        // Backgrounds
-        bg:      '#F5F7F5',
+        // Backgrounds — dark defaults
+        bg:      '#0a0a0a',
         surface: {
-          DEFAULT: '#FFFFFF',
-          raised:  '#FAFAFA',
+          DEFAULT: '#111111',
+          raised:  '#171717',
         },
-        // Borders
+        // Borders — dark defaults
         border: {
-          DEFAULT: '#E2E8E4',
-          strong:  '#C8D4CE',
+          DEFAULT: '#242424',
+          strong:  '#303030',
         },
-        // Text
+        // Text — dark defaults
         text: {
-          primary:   '#111827',
-          secondary: '#6B7280',
-          disabled:  '#9CA3AF',
-          inverse:   '#FFFFFF',
+          primary:   '#ededed',
+          secondary: '#737373',
+          disabled:  '#525252',
+          inverse:   '#0a0a0a',
         },
-        // Semantic
+        // Semantic — adjusted for dark bg
         success: {
-          DEFAULT: '#059669',
-          light:   '#ECFDF5',
+          DEFAULT: '#34d399',
+          light:   'rgba(52,211,153,0.12)',
         },
         warning: {
-          DEFAULT: '#D97706',
-          light:   '#FFFBEB',
+          DEFAULT: '#fbbf24',
+          light:   'rgba(251,191,36,0.12)',
         },
         error: {
-          DEFAULT: '#DC2626',
-          light:   '#FEF2F2',
+          DEFAULT: '#f87171',
+          light:   'rgba(248,113,113,0.12)',
         },
         info: {
-          DEFAULT: '#2563EB',
-          light:   '#EFF6FF',
+          DEFAULT: '#60a5fa',
+          light:   'rgba(96,165,250,0.12)',
         },
       },
 
@@ -93,6 +93,7 @@ const config: Config = {
       fontFamily: {
         sans: ['var(--font-inter)', 'system-ui', 'sans-serif'],
         mono: ['var(--font-jetbrains-mono)', 'monospace'],
+        display: ['var(--font-outfit)', 'var(--font-inter)', 'system-ui', 'sans-serif'],
       },
       fontSize: {
         // DESIGN.md type scale

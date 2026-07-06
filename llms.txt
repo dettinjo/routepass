@@ -1,0 +1,27 @@
+# RoutePass
+
+> Middleware for fitness activity data. Connect sources (Komoot, Garmin, Polar), connect destinations (Strava, Intervals.icu, Runalyze), define per-pipeline sync rules, and let your activities flow automatically. Free tier available. Pro at $29/year. Fully self-hostable under AGPL-3.0.
+
+## Documentation
+
+- [Quickstart](https://docs.routepass.online/getting-started/quickstart/): Connect your first source and destination in 5 minutes
+- [Data Handling](https://docs.routepass.online/getting-started/data-handling/): What we store, encryption, deletion
+- [Self-Hosting](https://docs.routepass.online/getting-started/self-hosting/): Docker setup, env vars, migrations
+- [Connections Overview](https://docs.routepass.online/connections/overview/): Sources, destinations, pipelines
+- [Komoot](https://docs.routepass.online/connections/komoot/): Credentials, polling, API limitations
+- [Strava](https://docs.routepass.online/connections/strava/): OAuth, scopes, rate limits
+- [Intervals.icu](https://docs.routepass.online/connections/intervals-icu/): API key setup
+- [Runalyze](https://docs.routepass.online/connections/runalyze/): Token setup, GPX upload
+- [Sync Rules Overview](https://docs.routepass.online/sync-rules/overview/): Rule chains, evaluation order
+- [Conditions](https://docs.routepass.online/sync-rules/conditions/): sport_type, distance_km, elevation_m, duration_min, name_contains
+- [Actions](https://docs.routepass.online/sync-rules/actions/): skip, set_sport_type, name_template, append_description, set_hide_from_home
+- [API Authentication](https://docs.routepass.online/api/authentication/): JWT + API keys
+- [API Reference](https://docs.routepass.online/api/reference/): Interactive Scalar UI + Postman import
+- [Rate Limits](https://docs.routepass.online/api/rate-limits/): Strava shared pool, platform limits
+- [Webhooks](https://docs.routepass.online/webhooks/): Outbound events, HMAC verification, retry policy
+
+## API
+
+- OpenAPI spec: https://api.routepass.online/openapi.json
+- Interactive docs: https://api.routepass.online/docs
+- Source: https://github.com/dettinjo/routepass

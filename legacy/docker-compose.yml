@@ -1,7 +1,7 @@
 services:
-  komoot-strava-sync:
+  -routepass:
     build: .
-    image: komoot-strava-sync:latest
+    image: routepass:latest
     restart: unless-stopped
     env_file: .env
     volumes:

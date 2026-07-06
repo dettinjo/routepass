@@ -1,0 +1,57 @@
+---
+title: RoutePass Documentation
+description: Middleware for fitness activity data — connect sources, destinations, and sync rules.
+template: splash
+hero:
+  tagline: Connect any fitness platform. Route activities anywhere.
+  actions:
+    - text: Quickstart
+      link: /getting-started/quickstart/
+      icon: right-arrow
+      variant: primary
+    - text: API Reference
+      link: /api/reference/
+      icon: external
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components'
+
+RoutePass is **middleware for your fitness activity data**. Instead of one fixed pipeline, you connect any combination of sources and destinations and define your own sync rules.
+
+## Platform support
+
+| Platform | Type | Status |
+|----------|------|--------|
+| Komoot | Source | ✅ Live |
+| Strava | Source + Destination | ✅ Live |
+| Garmin Connect | Source | 🔲 Roadmap |
+| Polar Flow | Source | 🔲 Roadmap |
+| Wahoo | Source | 🔲 Roadmap |
+| Suunto | Source | 🔲 Roadmap |
+| Intervals.icu | Destination | ✅ Live |
+| Runalyze | Destination | ✅ Live |
+| TrainingPeaks | Destination | 🔲 Roadmap |
+| Webhook / your own system | Destination | ✅ Live (Pro) |
+
+## Core concepts
+
+<CardGrid>
+  <Card title="Sources & Destinations" icon="puzzle">
+    A **source** pushes activity data into RoutePass. A **destination** receives it. One pipeline connects one source to one destination.
+  </Card>
+  <Card title="Sync Rules" icon="setting">
+    Each pipeline has its own rule chain — filter by sport type, distance, elevation, or name; skip, rename, or transform on the fly.
+  </Card>
+  <Card title="REST API" icon="open-book">
+    Pro users get API keys to read activity history, trigger syncs, and manage pipelines programmatically.
+  </Card>
+  <Card title="Outbound Webhooks" icon="forward-slash">
+    Receive a signed JSON payload at your own URL whenever an activity syncs. Build your own downstream automations.
+  </Card>
+</CardGrid>
+
+## Deployment modes
+
+**Cloud (recommended)** — hosted at [routepass.online](https://routepass.online). Free tier available, Pro at $29/year.
+
+**Self-hosted** — run the full stack with Docker using your own API credentials. All features, no cost. See [Self-Hosting](/getting-started/self-hosting/).

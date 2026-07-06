@@ -1,6 +1,6 @@
 /* RoutePass — Global Styles
- * Source of truth: DESIGN.md
- * All CSS custom properties must match the tokens defined there.
+ * Dark-first design system inspired by Vercel / n8n.
+ * All CSS custom properties are the source of truth — match tailwind.config.ts.
  * Never add one-off color/size values here — add a token if you need a new value.
  */
 
@@ -8,42 +8,42 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Design Tokens ───────────────────────────────────────────────────────── */
+/* ── Design Tokens (dark default) ───────────────────────────────────────────── */
 @layer base {
   :root {
-    /* Primary */
-    --color-primary:       #16533A;
-    --color-primary-hover: #124430;
-    --color-primary-light: #E8F5F0;
+    /* Primary — mint green is primary on dark */
+    --color-primary:       #3ECFAF;
+    --color-primary-hover: #2EB89A;
+    --color-primary-light: rgba(62,207,175,0.1);
 
-    /* Accent */
+    /* Accent (same as primary on dark) */
     --color-accent:       #3ECFAF;
     --color-accent-hover: #2EB89A;
 
     /* Backgrounds */
-    --color-bg:             #F5F7F5;
-    --color-surface:        #FFFFFF;
-    --color-surface-raised: #FAFAFA;
+    --color-bg:             #0a0a0a;
+    --color-surface:        #111111;
+    --color-surface-raised: #171717;
 
     /* Borders */
-    --color-border:        #E2E8E4;
-    --color-border-strong: #C8D4CE;
+    --color-border:        #242424;
+    --color-border-strong: #303030;
 
     /* Text */
-    --color-text-primary:   #111827;
-    --color-text-secondary: #6B7280;
-    --color-text-disabled:  #9CA3AF;
-    --color-text-inverse:   #FFFFFF;
+    --color-text-primary:   #ededed;
+    --color-text-secondary: #737373;
+    --color-text-disabled:  #525252;
+    --color-text-inverse:   #0a0a0a;
 
     /* Semantic */
-    --color-success:       #059669;
-    --color-success-light: #ECFDF5;
-    --color-warning:       #D97706;
-    --color-warning-light: #FFFBEB;
-    --color-error:         #DC2626;
-    --color-error-light:   #FEF2F2;
-    --color-info:          #2563EB;
-    --color-info-light:    #EFF6FF;
+    --color-success:       #34d399;
+    --color-success-light: rgba(52,211,153,0.12);
+    --color-warning:       #fbbf24;
+    --color-warning-light: rgba(251,191,36,0.12);
+    --color-error:         #f87171;
+    --color-error-light:   rgba(248,113,113,0.12);
+    --color-info:          #60a5fa;
+    --color-info-light:    rgba(96,165,250,0.12);
 
     /* Radius */
     --radius-sm:   4px;
@@ -52,11 +52,11 @@
     --radius-xl:   16px;
     --radius-full: 9999px;
 
-    /* Shadows */
-    --shadow-sm:    0 1px 2px rgba(0,0,0,0.06);
-    --shadow-md:    0 4px 12px rgba(0,0,0,0.08);
-    --shadow-lg:    0 8px 24px rgba(0,0,0,0.10);
-    --shadow-inner: inset 0 2px 4px rgba(0,0,0,0.04);
+    /* Shadows — stronger on dark */
+    --shadow-sm:    0 1px 3px rgba(0,0,0,0.3);
+    --shadow-md:    0 4px 16px rgba(0,0,0,0.4);
+    --shadow-lg:    0 8px 32px rgba(0,0,0,0.5);
+    --shadow-inner: inset 0 2px 4px rgba(0,0,0,0.3);
 
     /* Layout */
     --topbar-height:  60px;
@@ -65,15 +65,20 @@
     --content-max-width: 1024px;
   }
 
-  /* Dark mode tokens — values reserved, not active yet */
-  .dark {
-    --color-bg:             #0F1511;
-    --color-surface:        #1A2420;
-    --color-surface-raised: #1F2D28;
-    --color-text-primary:   #F0F4F2;
-    --color-text-secondary: #9DB5AC;
-    --color-border:         #2A3D35;
-    --color-border-strong:  #3A5046;
+  /* Light mode — available via .light class if ever needed */
+  .light {
+    --color-primary:       #16533A;
+    --color-primary-hover: #124430;
+    --color-primary-light: #E8F5F0;
+    --color-bg:             #F5F7F5;
+    --color-surface:        #FFFFFF;
+    --color-surface-raised: #FAFAFA;
+    --color-border:        #E2E8E4;
+    --color-border-strong: #C8D4CE;
+    --color-text-primary:   #111827;
+    --color-text-secondary: #6B7280;
+    --color-text-disabled:  #9CA3AF;
+    --color-text-inverse:   #FFFFFF;
   }
 }
 
@@ -89,6 +94,7 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
+    color-scheme: dark;
   }
 
   body {
@@ -96,14 +102,13 @@
     min-height: 100vh;
   }
 
-  /* Focus ring — always visible, never outline: none without replacement */
+  /* Focus ring */
   :focus-visible {
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;
     border-radius: var(--radius-sm);
   }
 
-  /* Remove default focus ring when using :focus-visible */
   :focus:not(:focus-visible) {
     outline: none;
   }
@@ -116,12 +121,10 @@
   p  { @apply text-body leading-relaxed; }
   small { @apply text-caption; }
 
-  /* Monospace elements — API keys, IDs, code */
   code, kbd, pre, .mono {
     @apply font-mono text-mono;
   }
 
-  /* Smooth scrolling inside app — not on landing (can feel slow) */
   .app-shell {
     scroll-behavior: smooth;
   }
@@ -129,7 +132,7 @@
 
 /* ── Utility Layer ───────────────────────────────────────────────────────── */
 @layer utilities {
-  /* Skeleton shimmer gradient */
+  /* Skeleton shimmer */
   .shimmer {
     background: linear-gradient(
       90deg,
@@ -141,7 +144,7 @@
     @apply animate-shimmer;
   }
 
-  /* Status dot — animated for syncing state */
+  /* Status dots */
   .status-dot {
     @apply inline-block w-2 h-2 rounded-full;
   }
@@ -150,7 +153,7 @@
   .status-dot--paused   { @apply bg-warning; }
   .status-dot--inactive { @apply bg-border-strong; }
 
-  /* Truncate long text gracefully */
+  /* Truncate long text */
   .truncate-2 {
     display: -webkit-box;
     -webkit-line-clamp: 2;
@@ -163,5 +166,11 @@
     max-width: var(--content-max-width);
     margin-inline: auto;
     padding: var(--space-8, 32px);
+  }
+
+  /* Dot-grid pattern for hero sections */
+  .dot-grid {
+    background-image: radial-gradient(circle, rgba(255,255,255,0.06) 1px, transparent 1px);
+    background-size: 28px 28px;
   }
 }

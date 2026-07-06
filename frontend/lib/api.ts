@@ -15,9 +15,15 @@ const BASE = ''  // rewrites in next.config.ts proxy /api/* → FastAPI
 // ── Auth token accessor (lazy import to avoid circular deps) ──────────────────
 
 let _getToken: (() => string | null) | null = null
+let _onUnauthorized: (() => void) | null = null
 
 export function registerTokenAccessor(fn: () => string | null) {
   _getToken = fn
+}
+
+/** Called whenever the API returns 401. Use to redirect to /login. */
+export function registerUnauthorizedHandler(fn: () => void) {
+  _onUnauthorized = fn
 }
 
 function authHeader(): Record<string, string> {
@@ -47,6 +53,9 @@ async function request<T>(
   })
 
   if (!res.ok) {
+    if (res.status === 401) {
+      _onUnauthorized?.()
+    }
     let detail = `HTTP ${res.status}`
     try {
       const err = (await res.json()) as ApiError
@@ -90,6 +99,9 @@ export const apiPost = <T>(path: string, body?: unknown) =>
 
 export const apiPut = <T>(path: string, body?: unknown) =>
   request<T>('PUT', path, body)
+
+export const apiPatch = <T>(path: string, body?: unknown) =>
+  request<T>('PATCH', path, body)
 
 export const apiDelete = <T = void>(path: string) =>
   request<T>('DELETE', path)

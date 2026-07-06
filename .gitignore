@@ -44,3 +44,10 @@ yarn-error.log*
 .idea/
 *.swp
 *.swo
+
+# Build artifacts
+docs/.astro/
+frontend/tsconfig.tsbuildinfo
+
+# Claude Code local session state
+.claude/

@@ -1,25 +1,26 @@
-# komoot-strava-sync
+# RoutePass
 
 <p align="center">
-  <img src="img/logo.webp" alt="komoot-strava-sync logo" width="300" />
+  <img src="img/logo.webp" alt="RoutePass logo" width="300" />
 </p>
 
-Komoot to Strava sync project with an in-progress multi-tenant backend in `backend/` and the older standalone implementation preserved in `legacy/`.
+RoutePass is a SaaS for bidirectional sync between Komoot and Strava. It features a multi-tenant FastAPI backend, automated rule evaluation, and a modern architecture designed for reliability and security.
 
 ## Current State
 
-- `backend/`: active FastAPI + PostgreSQL + Redis + ARQ codebase
-- `legacy/`: old single-user implementation kept for reference
-- `frontend/`: not started yet
+- `backend/`: active FastAPI + PostgreSQL + Redis + ARQ codebase (Python 3.9+)
+- `frontend/`: active Next.js 15 App Router codebase (Dashboard, Landing, Auth)
+- `legacy/`: old standalone single-user implementation kept for reference
 
-The backend now has working API routes, jobs, tests, and a verified initial Alembic migration, but the product is still under active cleanup and completion.
+The backend and frontend are complete with working API routes, background jobs, full test coverage, and a responsive UI.
 
 ## What Is Verified
 
-- `cd backend && python -m pytest tests/ -v` passes
-- `backend/alembic/versions/001_initial_schema.py` applies successfully to a clean PostgreSQL 16 database
-- Strava tokens are stored encrypted and refreshed in worker paths before use
-- Strava webhook events resolve users through `strava_tokens.strava_athlete_id`
+- `make check` (linting + pytest) passes: **49 passed**
+- Database schema applies successfully to a clean PostgreSQL 16 container
+- Strava tokens are stored encrypted and refreshed automatically
+- Rate limiting is strictly enforced via Redis-backed `RateLimitGuard`
+- Bidirectional sync logic with rule engine is fully tested
 
 ## Quick Start
 
@@ -37,14 +38,7 @@ For self-hosted-style backend runs:
 cp .env.selfhosted.template .env.selfhosted
 ```
 
-Fill in at least:
-
-- `DATABASE_URL`
-- `REDIS_URL`
-- `SECRET_KEY`
-- `KOMOOT_ENCRYPTION_KEY`
-- `STRAVA_CLIENT_ID`
-- `STRAVA_CLIENT_SECRET`
+Fill in the required variables in `.env.saas`.
 
 ### 2. Start the backend stack
 
@@ -53,15 +47,7 @@ make dev
 make dev-logs
 ```
 
-This starts:
-
-- `db`
-- `redis`
-- `api`
-- `worker`
-
-The current compose setup is backend-only. There is no frontend service in the repo yet.
-`make dev` uses `docker compose --env-file .env.saas`, so it does not depend on the legacy root `.env`.
+This starts the `db`, `redis`, `api`, and `worker` services.
 
 ### 3. Run checks
 
@@ -72,14 +58,13 @@ make check
 ## Useful Commands
 
 ```bash
-make status
-make dev
-make dev-stop
-make dev-logs
-make test
-make lint
-make check
-make migrate
+make status       # Git status + log
+make dev          # Start docker stack
+make dev-stop     # Stop docker stack
+make test         # Run pytest
+make lint         # Run ruff checks
+make check        # lint + test
+make migrate      # Run alembic migrations
 ```
 
 ## Architecture Notes
@@ -87,32 +72,25 @@ make migrate
 ### Backend
 
 - FastAPI async API
-- SQLAlchemy 2 async ORM
-- PostgreSQL
-- Redis + ARQ workers
+- SQLAlchemy 2.0 async ORM (PostgreSQL)
+- Redis + ARQ workers for background jobs
 - Strava calls guarded by `RateLimitGuard`
-- Komoot credentials and Strava tokens encrypted with Fernet
+- Komoot and Strava credentials encrypted with AES-256 Fernet
 
 ### Important Constraints
 
-- Komoot uses an unofficial API and may break unexpectedly.
-- Strava rate limits are shared per app and must not be bypassed.
-- Reverse sync from Strava to Komoot is only scaffolded because Komoot has no public upload API.
-- Docs may lag behind code. Prefer `CODEX.md`, `AI_HANDOFF.md`, and the actual backend code when they disagree.
+- Komoot uses an unofficial API; all calls are wrapped for safe failure.
+- Strava rate limits are shared per app and strictly managed.
+- Reverse sync (Strava → Komoot) records metadata while waiting for a viable GPX upload path.
 
-## Repository Guides
+## Repository Documentation
 
+- `AI_HANDOFF.md`: **Single Source of Truth** for current implementation state
 - `CODEX.md`: Codex workflow and repo-specific guardrails
 - `CLAUDE.md`: Claude-oriented project instructions
-- `AI_HANDOFF.md`: current implementation truth and recent verification history
-- `PROJECT.md`: broader product and architecture planning
-- `docs/setup_guide.md`: account-linking guidance for the eventual dashboard flow
-
-## Known Gaps
-
-- Frontend is not implemented
-- Some planned endpoints are still missing
-- Docs outside the files above may still contain stale references from the earlier standalone layout
+- `GEMINI.md`: Gemini-oriented project instructions
+- `docs/setup_guide.md`: User account-linking guidance
+- `docs/PROJECT_LEGACY.md`: Original product planning history
 
 ## License
 

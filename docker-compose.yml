@@ -1,6 +1,10 @@
+name: routepass
+
 services:
   api:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
     ports: ["8000:8000"]
     env_file: .env.saas
@@ -15,7 +19,9 @@ services:
       start_period: 40s
 
   worker:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     command: python -m arq app.jobs.worker.WorkerSettings
     restart: unless-stopped
     env_file: .env.saas
@@ -23,16 +29,27 @@ services:
       db: {condition: service_healthy}
       redis: {condition: service_healthy}
 
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Baked into the Next.js standalone bundle at build time so the
+        # rewrite rules forward /api/* to the FastAPI container.
+        INTERNAL_API_URL: http://api:8000
+    restart: unless-stopped
+    ports: ["3000:3000"]
+    env_file: .env.saas
+    depends_on:
+      - api
+
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    env_file: .env.saas
     volumes: [postgres_data:/var/lib/postgresql/data]
-    environment:
-      POSTGRES_DB: komoot_strava_sync
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    # No environment override here - use vars from env_file directly
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U app -d komoot_strava_sync"]
+      test: ["CMD-SHELL", "pg_isready -U app -d routepass"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -40,6 +57,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    env_file: .env.saas
     volumes: [redis_data:/data]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]

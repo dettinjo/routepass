@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -12,6 +13,55 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 STRAVA_BASE = "https://www.strava.com"
+
+
+def streams_to_gpx(
+    activity_name: str,
+    sport_type: str,
+    started_at: datetime | None,
+    streams: dict,
+) -> bytes:
+    """Convert Strava stream data (latlng, altitude, time) to GPX bytes.
+
+    Returns an empty bytes object when the streams dict contains no latlng data.
+    """
+    latlng: list = streams.get("latlng", {}).get("data", [])
+    if not latlng:
+        return b""
+
+    altitudes: list = streams.get("altitude", {}).get("data", [])
+    times: list = streams.get("time", {}).get("data", [])
+
+    base_time = started_at or datetime(2000, 1, 1, tzinfo=UTC)
+
+    lines: list[str] = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<gpx version="1.1" creator="RoutePass"',
+        '     xmlns="http://www.topografix.com/GPX/1/1">',
+        "  <metadata>",
+        f"    <name>{activity_name}</name>",
+        f"    <time>{base_time.strftime('%Y-%m-%dT%H:%M:%SZ')}</time>",
+        "  </metadata>",
+        "  <trk>",
+        f"    <name>{activity_name}</name>",
+        f"    <type>{sport_type or 'unknown'}</type>",
+        "    <trkseg>",
+    ]
+
+    for i, (lat, lon) in enumerate(latlng):
+        ele = altitudes[i] if i < len(altitudes) else 0
+        offset = times[i] if i < len(times) else 0
+        t = base_time + timedelta(seconds=int(offset))
+        ts = t.strftime("%Y-%m-%dT%H:%M:%SZ")
+        lines.append(
+            f'      <trkpt lat="{lat:.6f}" lon="{lon:.6f}">'
+            f"<ele>{ele:.1f}</ele><time>{ts}</time></trkpt>"
+        )
+
+    lines += ["    </trkseg>", "  </trk>", "</gpx>"]
+    return "\n".join(lines).encode("utf-8")
+
+
 UPLOAD_POLL_INTERVAL = 3.0  # seconds between status polls
 UPLOAD_MAX_ATTEMPTS = 30  # max polls before giving up (~90 s)
 
@@ -114,6 +164,13 @@ class StravaClient:
             resp.raise_for_status()
             logger.debug("Updated activity %s (hide_from_home=%s)", activity_id, hide_from_home)
 
+    async def delete_activity(self, activity_id: str) -> None:
+        """Delete an activity from Strava. Requires activity:write scope."""
+        async with self._client() as client:
+            resp = await client.delete(f"{STRAVA_BASE}/api/v3/activities/{activity_id}")
+            resp.raise_for_status()
+            logger.debug("Deleted Strava activity %s", activity_id)
+
     async def get_activity(self, activity_id: str) -> dict[str, Any]:
         """Fetch a single activity by ID."""
         async with self._client() as client:
@@ -130,6 +187,15 @@ class StravaClient:
         if after:
             params["after"] = after
 
+        async with self._client() as client:
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            return resp.json()
+
+    async def get_activity_streams(self, activity_id: str) -> dict[str, Any]:
+        """Fetch latlng, altitude and time streams for an activity (key_by_type=true)."""
+        url = f"{STRAVA_BASE}/api/v3/activities/{activity_id}/streams"
+        params = {"keys": "latlng,altitude,time", "key_by_type": "true"}
         async with self._client() as client:
             resp = await client.get(url, params=params)
             resp.raise_for_status()

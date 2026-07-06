@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 from uuid import UUID
 
@@ -15,6 +16,9 @@ from app.db.models.user import User
 
 _RULE_LIMIT: dict[str, int] = {"free": 1, "pro": 5, "lifetime": 5, "business": 5}
 
+# Valid direction pattern: "both" or "<platform>_to_<platform>" (e.g. strava_to_intervals_icu)
+_DIRECTION_RE = re.compile(r"^[a-z][a-z_]*_to_[a-z][a-z_]*$")
+
 router = APIRouter(tags=["rules"])
 
 
@@ -25,6 +29,14 @@ class RuleCreate(BaseModel):
     actions: dict
     rule_order: int = 0
     is_active: bool = True
+
+
+def _validate_direction(direction: str) -> None:
+    if direction != "both" and not _DIRECTION_RE.match(direction):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Invalid direction — must be 'both' or '<platform>_to_<platform>'.",
+        )
 
 
 @router.get("")
@@ -67,8 +79,7 @@ async def create_rule(
     db: AsyncSession = Depends(deps.get_db),
 ) -> dict[str, Any]:
     """Create a new sync filtering rule."""
-    if payload.direction not in ("komoot_to_strava", "strava_to_komoot", "both"):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid direction.")
+    _validate_direction(payload.direction)
 
     tier = await _get_tier(user, db)
     limit = _RULE_LIMIT.get(tier, 1)
@@ -106,8 +117,7 @@ async def update_rule(
     db: AsyncSession = Depends(deps.get_db),
 ) -> dict[str, Any]:
     """Update an existing sync rule."""
-    if payload.direction not in ("komoot_to_strava", "strava_to_komoot", "both"):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid direction.")
+    _validate_direction(payload.direction)
 
     result = await db.execute(
         select(SyncRule).where(SyncRule.id == rule_id, SyncRule.user_id == user.id)

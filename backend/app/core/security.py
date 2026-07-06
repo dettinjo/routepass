@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import bcrypt
 from cryptography.fernet import Fernet, InvalidToken
@@ -11,10 +12,11 @@ from jose import JWTError, jwt
 
 from app.core.config import settings
 
+UTC = timezone.utc
 ALGORITHM = "HS256"
 
 
-def create_access_token(subject: str, expires_delta: timedelta | None = None) -> str:
+def create_access_token(subject: str, expires_delta: Optional[timedelta] = None) -> str:
     """Create a signed JWT access token for the given subject (user_id)."""
     if expires_delta is None:
         expires_delta = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -35,7 +37,7 @@ def verify_access_token(token: str) -> str:
     )
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
-        subject: str | None = payload.get("sub")
+        subject: Optional[str] = payload.get("sub")
         if subject is None:
             raise credentials_exception
         return subject
@@ -68,11 +70,8 @@ def decrypt(ciphertext: bytes) -> str:
     return get_fernet().decrypt(ciphertext).decode()
 
 
-def decrypt_maybe_plaintext(value: bytes | str) -> str:
+def decrypt_maybe_plaintext(value: bytes) -> str:
     """Return a plaintext token from either encrypted bytes or legacy raw bytes."""
-    if isinstance(value, str):
-        return value
-
     try:
         return decrypt(value)
     except InvalidToken:
@@ -84,7 +83,7 @@ def hash_api_key(raw_key: str) -> str:
     return hashlib.sha256(raw_key.encode()).hexdigest()
 
 
-def generate_api_key() -> tuple[str, str]:
+def generate_api_key() -> tuple:
     """Generate a new API key.
 
     Returns:
@@ -92,5 +91,5 @@ def generate_api_key() -> tuple[str, str]:
         return to the user exactly once, and key_hash is the SHA-256 hex digest
         suitable for storage in the database.
     """
-    raw_key = "kss_" + secrets.token_urlsafe(32)
+    raw_key = "rp_" + secrets.token_urlsafe(32)
     return raw_key, hash_api_key(raw_key)
