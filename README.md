@@ -3,7 +3,7 @@
 <!-- portfolio:date=2026-04-15 -->
 
 <p align="center">
-  <img src="img/logo.webp" alt="RoutePass logo" width="240" />
+  <img src="img/logo.svg" alt="RoutePass logo" width="160" />
 </p>
 
 ## Overview
@@ -11,6 +11,12 @@
 RoutePass is a sync hub for fitness platforms — connect Strava, Komoot, Garmin, Intervals.icu, and more, then define pipelines that route every new activity from any source to any destination automatically. Every platform is a peer: the same activity can fan out to several destinations, or several sources can funnel into one, with per-pipeline rules (sport type, distance, elevation, name) deciding what gets transformed, renamed, or skipped along the way.
 
 It grew out of a much narrower tool — a single-purpose Komoot→Strava sync script — into a multi-tenant FastAPI backend with a Next.js dashboard, async background workers, and a rule engine that treats "source" and "destination" as interchangeable roles rather than fixed directions.
+
+<p align="center">
+  <img src="docs/screenshots/landing.png" width="32%" />
+  <img src="docs/screenshots/integrations.png" width="32%" />
+  <img src="docs/screenshots/login.png" width="32%" />
+</p>
 
 ## Features
 
