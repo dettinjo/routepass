@@ -45,6 +45,8 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         <Link href="/privacy" className="hover:text-text-primary transition-colors">Privacy</Link>
         {' · '}
         <Link href="/terms" className="hover:text-text-primary transition-colors">Terms</Link>
+        {' · '}
+        <Link href="/imprint" className="hover:text-text-primary transition-colors">Imprint</Link>
       </footer>
     </div>
   )

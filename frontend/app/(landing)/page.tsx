@@ -847,6 +847,8 @@ export default function LandingPage() {
         {' · '}
         <Link href="/terms" className="hover:text-white transition-colors">Terms</Link>
         {' · '}
+        <Link href="/imprint" className="hover:text-white transition-colors">Imprint</Link>
+        {' · '}
         <a href="https://github.com/dettinjo/routepass" className="hover:text-white transition-colors" target="_blank" rel="noopener noreferrer">GitHub</a>
         {' · '}
         <a href="/docs" className="hover:text-white transition-colors">Docs</a>
