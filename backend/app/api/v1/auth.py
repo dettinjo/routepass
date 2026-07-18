@@ -38,12 +38,6 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
-class KomootCredentials(BaseModel):
-    email: str
-    password: str
-    user_id: str
-
-
 class StravaCallback(BaseModel):
     code: str
 
@@ -293,53 +287,6 @@ async def strava_oauth_callback(
     await write_audit(db, user.id, "strava_connected", request, {"athlete_id": athlete_id})
     await db.commit()
     return {"status": "success", "message": "Strava account connected"}
-
-
-@router.post("/komoot")
-async def setup_komoot_connection(
-    payload: KomootCredentials,
-    request: Request,
-    user: User = Depends(deps.get_current_user),
-    db: AsyncSession = Depends(deps.get_db),
-) -> dict:
-    """Save encrypted Komoot credentials to the Connection table."""
-    import json
-
-    from app.core.security import encrypt
-    from app.db.models.connection import Connection as ConnectionModel
-
-    credentials_enc = encrypt(
-        json.dumps(
-            {"email": payload.email, "password": payload.password, "user_id": payload.user_id}
-        )
-    )
-
-    existing = (
-        await db.execute(
-            select(ConnectionModel).where(
-                ConnectionModel.user_id == user.id,
-                ConnectionModel.platform == "komoot",
-            )
-        )
-    ).scalar_one_or_none()
-
-    if existing:
-        existing.credentials_enc = credentials_enc
-        existing.status = "active"
-    else:
-        db.add(
-            ConnectionModel(
-                user_id=user.id,
-                platform="komoot",
-                display_name=payload.user_id or "Komoot",
-                status="active",
-                credentials_enc=credentials_enc,
-            )
-        )
-
-    await write_audit(db, user.id, "komoot_connected", request)
-    await db.commit()
-    return {"status": "success", "message": "Komoot connected successfully"}
 
 
 @router.delete("/strava/disconnect")

@@ -149,11 +149,14 @@ async def poll_user_sources(ctx: dict, user_id: str) -> None:
                             conn_state.last_synced_at = datetime.now(UTC)
                             conn_state.last_error = None
                             conn_state.last_error_at = None
+                            conn.status = "active"
+                            conn.last_synced_at = conn_state.last_synced_at
                             komoot_ingested = True
                             await db.commit()
                         except Exception as exc:
                             conn_state.last_error = str(exc)
                             conn_state.last_error_at = datetime.now(UTC)
+                            conn.status = "error"
                             await db.commit()
                             logger.error(
                                 "poll_user_sources: Komoot ingest failed for conn %s: %s",
@@ -173,10 +176,13 @@ async def poll_user_sources(ctx: dict, user_id: str) -> None:
                             conn_state.last_synced_at = datetime.now(UTC)
                             conn_state.last_error = None
                             conn_state.last_error_at = None
+                            conn.status = "active"
+                            conn.last_synced_at = conn_state.last_synced_at
                             await db.commit()
                         except Exception as exc:
                             conn_state.last_error = str(exc)
                             conn_state.last_error_at = datetime.now(UTC)
+                            conn.status = "error"
                             await db.commit()
                             logger.error(
                                 "poll_user_sources: Garmin ingest failed for conn %s: %s",

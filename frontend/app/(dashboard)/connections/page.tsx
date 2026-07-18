@@ -183,7 +183,13 @@ function PlatformCard({
   connection,
 }: {
   platform: PlatformDef
-  connection?: { id: string; display_name: string; status: string; last_synced_at: string | null }
+  connection?: {
+    id: string
+    display_name: string
+    status: string
+    last_synced_at: string | null
+    last_error: string | null
+  }
 }) {
   const [expanded, setExpanded] = useState(false)
   const { mutate: disconnect, isPending: disconnecting } = useDeleteConnection()
@@ -225,6 +231,12 @@ function PlatformCard({
               <p className="text-caption text-text-disabled flex items-center gap-1 mt-0.5">
                 <Clock className="w-3 h-3" />
                 Last synced {formatRelative(new Date(connection.last_synced_at))}
+              </p>
+            )}
+            {isConnected && connection.status === 'error' && connection.last_error && (
+              <p className="text-caption text-error flex items-start gap-1 mt-1">
+                <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                <span className="break-words">{connection.last_error}</span>
               </p>
             )}
           </div>
