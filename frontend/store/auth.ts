@@ -30,6 +30,22 @@ interface AuthState {
   setInitialized: () => void
 }
 
+// Keep the browser session alive for 30 days. AuthInitializer re-writes the
+// cookie (and rolls the JWT via /auth/refresh) on every visit, so an active
+// user's window slides forward and never expires — Instagram-style persistence.
+const SESSION_MAX_AGE = 60 * 60 * 24 * 30 // 30 days, in seconds
+
+function writeTokenCookie(token: string): void {
+  const secure = typeof window !== 'undefined' && window.location.protocol === 'https:'
+  document.cookie =
+    `rp_token=${token}; path=/; SameSite=Lax; max-age=${SESSION_MAX_AGE}` +
+    (secure ? '; Secure' : '')
+}
+
+function clearTokenCookie(): void {
+  document.cookie = 'rp_token=; path=/; SameSite=Lax; max-age=0'
+}
+
 export const useAuthStore = create<AuthState>((set) => ({
   token: null,
   user: null,
@@ -37,12 +53,12 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   login(token, user) {
     set({ token, user, initialized: true })
-    document.cookie = `rp_token=${token}; path=/; SameSite=Lax; max-age=3600`
+    writeTokenCookie(token)
   },
 
   logout() {
     set({ token: null, user: null, initialized: true })
-    document.cookie = 'rp_token=; path=/; SameSite=Lax; max-age=0'
+    clearTokenCookie()
   },
 
   setUser(user) {

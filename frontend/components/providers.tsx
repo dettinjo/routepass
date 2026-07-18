@@ -30,8 +30,22 @@ function AuthInitializer() {
       headers: { Authorization: `Bearer ${savedToken}` },
     })
       .then((r) => (r.ok ? (r.json() as Promise<UserMe>) : Promise.reject()))
-      .then((me) => {
-        login(savedToken, me)   // login() sets initialized=true internally
+      .then(async (me) => {
+        // Roll the JWT forward so the 30-day window slides on every visit. If
+        // refresh fails for any reason, fall back to the still-valid saved token.
+        let freshToken = savedToken
+        try {
+          const refreshed = await fetch('/api/v1/auth/refresh', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${savedToken}` },
+          })
+          if (refreshed.ok) {
+            freshToken = ((await refreshed.json()) as { access_token: string }).access_token
+          }
+        } catch {
+          /* keep savedToken */
+        }
+        login(freshToken, me)   // login() re-writes the cookie + sets initialized=true
       })
       .catch(() => {
         // Token expired or invalid — clear the stale cookie and mark initialized

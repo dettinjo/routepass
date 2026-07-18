@@ -9,6 +9,7 @@ import { Button } from '@/components/ui'
 import { Input, FormField } from '@/components/ui'
 import { Alert } from '@/components/ui'
 import { useAuthStore } from '@/store/auth'
+import { useRedirectIfAuthed } from '@/hooks/use-redirect-if-authed'
 import type { TokenResponse, UserMe } from '@/types/api'
 import { GoogleIcon, GitHubIcon } from '@/components/platform-icons'
 
@@ -218,6 +219,7 @@ function Step3Done({ name }: { name: string }) {
 export default function RegisterPage() {
   const router = useRouter()
   const loginStore = useAuthStore((s) => s.login)
+  const redirecting = useRedirectIfAuthed()
 
   const [step, setStep]         = useState<1 | 2 | 3>(1)
   const [loading, setLoading]   = useState(false)
@@ -295,6 +297,14 @@ export default function RegisterPage() {
   }
 
   const stepTitles = ['Create your account', 'What\'s your name?', 'You\'re all set']
+
+  if (redirecting) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="w-6 h-6 animate-spin text-text-disabled" />
+      </div>
+    )
+  }
 
   return (
     <Card>

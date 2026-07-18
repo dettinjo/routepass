@@ -11,8 +11,10 @@ import { Input, FormField } from '@/components/ui'
 import { Alert } from '@/components/ui'
 import { apiPost } from '@/lib/api'
 import { useAuthStore } from '@/store/auth'
+import { useRedirectIfAuthed } from '@/hooks/use-redirect-if-authed'
 import type { TokenResponse, UserMe } from '@/types/api'
 import { useState } from 'react'
+import { Loader2 } from 'lucide-react'
 import { GoogleIcon, GitHubIcon } from '@/components/platform-icons'
 
 const schema = z.object({
@@ -35,6 +37,7 @@ function SocialDivider() {
 export default function LoginPage() {
   const router = useRouter()
   const login  = useAuthStore((s) => s.login)
+  const redirecting = useRedirectIfAuthed()
   const [serverError, setServerError] = useState<string | null>(null)
 
   const {
@@ -72,6 +75,14 @@ export default function LoginPage() {
     } catch (err) {
       setServerError(err instanceof Error ? err.message : 'Login failed. Try again.')
     }
+  }
+
+  if (redirecting) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <Loader2 className="w-6 h-6 animate-spin text-text-disabled" />
+      </div>
+    )
   }
 
   return (

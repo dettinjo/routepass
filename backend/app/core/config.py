@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     GITHUB_CLIENT_ID: str = ""
     GITHUB_CLIENT_SECRET: str = ""
     ENVIRONMENT: str = "production"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 30  # 30 days (rolled forward on each visit)
     FRONTEND_URL: str = "http://localhost:3000"
     # Comma-separated list of allowed CORS origins in production.
     # Supports cloud (multiple subdomains) and custom self-hosted domains.

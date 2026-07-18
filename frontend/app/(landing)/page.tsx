@@ -14,6 +14,7 @@ import {
   type PlatformKey, PLATFORM_COLORS,
 } from '@/components/platform-icons'
 import { BrandIcon, BrandBadge } from '@/components/brand-box'
+import { useRedirectIfAuthed } from '@/hooks/use-redirect-if-authed'
 
 // ─── Animation helpers ───────────────────────────────────────────────────────
 
@@ -460,8 +461,14 @@ export default function LandingPage() {
   const [navOpaque, setNavOpaque] = useState(false)
   const [openFaq, setOpenFaq] = useState<number | null>(null)
   const { scrollY } = useScroll()
+  const redirecting = useRedirectIfAuthed()
 
   useMotionValueEvent(scrollY, 'change', (y) => setNavOpaque(y > 40))
+
+  // Logged-in visitors skip the marketing page and land on the dashboard.
+  if (redirecting) {
+    return <div style={{ background: D.bg }} className="min-h-screen" />
+  }
 
   return (
     <div style={{ background: D.bg, color: D.text }} className="min-h-screen font-sans antialiased">
