@@ -21,9 +21,6 @@ export interface UserMe {
   runalyze_connected: boolean
   polar_connected: boolean
   outdooractive_connected: boolean
-  // Sync preferences
-  sync_komoot_to_strava: boolean
-  komoot_poll_interval_min: number
   // Subscription
   tier: 'free' | 'pro'
   subscription?: Subscription

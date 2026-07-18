@@ -120,3 +120,27 @@ async def test_strava_callback_stores_encrypted_tokens(async_client: AsyncClient
     assert token.strava_athlete_id == 123456
 
     app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_me_reports_pro_tier_in_selfhosted(
+    async_client: AsyncClient,
+    free_user_headers: dict,
+):
+    """Self-hosted instances unlock all features, so /me reports the free user as pro."""
+    with patch("app.api.v1.auth.settings.DEPLOYMENT_MODE", "selfhosted"):
+        resp = await async_client.get("/api/v1/auth/me", headers=free_user_headers)
+    assert resp.status_code == 200
+    assert resp.json()["tier"] == "pro"
+
+
+@pytest.mark.asyncio
+async def test_me_reports_free_tier_in_cloud(
+    async_client: AsyncClient,
+    free_user_headers: dict,
+):
+    """In cloud mode a free user stays free (tier gating still applies)."""
+    with patch("app.api.v1.auth.settings.DEPLOYMENT_MODE", "cloud"):
+        resp = await async_client.get("/api/v1/auth/me", headers=free_user_headers)
+    assert resp.status_code == 200
+    assert resp.json()["tier"] == "free"

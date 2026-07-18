@@ -132,6 +132,11 @@ async def get_current_user_profile(
     sub = sub_result.scalar_one_or_none()
     tier = sub.tier if sub else "free"
 
+    # Self-hosted instances unlock every Pro feature server-side (see require_tier),
+    # so report the effective tier as "pro" to keep the UI consistent with that.
+    if settings.DEPLOYMENT_MODE == "selfhosted" and tier == "free":
+        tier = "pro"
+
     from app.db.models.connection import Connection as ConnectionModel
     from app.db.models.user import StravaToken
 
