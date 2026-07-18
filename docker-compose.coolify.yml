@@ -11,9 +11,8 @@ name: routepass
 
 services:
   api:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
+    image: ghcr.io/dettinjo/routepass-api:latest
+    pull_policy: always
     command: sh -c "alembic upgrade head && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
     restart: unless-stopped
     healthcheck:
@@ -45,9 +44,8 @@ services:
       - default
 
   worker:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
+    image: ghcr.io/dettinjo/routepass-api:latest
+    pull_policy: always
     command: sh -c "alembic upgrade head && python -m arq app.jobs.worker.WorkerSettings"
     restart: unless-stopped
     environment:
@@ -69,12 +67,8 @@ services:
       - default
 
   frontend:
-    build:
-      context: .
-      dockerfile: frontend/Dockerfile.coolify
-      args:
-        INTERNAL_API_URL: http://api:8000
-        INTERNAL_DOCS_URL: http://docs:4321
+    image: ghcr.io/dettinjo/routepass-frontend:latest
+    pull_policy: always
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"]
@@ -90,8 +84,8 @@ services:
       - coolify
 
   docs:
-    build:
-      context: ./docs
+    image: ghcr.io/dettinjo/routepass-docs:latest
+    pull_policy: always
     restart: unless-stopped
     networks:
       - default
