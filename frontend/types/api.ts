@@ -131,6 +131,7 @@ export interface Connection {
   display_name: string
   status: 'active' | 'error' | 'disconnected'
   last_synced_at: string | null
+  last_error: string | null
   created_at: string
   updated_at: string
 }

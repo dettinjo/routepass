@@ -7,12 +7,13 @@ from uuid import UUID
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core.security import encrypt
 from app.db.models.connection import Connection
+from app.db.models.sync import ConnectionSyncState
 from app.db.models.user import User
 
 _KOMOOT_V006 = "https://api.komoot.de/v006"
@@ -35,17 +36,19 @@ class ConnectionResponse(BaseModel):
     display_name: str
     status: str
     last_synced_at: str | None
+    last_error: str | None
     created_at: str
     updated_at: str
 
 
-def _serialize(conn: Connection) -> dict:
+def _serialize(conn: Connection, last_error: str | None = None) -> dict:
     return {
         "id": str(conn.id),
         "platform": conn.platform,
         "display_name": conn.display_name,
         "status": conn.status,
         "last_synced_at": conn.last_synced_at.isoformat() if conn.last_synced_at else None,
+        "last_error": last_error,
         "created_at": conn.created_at.isoformat(),
         "updated_at": conn.updated_at.isoformat(),
     }
@@ -119,8 +122,15 @@ async def list_connections(
     user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(deps.get_db),
 ) -> list[dict]:
-    result = await db.execute(select(Connection).where(Connection.user_id == user.id))
-    return [_serialize(c) for c in result.scalars().all()]
+    result = await db.execute(
+        select(Connection, ConnectionSyncState.last_error)
+        .outerjoin(
+            ConnectionSyncState,
+            ConnectionSyncState.connection_id == Connection.id,
+        )
+        .where(Connection.user_id == user.id)
+    )
+    return [_serialize(conn, last_error) for conn, last_error in result.all()]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -161,15 +171,21 @@ async def get_connection(
     db: AsyncSession = Depends(deps.get_db),
 ) -> dict:
     result = await db.execute(
-        select(Connection).where(
+        select(Connection, ConnectionSyncState.last_error)
+        .outerjoin(
+            ConnectionSyncState,
+            ConnectionSyncState.connection_id == Connection.id,
+        )
+        .where(
             Connection.id == connection_id,
             Connection.user_id == user.id,
         )
     )
-    conn = result.scalar_one_or_none()
-    if conn is None:
+    row = result.one_or_none()
+    if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
-    return _serialize(conn)
+    conn, last_error = row
+    return _serialize(conn, last_error)
 
 
 @router.delete("/{connection_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -187,6 +203,14 @@ async def delete_connection(
     conn = result.scalar_one_or_none()
     if conn is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
+
+    # Strava credentials live in the StravaToken table, not credentials_enc. Deleting
+    # only the Connection row would leave the OAuth token behind — /auth/me would still
+    # report Strava connected and the worker would keep pushing activities. Revoke both.
+    if conn.platform == "strava":
+        from app.db.models.user import StravaToken
+
+        await db.execute(delete(StravaToken).where(StravaToken.user_id == user.id))
 
     await db.delete(conn)
     await db.commit()

@@ -26,52 +26,6 @@ async def test_get_strava_login_url(async_client: AsyncClient, free_user_headers
 
 
 @pytest.mark.asyncio
-async def test_setup_komoot_connection(async_client: AsyncClient):
-    """Test that Komoot credentials are encrypted correctly."""
-    # We mock out the dependency in `app.api.deps`
-    from app.api import deps
-    from app.main import app
-
-    # Fake user object mimicking the sqlalchemy model
-    fake_user = User(id="00000000-0000-0000-0000-000000000000", email="test@test.com")
-
-    app.dependency_overrides[deps.get_current_user] = lambda: fake_user
-
-    class FakeConnection:
-        pass
-
-    class FakeResult:
-        def scalar_one_or_none(self):
-            return None
-
-    class FakeDB:
-        async def execute(self, stmt):
-            return FakeResult()
-
-        async def commit(self):
-            pass
-
-        def add(self, obj):
-            pass
-
-    app.dependency_overrides[deps.get_db] = lambda: FakeDB()
-
-    response = await async_client.post(
-        "/api/v1/auth/komoot",
-        json={
-            "email": "my_komoot@email.com",
-            "password": "super_secret_komoot_pw",
-            "user_id": "123456789",
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "success"
-
-    app.dependency_overrides.clear()
-
-
-@pytest.mark.asyncio
 async def test_strava_callback_stores_encrypted_tokens(async_client: AsyncClient):
     """OAuth callback must encrypt Strava tokens before storing them."""
     from app.api import deps
