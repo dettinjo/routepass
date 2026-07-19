@@ -64,6 +64,15 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("StravaApp bootstrap failed (non-fatal): %s", exc)
 
+    try:
+        from app.core.registry import ensure_registry_seeded
+        from app.db.session import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            await ensure_registry_seeded(db)
+    except Exception as exc:
+        logger.warning("Provider registry seeding failed (non-fatal): %s", exc)
+
     yield
 
     await redis_client.aclose()

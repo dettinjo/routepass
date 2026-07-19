@@ -36,6 +36,13 @@ class StravaApp(Base):
         nullable=False,
         default=lambda: datetime.now(UTC),
     )
+    # Per-app capacity + cost (admin-editable; see RATE_LIMIT_ARCHITECTURE.md).
+    athlete_cap: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=10)
+    monthly_cost_cents: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=1199)
+    read_limit_15min: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=200)
+    read_limit_daily: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=2000)
+    overall_limit_15min: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=100)
+    overall_limit_daily: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=1000)
 
 
 class User(Base):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.db.models.audit import UserAuditLog
 from app.db.models.connection import Connection
+from app.db.models.governance import GovernorConfig, ProviderPolicy
 from app.db.models.pipeline import Pipeline
 from app.db.models.subscription import (
     ApiKey,
@@ -29,4 +30,6 @@ __all__ = [
     "UserAuditLog",
     "Connection",
     "Pipeline",
+    "ProviderPolicy",
+    "GovernorConfig",
 ]

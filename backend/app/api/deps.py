@@ -23,6 +23,7 @@ __all__ = [
     "get_db",
     "get_current_user",
     "require_tier",
+    "require_admin",
     "get_current_api_key_user",
     "get_redis",
     "oauth2_scheme",
@@ -68,6 +69,21 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     return user
+
+
+async def require_admin(user: User = Depends(get_current_user)) -> User:
+    """Return the current user if they may administer the instance.
+
+    Self-hosted instances are single-owner, so any active user is treated as admin
+    (mirrors require_tier unlocking all features). In cloud mode, User.is_admin is
+    required. Raises HTTP 403 otherwise.
+    """
+    if settings.DEPLOYMENT_MODE == "selfhosted" or user.is_admin:
+        return user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Admin access required.",
+    )
 
 
 def require_tier(min_tier: str) -> Callable:

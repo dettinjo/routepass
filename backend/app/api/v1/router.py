@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     activities,
+    admin,
     api_keys,
     auth,
     billing,
@@ -29,3 +30,4 @@ router.include_router(connections.router, prefix="/connections")
 router.include_router(pipelines.router, prefix="/pipelines")
 router.include_router(instance.router, prefix="/instance")
 router.include_router(export.router, prefix="/export")
+router.include_router(admin.router, prefix="/admin")
