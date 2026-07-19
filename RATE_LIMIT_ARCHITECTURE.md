@@ -1,6 +1,7 @@
 # API Limit Management & Economic Governor — Architecture
 
-Status: **plan** (Phase 1 in progress). Owner-facing internal design doc.
+Status: **Phases 1–2 shipped** (dark, behaviour unchanged); Phases 3–5 planned.
+Owner-facing internal design doc.
 
 RoutePass depends on several third-party APIs with very different limits, costs and
 reliability. This document defines how the app manages those limits **globally**
@@ -280,12 +281,13 @@ a single user exceeding a share threshold.
 
 ## 12. Phased rollout
 
-1. **Registry + `require_admin` (dark, no behavior change)** — models + migration +
-   seed from current constants; admin read/edit endpoints; tests. *Nothing reads the
-   registry yet.* ← **Phase 1 (in progress)**
-2. **Generic limiter + per-user accounting** — refactor `RateLimitGuard` → registry-
-   driven `RateLimiter`; per-user Redis counters; Strava read/overall split. Still
-   seeded to current values, so behaviour unchanged.
+1. ✅ **Registry + `require_admin` (dark)** — models + migration + seed; admin
+   read/edit endpoints; tests. *Nothing reads the registry yet.*
+2. ✅ **Generic limiter + per-user accounting** — `RateLimitGuard` → registry-driven
+   `RateLimiter`; effective limits cached from the registry; Strava read/overall
+   split; per-user Redis counters via a request/job contextvar; self-hosted keeps
+   rate safety but drops the free-tier economic suspension. Seeded to current values
+   → behaviour unchanged (overall 15-min 90; daily 900 vs old 950; free reserve 800).
 3. **Governor + fair-share derivation** — control loop → `governor_state`; derived
    per-user poll cadence + import budgets; degradation ladder; admission control.
    Cloud-only; self-hosted bypass.

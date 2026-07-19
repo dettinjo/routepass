@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core import security
 from app.core.polling import effective_poll_interval_min
-from app.core.rate_limit import rate_limit_guard
+from app.core.rate_limit import current_user_id, rate_limit_guard
 from app.db.models.connection import Connection
 from app.db.models.pipeline import Pipeline
 from app.db.models.subscription import Subscription
@@ -61,6 +61,7 @@ async def poll_user_sources(ctx: dict, user_id: str) -> None:
     Garmin, Polar, Wahoo) and ingests any new activities into the hub DB.
     After ingestion, pushes un-synced activities to Strava if connected.
     """
+    current_user_id.set(user_id)
     job_id = ctx.get("job_id", "unknown")
     logger.info("Executing poll_user_sources job %s for user %s", job_id, user_id)
 
@@ -406,6 +407,8 @@ async def process_strava_activity(ctx: dict, athlete_id: str, activity_id: str) 
             )
             return
 
+        current_user_id.set(str(user.id))
+
         if not user.strava_token:
             logger.warning("process_strava_activity: User %s has no Strava token.", user.id)
             return
@@ -572,6 +575,7 @@ async def source_poll_scheduler(ctx: dict) -> None:
 
 async def run_pipeline(ctx: dict, pipeline_id: str, user_id: str) -> None:
     """Execute a single pipeline: fetch from source, push to destination."""
+    current_user_id.set(user_id)
     job_id = ctx.get("job_id", "unknown")
     logger.info("run_pipeline job=%s pipeline=%s user=%s", job_id, pipeline_id, user_id)
 
@@ -1184,6 +1188,7 @@ async def sync_gpx_to_strava(ctx: dict, activity_id: str, user_id: str) -> None:
     Works for imported and seeded activities (gpx_data stored in DB) as well as
     komoot-sourced activities where the GPX is downloaded on demand.
     """
+    current_user_id.set(user_id)
     logger.info("sync_gpx_to_strava: activity=%s user=%s", activity_id, user_id)
 
     async with AsyncSessionLocal() as db:
@@ -1338,6 +1343,7 @@ async def sync_activity_to_komoot(ctx: dict, activity_id: str, user_id: str) -> 
     Requires the user to have Komoot credentials set (via Connections page).
     Komoot upload uses the unofficial v007 API — may fail if the endpoint changes.
     """
+    current_user_id.set(user_id)
     logger.info("sync_activity_to_komoot: activity=%s user=%s", activity_id, user_id)
 
     async with AsyncSessionLocal() as db:

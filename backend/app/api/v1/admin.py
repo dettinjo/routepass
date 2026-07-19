@@ -230,6 +230,25 @@ async def update_strava_app(
 # ── Economics snapshot (read-only; full governor lands in a later phase) ───────
 
 
+@router.get("/usage/user/{user_id}")
+async def user_usage(
+    user_id: str,
+    _: User = Depends(deps.require_admin),
+    redis=Depends(deps.get_redis),
+) -> dict:
+    """Today's per-user Strava request usage (overall + read) recorded by the limiter."""
+    from datetime import datetime
+
+    date_key = datetime.now(deps.UTC).strftime("%Y-%m-%d")
+    overall = int(await redis.get(f"usage:strava:user:{user_id}:overall:{date_key}") or 0)
+    read = int(await redis.get(f"usage:strava:user:{user_id}:read:{date_key}") or 0)
+    return {
+        "user_id": user_id,
+        "date": date_key,
+        "strava": {"overall": overall, "read": read, "writes": overall - read},
+    }
+
+
 @router.get("/metrics/overview")
 async def metrics_overview(
     _: User = Depends(deps.require_admin),

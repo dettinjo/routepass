@@ -858,6 +858,7 @@ async def delete_activity(
                         tier_str,
                         strava.delete_activity,
                         activity.strava_activity_id,
+                        user_id=str(user.id),
                     )
                     deleted_from.append("strava")
         except Exception as exc:
@@ -1048,6 +1049,7 @@ async def download_activity_gpx(
             tier_str,
             strava.get_activity_streams,
             activity.strava_activity_id,
+            user_id=str(user.id),
         )
 
         if not streams or not streams.get("latlng"):
