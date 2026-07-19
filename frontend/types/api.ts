@@ -129,6 +129,14 @@ export interface Connection {
   status: 'active' | 'error' | 'disconnected'
   last_synced_at: string | null
   last_error: string | null
+  is_source: boolean
+  poll_interval: {
+    configured: number | null
+    effective: number
+    default: number
+    min: number
+    max: number
+  } | null
   created_at: string
   updated_at: string
 }

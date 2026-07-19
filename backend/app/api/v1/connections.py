@@ -11,6 +11,12 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
+from app.core.polling import (
+    MAX_POLL_INTERVAL_MIN,
+    POLL_INTERVALS,
+    effective_poll_interval_min,
+    poll_interval_bounds,
+)
 from app.core.security import encrypt
 from app.db.models.connection import Connection
 from app.db.models.sync import ConnectionSyncState
@@ -30,6 +36,10 @@ class ConnectionCreate(BaseModel):
     credentials: dict | None = None
 
 
+class ConnectionUpdate(BaseModel):
+    poll_interval_min: int | None = None
+
+
 class ConnectionResponse(BaseModel):
     id: str
     platform: str
@@ -42,6 +52,17 @@ class ConnectionResponse(BaseModel):
 
 
 def _serialize(conn: Connection, last_error: str | None = None) -> dict:
+    is_source = conn.platform in POLL_INTERVALS
+    poll: dict | None = None
+    if is_source:
+        default, minimum = poll_interval_bounds(conn.platform)
+        poll = {
+            "configured": conn.poll_interval_min,
+            "effective": effective_poll_interval_min(conn.platform, conn.poll_interval_min),
+            "default": default,
+            "min": minimum,
+            "max": MAX_POLL_INTERVAL_MIN,
+        }
     return {
         "id": str(conn.id),
         "platform": conn.platform,
@@ -49,6 +70,8 @@ def _serialize(conn: Connection, last_error: str | None = None) -> dict:
         "status": conn.status,
         "last_synced_at": conn.last_synced_at.isoformat() if conn.last_synced_at else None,
         "last_error": last_error,
+        "is_source": is_source,
+        "poll_interval": poll,
         "created_at": conn.created_at.isoformat(),
         "updated_at": conn.updated_at.isoformat(),
     }
@@ -186,6 +209,45 @@ async def get_connection(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
     conn, last_error = row
     return _serialize(conn, last_error)
+
+
+@router.patch("/{connection_id}")
+async def update_connection(
+    connection_id: UUID,
+    body: ConnectionUpdate,
+    user: User = Depends(deps.get_current_user),
+    db: AsyncSession = Depends(deps.get_db),
+) -> dict:
+    result = await db.execute(
+        select(Connection).where(
+            Connection.id == connection_id,
+            Connection.user_id == user.id,
+        )
+    )
+    conn = result.scalar_one_or_none()
+    if conn is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
+
+    if body.poll_interval_min is not None:
+        if conn.platform not in POLL_INTERVALS:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Poll interval is not configurable for {conn.platform}.",
+            )
+        _, minimum = poll_interval_bounds(conn.platform)
+        if not (minimum <= body.poll_interval_min <= MAX_POLL_INTERVAL_MIN):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Poll interval for {conn.platform} must be between "
+                    f"{minimum} and {MAX_POLL_INTERVAL_MIN} minutes."
+                ),
+            )
+        conn.poll_interval_min = body.poll_interval_min
+
+    await db.commit()
+    await db.refresh(conn)
+    return _serialize(conn)
 
 
 @router.delete("/{connection_id}", status_code=status.HTTP_204_NO_CONTENT)

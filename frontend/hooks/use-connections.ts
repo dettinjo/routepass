@@ -1,7 +1,7 @@
 'use client'
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { apiDelete, apiGet, apiPost } from '@/lib/api'
+import { apiDelete, apiGet, apiPatch, apiPost } from '@/lib/api'
 import type { Connection } from '@/types/api'
 
 export function useConnections() {
@@ -25,6 +25,15 @@ export function useDeleteConnection() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => apiDelete(`/api/v1/connections/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['connections'] }),
+  })
+}
+
+export function useUpdateConnection() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, poll_interval_min }: { id: string; poll_interval_min: number }) =>
+      apiPatch<Connection>(`/api/v1/connections/${id}`, { poll_interval_min }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['connections'] }),
   })
 }

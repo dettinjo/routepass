@@ -327,3 +327,101 @@ async def test_list_connections_last_error_null_when_healthy(
     resp = await async_client.get("/api/v1/connections", headers=free_user_headers)
     assert resp.status_code == 200
     assert resp.json()[0]["last_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_source_connection_exposes_poll_interval(
+    async_client: AsyncClient,
+    free_user_headers: dict[str, str],
+) -> None:
+    """A source platform (komoot) reports poll-interval bounds; strava does not."""
+    with patch(
+        "app.api.v1.connections.httpx.AsyncClient",
+        return_value=_mock_komoot_client(200),
+    ):
+        await async_client.post(
+            "/api/v1/connections",
+            json={
+                "platform": "komoot",
+                "display_name": "Komoot",
+                "credentials": {"email": "r@e.com", "password": "p"},
+            },
+            headers=free_user_headers,
+        )
+    await async_client.post(
+        "/api/v1/connections",
+        json={"platform": "strava", "display_name": "Strava"},
+        headers=free_user_headers,
+    )
+    conns = (await async_client.get("/api/v1/connections", headers=free_user_headers)).json()
+    komoot = next(c for c in conns if c["platform"] == "komoot")
+    strava = next(c for c in conns if c["platform"] == "strava")
+
+    assert komoot["is_source"] is True
+    assert komoot["poll_interval"]["default"] == 120
+    assert komoot["poll_interval"]["min"] == 30
+    assert komoot["poll_interval"]["effective"] == 120  # unset → default
+    assert komoot["poll_interval"]["configured"] is None
+
+    assert strava["is_source"] is False
+    assert strava["poll_interval"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_poll_interval(
+    async_client: AsyncClient,
+    free_user_headers: dict[str, str],
+) -> None:
+    """Setting a valid interval sticks; below the platform minimum is rejected."""
+    with patch(
+        "app.api.v1.connections.httpx.AsyncClient",
+        return_value=_mock_komoot_client(200),
+    ):
+        create = await async_client.post(
+            "/api/v1/connections",
+            json={
+                "platform": "komoot",
+                "display_name": "Komoot",
+                "credentials": {"email": "r@e.com", "password": "p"},
+            },
+            headers=free_user_headers,
+        )
+    conn_id = create.json()["id"]
+
+    ok = await async_client.patch(
+        f"/api/v1/connections/{conn_id}",
+        json={"poll_interval_min": 45},
+        headers=free_user_headers,
+    )
+    assert ok.status_code == 200
+    assert ok.json()["poll_interval"]["configured"] == 45
+    assert ok.json()["poll_interval"]["effective"] == 45
+
+    too_fast = await async_client.patch(
+        f"/api/v1/connections/{conn_id}",
+        json={"poll_interval_min": 5},
+        headers=free_user_headers,
+    )
+    assert too_fast.status_code == 422
+    assert "between 30" in too_fast.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_update_poll_interval_rejected_for_non_source(
+    async_client: AsyncClient,
+    free_user_headers: dict[str, str],
+) -> None:
+    """Strava is webhook-driven, not polled — interval isn't configurable."""
+    create = await async_client.post(
+        "/api/v1/connections",
+        json={"platform": "strava", "display_name": "Strava"},
+        headers=free_user_headers,
+    )
+    conn_id = create.json()["id"]
+    resp = await async_client.patch(
+        f"/api/v1/connections/{conn_id}",
+        json={"poll_interval_min": 60},
+        headers=free_user_headers,
+    )
+    assert resp.status_code == 422
+    assert "not configurable" in resp.json()["detail"]

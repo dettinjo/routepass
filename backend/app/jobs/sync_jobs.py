@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.core import security
+from app.core.polling import effective_poll_interval_min
 from app.core.rate_limit import rate_limit_guard
 from app.db.models.connection import Connection
 from app.db.models.pipeline import Pipeline
@@ -24,8 +25,6 @@ from app.services.sync import SyncService
 UTC = UTC
 
 logger = logging.getLogger(__name__)
-
-_MIN_POLL_INTERVAL: dict = {"free": 120, "pro": 10, "lifetime": 10, "business": 10}
 
 # Platforms that RoutePass pulls activities *from*.
 # Destination platforms (strava, intervals_icu, runalyze, trainingpeaks, webhook)
@@ -136,6 +135,14 @@ async def poll_user_sources(ctx: dict, user_id: str) -> None:
                     )
                     db.add(conn_state)
                     await db.commit()
+
+                # Respect the per-connection poll cadence. The scheduler ticks every
+                # 5 min, but each source is only polled once its interval has elapsed.
+                interval_min = effective_poll_interval_min(conn.platform, conn.poll_interval_min)
+                if conn_state.last_synced_at is not None:
+                    elapsed = datetime.now(UTC) - conn_state.last_synced_at
+                    if elapsed < timedelta(minutes=interval_min):
+                        continue
 
                 if conn.platform == "komoot":
                     komoot_client = _build_komoot_client_from_connection(conn)

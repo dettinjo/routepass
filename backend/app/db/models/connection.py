@@ -58,6 +58,9 @@ class Connection(Base):
     display_name: Mapped[str] = mapped_column(sa.String, nullable=False, default="")
     credentials_enc: Mapped[Optional[bytes]] = mapped_column(sa.LargeBinary, nullable=True)
     status: Mapped[str] = mapped_column(sa.String, nullable=False, default="active")
+    # How often (minutes) to poll this source for new activities. NULL = platform
+    # default (see app.core.polling). Only meaningful for source platforms.
+    poll_interval_min: Mapped[Optional[int]] = mapped_column(sa.Integer, nullable=True)
     last_synced_at: Mapped[Optional[datetime]] = mapped_column(
         sa.DateTime(timezone=True), nullable=True
     )

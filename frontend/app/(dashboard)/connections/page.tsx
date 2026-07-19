@@ -6,10 +6,15 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { BrandBox } from '@/components/brand-box'
-import { useConnections, useCreateConnection, useDeleteConnection } from '@/hooks/use-connections'
+import {
+  useConnections,
+  useCreateConnection,
+  useDeleteConnection,
+  useUpdateConnection,
+} from '@/hooks/use-connections'
 import { useAuthStore } from '@/store/auth'
 import { formatRelative } from '@/lib/utils'
-import type { PlatformKey } from '@/types/api'
+import type { Connection, PlatformKey } from '@/types/api'
 
 // ── Platform definitions ───────────────────────────────────────────────────────
 
@@ -178,18 +183,70 @@ function ConnectForm({
 
 // ── Platform card ──────────────────────────────────────────────────────────────
 
+// ── Poll interval control (source connections only) ─────────────────────────────
+
+function PollIntervalControl({
+  connection,
+  platformLabel,
+}: {
+  connection: Connection
+  platformLabel: string
+}) {
+  const poll = connection.poll_interval!
+  const [value, setValue] = useState<number>(poll.effective)
+  const [saved, setSaved] = useState(false)
+  const { mutate, isPending, error } = useUpdateConnection()
+
+  const dirty = value !== poll.effective
+  const invalid = Number.isNaN(value) || value < poll.min || value > poll.max
+
+  return (
+    <div className="mt-4 pt-4 border-t border-border">
+      <p className="text-body-sm text-text-primary">Check for new activities every</p>
+      <div className="flex items-center gap-2 mt-1.5">
+        <input
+          type="number"
+          min={poll.min}
+          max={poll.max}
+          step={5}
+          value={Number.isNaN(value) ? '' : value}
+          onChange={(e) => setValue(parseInt(e.target.value, 10))}
+          className="w-20 h-8 px-2 text-body-sm bg-surface-raised border border-border rounded-md
+                     text-text-primary focus:outline-none focus:ring-2 focus:ring-accent"
+        />
+        <span className="text-body-sm text-text-secondary">minutes</span>
+        {dirty && (
+          <Button
+            variant="secondary"
+            size="sm"
+            loading={isPending}
+            disabled={invalid}
+            onClick={() =>
+              mutate(
+                { id: connection.id, poll_interval_min: value },
+                { onSuccess: () => { setSaved(true); setTimeout(() => setSaved(false), 2000) } },
+              )
+            }
+          >
+            {saved ? '✓' : 'Save'}
+          </Button>
+        )}
+      </div>
+      <p className="text-caption text-text-disabled mt-1">
+        Minimum {poll.min} min to stay within {platformLabel}&rsquo;s API rate limits
+        {poll.configured === null && ` · default ${poll.default} min`}.
+      </p>
+      {error && <p className="text-caption text-error mt-1">{(error as Error).message}</p>}
+    </div>
+  )
+}
+
 function PlatformCard({
   platform,
   connection,
 }: {
   platform: PlatformDef
-  connection?: {
-    id: string
-    display_name: string
-    status: string
-    last_synced_at: string | null
-    last_error: string | null
-  }
+  connection?: Connection
 }) {
   const [expanded, setExpanded] = useState(false)
   const { mutate: disconnect, isPending: disconnecting } = useDeleteConnection()
@@ -266,6 +323,10 @@ function PlatformCard({
 
         {expanded && !isConnected && (
           <ConnectForm platform={platform} onClose={() => setExpanded(false)} />
+        )}
+
+        {isConnected && connection.is_source && connection.poll_interval && (
+          <PollIntervalControl connection={connection} platformLabel={platform.label} />
         )}
       </CardContent>
     </Card>
