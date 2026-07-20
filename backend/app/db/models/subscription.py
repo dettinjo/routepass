@@ -19,7 +19,7 @@ class Subscription(Base):
     __tablename__ = "subscriptions"
     __table_args__ = (
         sa.CheckConstraint(
-            "tier IN ('free', 'pro', 'business')",
+            "tier IN ('free', 'pro', 'business', 'lifetime')",
             name="ck_subscriptions_tier",
         ),
         sa.CheckConstraint(

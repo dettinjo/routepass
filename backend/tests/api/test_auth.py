@@ -12,8 +12,13 @@ UTC = UTC
 
 
 @pytest.mark.asyncio
-async def test_get_strava_login_url(async_client: AsyncClient, free_user_headers: dict):
+async def test_get_strava_login_url(async_client: AsyncClient, free_user_headers: dict, db):
     """Test generating the Strava login OAuth URI (requires authentication)."""
+    # Governor admission control needs at least one Strava app with free slot
+    # headroom, otherwise a brand-new free connection is correctly refused.
+    db.add(StravaApp(client_id="1", client_secret=b"enc", display_name="App", is_active=True))
+    await db.commit()
+
     response = await async_client.get("/api/v1/auth/strava/login", headers=free_user_headers)
     assert response.status_code == 200
     data = response.json()

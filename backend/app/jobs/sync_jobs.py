@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.core import security
+from app.core import governor, security
 from app.core.polling import effective_poll_interval_min
 from app.core.rate_limit import current_user_id, rate_limit_guard
 from app.db.models.connection import Connection
@@ -114,6 +114,17 @@ async def poll_user_sources(ctx: dict, user_id: str) -> None:
             sync_service = SyncService(db)
             komoot_ingested = False
 
+            # Operator-comped accounts are never treated as free tier for the
+            # governor, regardless of their stored subscription row.
+            from app.core.tiers import is_comp_email
+
+            user_tier = (
+                "pro"
+                if is_comp_email(user.email)
+                else (user.subscription.tier if user.subscription else "free")
+            )
+            gstate = await governor.get_state(db) if user_tier == "free" else None
+
             for conn in source_connections:
                 # Load or create per-connection watermark (E5).
                 # Seed from global UserSyncState on first access for backwards compat.
@@ -140,6 +151,15 @@ async def poll_user_sources(ctx: dict, user_id: str) -> None:
                 # Respect the per-connection poll cadence. The scheduler ticks every
                 # 5 min, but each source is only polled once its interval has elapsed.
                 interval_min = effective_poll_interval_min(conn.platform, conn.poll_interval_min)
+
+                # Governor degradation: free-tier connections get a stretched interval
+                # (or are skipped entirely when paused) once cost approaches revenue.
+                if gstate is not None:
+                    multiplier = gstate.poll_multiplier()
+                    if multiplier is None:
+                        continue
+                    interval_min *= multiplier
+
                 if conn_state.last_synced_at is not None:
                     elapsed = datetime.now(UTC) - conn_state.last_synced_at
                     if elapsed < timedelta(minutes=interval_min):
@@ -508,25 +528,21 @@ async def source_poll_scheduler(ctx: dict) -> None:
         return
 
     async with AsyncSessionLocal() as db:
-        # Check if ALL Strava apps are over the free-tier threshold (>800 calls/day).
-        # Per-user enforcement happens inside RateLimitGuard.call(); the scheduler
-        # only needs to skip free-tier enqueue when every app is saturated.
-        app_result = await db.execute(
-            select(StravaApp.id).where(StravaApp.is_active == True)  # noqa: E712
-        )
-        all_app_ids = [row[0] for row in app_result.all()]
-
-        budget_exhausted_for_free = False
-        if all_app_ids:
-            counts = [await rate_limit_guard.daily_count(aid) for aid in all_app_ids]
-            min_count = min(counts)
-            budget_exhausted_for_free = min_count > 800
-            if budget_exhausted_for_free:
-                logger.warning(
-                    "All Strava apps at free-tier budget threshold (min daily=%d) "
-                    "— skipping free tier this cycle.",
-                    min_count,
-                )
+        # Economic governor: per-request budgets are enforced inside
+        # RateLimitGuard.call(); the scheduler only needs to know whether free-tier
+        # polling is paused entirely this cycle (cost far exceeds revenue). Milder
+        # degradation (soft throttle / deferred) stretches the poll interval instead
+        # of skipping the enqueue — see poll_user_sources.
+        gstate = await governor.get_state(db)
+        free_paused = gstate.free_tier_level >= governor.LEVEL_PAUSED
+        if free_paused:
+            logger.warning(
+                "Governor: free tier paused this cycle (economic_level=%d, "
+                "monthly_cost=%d, monthly_revenue=%d).",
+                gstate.economic_level,
+                gstate.monthly_cost_cents,
+                gstate.monthly_revenue_cents,
+            )
 
         # Eligible users: active users that have at least one active source Connection.
         # Poll throttling is handled via Redis TTL per connection (until E5 per-connection
@@ -553,11 +569,11 @@ async def source_poll_scheduler(ctx: dict) -> None:
         rows = result.all()
 
         enqueued = 0
-        skipped_budget = 0
+        skipped_paused = 0
         for uid, tier in rows:
             tier = tier or "free"
-            if budget_exhausted_for_free and tier == "free":
-                skipped_budget += 1
+            if free_paused and tier == "free":
+                skipped_paused += 1
                 continue
             await redis.enqueue_job(
                 "poll_user_sources",
@@ -567,9 +583,9 @@ async def source_poll_scheduler(ctx: dict) -> None:
             enqueued += 1
 
         logger.info(
-            "Scheduler: enqueued=%d, skipped_free_budget=%d",
+            "Scheduler: enqueued=%d, skipped_free_paused=%d",
             enqueued,
-            skipped_budget,
+            skipped_paused,
         )
 
 

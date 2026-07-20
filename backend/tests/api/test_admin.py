@@ -52,9 +52,7 @@ async def test_update_provider(
 
 
 @pytest.mark.asyncio
-async def test_governor_get_and_validation(
-    async_client: AsyncClient, free_user_headers: dict
-):
+async def test_governor_get_and_validation(async_client: AsyncClient, free_user_headers: dict):
     with patch("app.api.deps.settings.DEPLOYMENT_MODE", "selfhosted"):
         got = await async_client.get("/api/v1/admin/governor", headers=free_user_headers)
         assert got.status_code == 200
@@ -107,9 +105,7 @@ async def test_strava_app_crud_never_leaks_secret(
 
 
 @pytest.mark.asyncio
-async def test_metrics_overview(
-    async_client: AsyncClient, free_user_headers: dict
-):
+async def test_metrics_overview(async_client: AsyncClient, free_user_headers: dict):
     with patch("app.api.deps.settings.DEPLOYMENT_MODE", "selfhosted"):
         # Seed an app so cost/capacity are non-zero
         await async_client.post(

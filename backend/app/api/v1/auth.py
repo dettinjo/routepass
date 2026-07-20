@@ -169,11 +169,54 @@ async def get_current_user_profile(
     }
 
 
+async def _check_strava_admission(user: User, db: AsyncSession) -> None:
+    """Block a *new* free-tier Strava connection when free athlete slots are full.
+
+    Reconnecting an athlete who already has a token, self-hosted instances, and
+    operator-comped accounts are never blocked — only first-time free-tier connects
+    compete for the reserved-vs-free Strava slot split (see RATE_LIMIT_ARCHITECTURE.md).
+    """
+    if settings.DEPLOYMENT_MODE == "selfhosted":
+        return
+
+    from app.core.tiers import is_comp_email
+
+    if is_comp_email(user.email):
+        return
+
+    existing = (
+        await db.execute(select(StravaToken).where(StravaToken.user_id == user.id))
+    ).scalar_one_or_none()
+    if existing is not None:
+        return  # reconnect — doesn't consume a new slot
+
+    sub_result = await db.execute(select(Subscription).where(Subscription.user_id == user.id))
+    sub = sub_result.scalar_one_or_none()
+    tier = sub.tier if sub else "free"
+    if tier != "free":
+        return
+
+    from app.core.governor import get_state
+
+    gstate = await get_state(db)
+    if not gstate.strava_admission_open:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                "Strava is at capacity for free accounts right now. "
+                "Upgrade to Pro for a reserved slot, or try again later."
+            ),
+        )
+
+
 @router.get("/strava/login")
 async def get_strava_login_url(
     user: User = Depends(deps.get_current_user),
+    db: AsyncSession = Depends(deps.get_db),
 ) -> dict:
     """Return the Strava OAuth URL. Frontend calls this (with Bearer token) then redirects."""
+    await _check_strava_admission(user, db)
+
     # Encode a short-lived JWT as the state so the callback can identify the user
     # without requiring an auth header (Strava GET redirect has no header support).
     state_token = security.create_access_token(str(user.id), expires_delta=timedelta(minutes=10))

@@ -75,26 +75,41 @@ def upgrade() -> None:
     )
 
     # strava_apps: per-app cost/capacity. server_default backfills existing rows.
-    op.add_column("strava_apps", sa.Column("athlete_cap", sa.Integer(), nullable=False,
-                                           server_default="10"))
-    op.add_column("strava_apps", sa.Column("monthly_cost_cents", sa.Integer(), nullable=False,
-                                           server_default="1199"))
-    op.add_column("strava_apps", sa.Column("read_limit_15min", sa.Integer(), nullable=False,
-                                           server_default="200"))
-    op.add_column("strava_apps", sa.Column("read_limit_daily", sa.Integer(), nullable=False,
-                                           server_default="2000"))
-    op.add_column("strava_apps", sa.Column("overall_limit_15min", sa.Integer(), nullable=False,
-                                           server_default="100"))
-    op.add_column("strava_apps", sa.Column("overall_limit_daily", sa.Integer(), nullable=False,
-                                           server_default="1000"))
+    op.add_column(
+        "strava_apps", sa.Column("athlete_cap", sa.Integer(), nullable=False, server_default="10")
+    )
+    op.add_column(
+        "strava_apps",
+        sa.Column("monthly_cost_cents", sa.Integer(), nullable=False, server_default="1199"),
+    )
+    op.add_column(
+        "strava_apps",
+        sa.Column("read_limit_15min", sa.Integer(), nullable=False, server_default="200"),
+    )
+    op.add_column(
+        "strava_apps",
+        sa.Column("read_limit_daily", sa.Integer(), nullable=False, server_default="2000"),
+    )
+    op.add_column(
+        "strava_apps",
+        sa.Column("overall_limit_15min", sa.Integer(), nullable=False, server_default="100"),
+    )
+    op.add_column(
+        "strava_apps",
+        sa.Column("overall_limit_daily", sa.Integer(), nullable=False, server_default="1000"),
+    )
     # Rows are seeded idempotently by app.core.registry.ensure_registry_seeded() on
     # startup (and in tests), so the schema-only migration works with create_all too.
 
 
 def downgrade() -> None:
     for col in (
-        "overall_limit_daily", "overall_limit_15min", "read_limit_daily",
-        "read_limit_15min", "monthly_cost_cents", "athlete_cap",
+        "overall_limit_daily",
+        "overall_limit_15min",
+        "read_limit_daily",
+        "read_limit_15min",
+        "monthly_cost_cents",
+        "athlete_cap",
     ):
         op.drop_column("strava_apps", col)
     op.drop_table("governor_config")

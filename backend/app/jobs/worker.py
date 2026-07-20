@@ -6,7 +6,7 @@ from arq.connections import RedisSettings
 from arq.cron import cron
 
 from app.core.config import settings
-from app.db.session import engine
+from app.db.session import AsyncSessionLocal, engine
 from app.jobs.sync_jobs import (
     poll_user_sources,
     process_strava_activity,
@@ -17,6 +17,23 @@ from app.jobs.sync_jobs import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def recompute_governor_state(ctx: dict) -> None:
+    """Cron: refresh the cached economic-governor state (cost/revenue/capacity)."""
+    from app.core.governor import refresh_state
+
+    async with AsyncSessionLocal() as db:
+        state = await refresh_state(db)
+        logger.info(
+            "Governor recompute: economic_level=%d free_tier_level=%d "
+            "cost=%d revenue=%d strava_admission_open=%s",
+            state.economic_level,
+            state.free_tier_level,
+            state.monthly_cost_cents,
+            state.monthly_revenue_cents,
+            state.strava_admission_open,
+        )
 
 
 async def startup(ctx: dict) -> None:
@@ -53,7 +70,13 @@ class WorkerSettings:
             hour=None,
             minute=set(range(0, 60, 5)),  # every 5 minutes
             run_at_startup=True,
-        )
+        ),
+        cron(
+            recompute_governor_state,
+            hour=None,
+            minute=set(range(0, 60, 10)),  # every 10 minutes
+            run_at_startup=True,
+        ),
     ]
 
     max_jobs = settings.ARQ_MAX_JOBS

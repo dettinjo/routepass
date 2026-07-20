@@ -94,9 +94,7 @@ class GovernorConfig(Base):
     coverage_target_pct: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=70)
     # Share of capacity + athlete slots reserved for paying users.
     paid_reservation_pct: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=40)
-    free_degradation_enabled: Mapped[bool] = mapped_column(
-        sa.Boolean, nullable=False, default=True
-    )
+    free_degradation_enabled: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
     infra_monthly_cost_cents: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
     updated_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),

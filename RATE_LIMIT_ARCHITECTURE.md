@@ -1,6 +1,6 @@
 # API Limit Management & Economic Governor — Architecture
 
-Status: **Phases 1–2 shipped** (dark, behaviour unchanged); Phases 3–5 planned.
+Status: **Phases 1–3 shipped**; Phases 4–5 planned.
 Owner-facing internal design doc.
 
 RoutePass depends on several third-party APIs with very different limits, costs and
@@ -288,13 +288,34 @@ a single user exceeding a share threshold.
    split; per-user Redis counters via a request/job contextvar; self-hosted keeps
    rate safety but drops the free-tier economic suspension. Seeded to current values
    → behaviour unchanged (overall 15-min 90; daily 900 vs old 950; free reserve 800).
-3. **Governor + fair-share derivation** — control loop → `governor_state`; derived
-   per-user poll cadence + import budgets; degradation ladder; admission control.
-   Cloud-only; self-hosted bypass.
+3. ✅ **Governor + admission + degradation** (`app/core/governor.py`) — a 10-min cron
+   (`recompute_governor_state`) + on-demand recompute (admin config/pool edits)
+   computes `GovernorState`: monthly cost (Σ active Strava app costs + infra) vs a
+   conservative monthly-equivalent revenue estimate (Stripe price matched back to a
+   plan, or a cheap-plan fallback so revenue is never over-estimated), and Strava
+   athlete-slot occupancy split by paid-reservation.
+   - **Economic level** (0 normal / 1 soft-throttle / 2 deferred / 4 paused) compares
+     cost against `revenue × coverage_target_pct` (default 70%), then `revenue`, then
+     `revenue × 1.3`.
+   - **Admission** (level 3) closes when free-tier Strava slot usage reaches
+     `total_slots × (1 − paid_reservation_pct)`; only *new* free connections are
+     blocked (`GET /auth/strava/login` → 429) — reconnects and operator-comped
+     accounts are exempt. This is the **waitlist-at-cap** policy.
+   - **Degradation** stretches a free-tier connection's poll interval by the
+     `poll_multiplier()` at its level (×1/×3/×12/skip); wired into
+     `poll_user_sources`. The scheduler's old hardcoded ">800 calls/day" free-budget
+     check is replaced by the governor's paused level.
+   - Self-hosted bypass returns a fixed "unlimited, always open" state — no queries.
+   - Admin: `GET/POST /admin/governor/state[/recompute]`.
+   - Fixed a related pre-existing bug found while wiring this up: the Stripe webhook
+     sets `Subscription.tier = "lifetime"` on a completed one-time purchase, but the
+     CHECK constraint only allowed `free/pro/business` — a real Lifetime purchase
+     would have raised an IntegrityError. Migration 015 widens the constraint.
 4. **Non-Strava limiters** — wrap Komoot/Garmin/Runalyze/intervals in the generic
    limiter + backoff/circuit-breaker.
 5. **Admin dashboard** — metrics endpoints + frontend (economics, provider health,
-   per-user rate insight, trends, alerts).
+   per-user rate insight, trends, alerts). Backend pieces (usage endpoint, governor
+   state, metrics overview) already exist from Phases 2–3; this phase is the UI.
 
 Each phase is an independent, deployable, PR-sized change.
 
@@ -302,9 +323,12 @@ Each phase is an independent, deployable, PR-sized change.
 
 ## 13. Open decisions
 
-1. **Coverage target** default: 100% (break-even) vs 70% (safety margin). *Proposed: 70%.*
-2. **Free-Strava at cap:** waitlist (gate new) vs always-allow-but-slowest. *Proposed:
-   waitlist at level 3, slowest before that.*
+1. ✅ **Coverage target**: 70% (safety margin) — shipped as the `governor_config` default.
+2. ✅ **Free-Strava at cap**: waitlist new connections (429 at level 3); softer
+   degradation (stretched poll interval) below that — shipped.
 3. **Backfill depth** default per provider (e.g. Strava last 30 activities vs 90 days).
-4. **Governor cache** store: Redis vs 1-row table (Redis proposed for the live number,
-   table snapshot for history).
+   Current seed: Strava/Komoot/Garmin = 30–50 activities/pages (see `provider_policy`
+   seed in `app/core/registry.py`) — not yet revisited with real usage data.
+4. ✅ **Governor cache store**: Redis (`routepass:governor:state`, 10-min TTL),
+   recomputed by cron + invalidated on admin edits. No history snapshot table yet —
+   `provider_usage_daily` (§8) remains a Phase 5 dashboard dependency.

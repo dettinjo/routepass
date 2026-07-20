@@ -11,7 +11,7 @@ from __future__ import annotations
 # platform -> (default minutes, minimum minutes)
 POLL_INTERVALS: dict[str, tuple[int, int]] = {
     "komoot": (120, 30),  # unofficial API, no webhooks — poll gently
-    "garmin": (60, 30),   # unofficial SDK
+    "garmin": (60, 30),  # unofficial SDK
     "polar": (60, 30),
     "wahoo": (60, 30),
 }

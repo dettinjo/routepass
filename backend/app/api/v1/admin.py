@@ -24,11 +24,27 @@ router = APIRouter(tags=["admin"])
 # ── Providers ────────────────────────────────────────────────────────────────
 
 _PROVIDER_FIELDS = (
-    "platform", "role", "auth_type", "supports_webhooks", "enabled",
-    "default_poll_min", "min_poll_min", "window_seconds", "window_limit", "daily_limit",
-    "read_limit_15min", "read_limit_daily", "overall_limit_15min", "overall_limit_daily",
-    "athlete_capacity", "monthly_cost_cents", "initial_backfill_limit", "page_size",
-    "refresh_strategy", "headroom_pct", "free_reserve_pct",
+    "platform",
+    "role",
+    "auth_type",
+    "supports_webhooks",
+    "enabled",
+    "default_poll_min",
+    "min_poll_min",
+    "window_seconds",
+    "window_limit",
+    "daily_limit",
+    "read_limit_15min",
+    "read_limit_daily",
+    "overall_limit_15min",
+    "overall_limit_daily",
+    "athlete_capacity",
+    "monthly_cost_cents",
+    "initial_backfill_limit",
+    "page_size",
+    "refresh_strategy",
+    "headroom_pct",
+    "free_reserve_pct",
 )
 
 
@@ -86,6 +102,7 @@ async def update_provider(
         setattr(policy, field, value)
     await db.commit()
     await db.refresh(policy)
+    await _invalidate_governor_state(db)
     return _serialize_provider(policy)
 
 
@@ -143,7 +160,39 @@ async def update_governor(
         setattr(g, field, value)
     await db.commit()
     await db.refresh(g)
+    await _invalidate_governor_state(db)
     return _serialize_governor(g)
+
+
+async def _invalidate_governor_state(db: AsyncSession) -> None:
+    """Force the next read to recompute rather than serve a stale cached state."""
+    from app.core.governor import refresh_state
+
+    await refresh_state(db)
+
+
+@router.get("/governor/state")
+async def get_governor_state(
+    _: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(deps.get_db),
+) -> dict:
+    """Live economic-governor state: cost vs revenue, Strava slot occupancy, and the
+    resulting free-tier degradation level. See RATE_LIMIT_ARCHITECTURE.md §6."""
+    from app.core.governor import get_state
+
+    return (await get_state(db)).to_dict()
+
+
+@router.post("/governor/state/recompute")
+async def recompute_governor_state(
+    _: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(deps.get_db),
+) -> dict:
+    """Force an immediate recompute (bypassing the 10-min cache) after a config or
+    Strava-app-pool change the admin wants to see reflected right away."""
+    from app.core.governor import refresh_state
+
+    return (await refresh_state(db)).to_dict()
 
 
 # ── Strava app pool ──────────────────────────────────────────────────────────
@@ -206,6 +255,7 @@ async def create_strava_app(
     db.add(app_entry)
     await db.commit()
     await db.refresh(app_entry)
+    await _invalidate_governor_state(db)
     return _serialize_app(app_entry)
 
 
@@ -224,6 +274,7 @@ async def update_strava_app(
         setattr(app_entry, field, value)
     await db.commit()
     await db.refresh(app_entry)
+    await _invalidate_governor_state(db)
     return _serialize_app(app_entry)
 
 
@@ -266,10 +317,16 @@ async def metrics_overview(
     monthly_cost_cents += governor.infra_monthly_cost_cents
 
     paid = (
-        await db.execute(
-            select(Subscription).where(Subscription.tier != "free", Subscription.status == "active")
+        (
+            await db.execute(
+                select(Subscription).where(
+                    Subscription.tier != "free", Subscription.status == "active"
+                )
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
 
     return {
         "self_hosted": settings.DEPLOYMENT_MODE == "selfhosted",
