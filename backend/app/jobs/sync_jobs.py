@@ -9,7 +9,12 @@ from sqlalchemy.orm import selectinload
 
 from app.core import governor, security
 from app.core.polling import effective_poll_interval_min
-from app.core.rate_limit import current_user_id, rate_limit_guard
+from app.core.rate_limit import (
+    CircuitOpenError,
+    current_user_id,
+    destination_rate_limiter,
+    rate_limit_guard,
+)
 from app.db.models.connection import Connection
 from app.db.models.pipeline import Pipeline
 from app.db.models.subscription import Subscription
@@ -828,12 +833,16 @@ async def _run_komoot_to_intervals_icu(
                 continue
 
             gpx_bytes = await komoot_client.download_gpx(tour.id)
-            activity_id = await intervals_client.upload_gpx(
+            activity_id = await destination_rate_limiter.call(
+                "intervals_icu",
+                str(dest.id),
+                intervals_client.upload_gpx,
                 gpx_bytes=gpx_bytes,
                 name=tour.name,
                 sport_type=tour.strava_sport,  # Strava type names are accepted by Intervals.icu
                 description=tour.description,
                 external_id=f"komoot_{tour.id}",
+                user_id=str(user.id),
             )
 
             record = _SA(
@@ -854,6 +863,9 @@ async def _run_komoot_to_intervals_icu(
             await db.commit()
             synced_count += 1
 
+        except CircuitOpenError as exc:
+            logger.warning("_run_komoot_to_intervals_icu: circuit open, stopping batch: %s", exc)
+            break
         except Exception as exc:
             logger.error("_run_komoot_to_intervals_icu: Failed for tour %s: %s", tour.id, exc)
 
@@ -938,9 +950,13 @@ async def _run_komoot_to_runalyze(
                 continue
 
             gpx_bytes = await komoot_client.download_gpx(tour.id)
-            activity_id = await runalyze_client.upload_gpx(
+            activity_id = await destination_rate_limiter.call(
+                "runalyze",
+                str(dest.id),
+                runalyze_client.upload_gpx,
                 gpx_bytes=gpx_bytes,
                 external_id=f"komoot_{tour.id}",
+                user_id=str(user.id),
             )
 
             record = _SA(
@@ -961,6 +977,9 @@ async def _run_komoot_to_runalyze(
             await db.commit()
             synced_count += 1
 
+        except CircuitOpenError as exc:
+            logger.warning("_run_komoot_to_runalyze: circuit open, stopping batch: %s", exc)
+            break
         except Exception as exc:
             logger.error("_run_komoot_to_runalyze: Failed for tour %s: %s", tour.id, exc)
 
@@ -1048,11 +1067,15 @@ async def _run_strava_to_intervals_icu(
                 )
                 continue
 
-            icu_activity_id = await intervals_client.upload_gpx(
+            icu_activity_id = await destination_rate_limiter.call(
+                "intervals_icu",
+                str(dest.id),
+                intervals_client.upload_gpx,
                 gpx_bytes=gpx_bytes,
                 name=activity.get("name", "Activity"),
                 sport_type=sport,
                 external_id=f"strava_{strava_id}",
+                user_id=str(user.id),
             )
 
             record = _SA(
@@ -1075,6 +1098,9 @@ async def _run_strava_to_intervals_icu(
             await db.commit()
             synced_count += 1
 
+        except CircuitOpenError as exc:
+            logger.warning("_run_strava_to_intervals_icu: circuit open, stopping batch: %s", exc)
+            break
         except Exception as exc:
             logger.error("_run_strava_to_intervals_icu: failed for activity %s: %s", strava_id, exc)
 
@@ -1162,9 +1188,13 @@ async def _run_strava_to_runalyze(
                 )
                 continue
 
-            runalyze_activity_id = await runalyze_client.upload_gpx(
+            runalyze_activity_id = await destination_rate_limiter.call(
+                "runalyze",
+                str(dest.id),
+                runalyze_client.upload_gpx,
                 gpx_bytes=gpx_bytes,
                 external_id=f"strava_{strava_id}",
+                user_id=str(user.id),
             )
 
             record = _SA(
@@ -1187,6 +1217,9 @@ async def _run_strava_to_runalyze(
             await db.commit()
             synced_count += 1
 
+        except CircuitOpenError as exc:
+            logger.warning("_run_strava_to_runalyze: circuit open, stopping batch: %s", exc)
+            break
         except Exception as exc:
             logger.error("_run_strava_to_runalyze: failed for activity %s: %s", strava_id, exc)
 

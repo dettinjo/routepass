@@ -240,3 +240,136 @@ class RateLimiter:
 
 RateLimitGuard = RateLimiter  # backwards-compatible alias
 rate_limit_guard = RateLimiter()
+
+
+class CircuitOpenError(RateLimitError):
+    """Raised when a destination connection has failed too many times in a row
+    and is being skipped for a cooldown period instead of retried immediately."""
+
+
+_CIRCUIT_FAIL_THRESHOLD = 5
+_CIRCUIT_COOLDOWN_SECONDS = 900  # 15 min
+
+
+class DestinationRateLimiter:
+    """Per-connection rate limiter + circuit breaker for destination platforms
+    whose limits are a simple sliding window (ProviderPolicy.window_seconds /
+    window_limit) rather than Strava's shared app-pool model — intervals.icu and
+    Runalyze are authenticated per end-user account, so the budget is per
+    connection, not per app.
+
+    Also guards against hammering a broken account (e.g. revoked API key): after
+    _CIRCUIT_FAIL_THRESHOLD consecutive failures for a connection, further calls
+    are short-circuited for _CIRCUIT_COOLDOWN_SECONDS instead of retried.
+    """
+
+    def __init__(self) -> None:
+        self._redis: aioredis.Redis | None = None
+        self._policy_cache: dict[str, tuple[int | None, int | None]] = {}
+
+    async def get_redis(self) -> aioredis.Redis:
+        if self._redis is None:
+            self._redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        return self._redis
+
+    async def _window_for(self, platform: str) -> tuple[int | None, int | None]:
+        """Return (window_seconds, window_limit) for platform, cached 60s in Redis."""
+        r = await self.get_redis()
+        cache_key = f"routepass:limits:dest:{platform}"
+        cached = await r.get(cache_key)
+        if cached is not None:
+            try:
+                data = json.loads(cached)
+                return data.get("window_seconds"), data.get("window_limit")
+            except (ValueError, TypeError):
+                pass
+
+        window_seconds: int | None = None
+        window_limit: int | None = None
+        try:
+            from sqlalchemy import select
+
+            from app.db.models.governance import ProviderPolicy
+            from app.db.session import AsyncSessionLocal
+
+            async with AsyncSessionLocal() as db:
+                policy = (
+                    await db.execute(
+                        select(ProviderPolicy).where(ProviderPolicy.platform == platform)
+                    )
+                ).scalar_one_or_none()
+            if policy:
+                window_seconds = policy.window_seconds
+                window_limit = policy.window_limit
+        except Exception as exc:
+            logger.warning("DestinationRateLimiter: policy load failed for %s: %s", platform, exc)
+
+        await r.set(
+            cache_key,
+            json.dumps({"window_seconds": window_seconds, "window_limit": window_limit}),
+            ex=60,
+        )
+        return window_seconds, window_limit
+
+    async def call(
+        self,
+        platform: str,
+        connection_id: str,
+        fn: Callable,
+        *args: Any,
+        user_id: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        r = await self.get_redis()
+        breaker_key = f"cb:{platform}:{connection_id}:fails"
+        cooldown_key = f"cb:{platform}:{connection_id}:cooldown"
+
+        if await r.get(cooldown_key):
+            raise CircuitOpenError(
+                f"{platform} connection {connection_id} is in cooldown after repeated failures"
+            )
+
+        window_seconds, window_limit = await self._window_for(platform)
+        if window_seconds and window_limit:
+            now = datetime.now(UTC)
+            window = int(now.timestamp()) // window_seconds
+            rl_key = f"dest:{platform}:{connection_id}:{window}"
+            count = int(await r.incr(rl_key))
+            if count == 1:
+                await r.expire(rl_key, window_seconds + 5)
+            if count > window_limit:
+                raise RateLimitError(
+                    f"{platform} rate limit reached for this account "
+                    f"({window_limit}/{window_seconds}s)"
+                )
+
+        try:
+            result = await fn(*args, **kwargs)
+        except Exception:
+            fails = await r.incr(breaker_key)
+            await r.expire(breaker_key, _CIRCUIT_COOLDOWN_SECONDS)
+            if fails >= _CIRCUIT_FAIL_THRESHOLD:
+                await r.set(cooldown_key, 1, ex=_CIRCUIT_COOLDOWN_SECONDS)
+                logger.warning(
+                    "DestinationRateLimiter: %s connection %s tripped the circuit "
+                    "breaker after %d consecutive failures — cooling down %ds.",
+                    platform,
+                    connection_id,
+                    fails,
+                    _CIRCUIT_COOLDOWN_SECONDS,
+                )
+            raise
+
+        await r.delete(breaker_key)
+
+        uid = user_id or current_user_id.get()
+        if uid:
+            date_key = datetime.now(UTC).strftime("%Y-%m-%d")
+            ukey = f"usage:{platform}:user:{uid}:overall:{date_key}"
+            await r.incr(ukey)
+            await r.expire(ukey, 86400 * 40)
+
+        return result
+
+
+destination_rate_limiter = DestinationRateLimiter()
