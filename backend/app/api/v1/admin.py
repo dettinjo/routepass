@@ -44,6 +44,8 @@ _PROVIDER_FIELDS = (
     "auth_type",
     "supports_webhooks",
     "enabled",
+    "tier_label",
+    "notes",
     "default_poll_min",
     "min_poll_min",
     "window_seconds",
@@ -68,6 +70,8 @@ class ProviderPolicyUpdate(BaseModel):
     role: str | None = None
     auth_type: str | None = None
     supports_webhooks: bool | None = None
+    tier_label: str | None = None
+    notes: str | None = None
     default_poll_min: int | None = None
     min_poll_min: int | None = None
     window_seconds: int | None = None
@@ -119,6 +123,83 @@ async def update_provider(
     await db.refresh(policy)
     await _invalidate_governor_state(db)
     return _serialize_provider(policy)
+
+
+@router.get("/metrics/providers")
+async def metrics_providers(
+    _: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(deps.get_db),
+) -> list[dict]:
+    """Cross-provider overview: tier, cost, limits, cadence, and real connected-user
+    counts — one row per provider for the admin dashboard's overview table.
+
+    Strava's cost/capacity/connected-count are aggregated from the strava_apps pool
+    (the real credential+capacity unit) rather than provider_policy, which for
+    Strava only holds per-app *defaults*. Every other provider counts distinct
+    users from their own Connection rows.
+    """
+    from app.db.models.connection import Connection as ConnectionModel
+    from app.db.models.user import StravaToken
+
+    policies = (
+        (await db.execute(select(ProviderPolicy).order_by(ProviderPolicy.platform))).scalars().all()
+    )
+
+    conn_counts = dict(
+        (
+            await db.execute(
+                select(ConnectionModel.platform, func.count(func.distinct(ConnectionModel.user_id)))
+                .where(ConnectionModel.status != "disconnected")
+                .group_by(ConnectionModel.platform)
+            )
+        ).all()
+    )
+
+    strava_connected = (
+        await db.execute(select(func.count(func.distinct(StravaToken.user_id))))
+    ).scalar() or 0
+    strava_apps = (
+        (await db.execute(select(StravaApp).where(StravaApp.is_active == True)))  # noqa: E712
+        .scalars()
+        .all()
+    )
+    strava_cost = sum(a.monthly_cost_cents for a in strava_apps)
+    strava_slots = sum(a.athlete_cap for a in strava_apps)
+
+    out = []
+    for p in policies:
+        is_strava = p.platform == "strava"
+        out.append(
+            {
+                "platform": p.platform,
+                "role": p.role,
+                "enabled": p.enabled,
+                "tier_label": p.tier_label,
+                "notes": p.notes,
+                "connected_users": strava_connected
+                if is_strava
+                else conn_counts.get(p.platform, 0),
+                "monthly_cost_cents": strava_cost if is_strava else p.monthly_cost_cents,
+                "capacity_note": (
+                    f"{strava_slots} athlete slots across {len(strava_apps)} app(s)"
+                    if is_strava
+                    else None
+                ),
+                "default_poll_min": p.default_poll_min,
+                "min_poll_min": p.min_poll_min,
+                "window_seconds": p.window_seconds,
+                "window_limit": p.window_limit,
+                "daily_limit": p.daily_limit,
+                "read_limit_15min": p.read_limit_15min,
+                "read_limit_daily": p.read_limit_daily,
+                "overall_limit_15min": p.overall_limit_15min,
+                "overall_limit_daily": p.overall_limit_daily,
+                "refresh_strategy": p.refresh_strategy,
+                "initial_backfill_limit": p.initial_backfill_limit,
+                "page_size": p.page_size,
+            }
+        )
+    return out
 
 
 # ── Governor config ──────────────────────────────────────────────────────────

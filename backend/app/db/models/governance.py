@@ -48,6 +48,12 @@ class ProviderPolicy(Base):
     supports_webhooks: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
     enabled: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True)
 
+    # Human-readable subscription/tier context (e.g. "Standard, self-upgraded to
+    # 10 athletes" or "Free / fair-use, no published limit") — the raw numbers
+    # below don't explain themselves, this does. Free text, admin-editable.
+    tier_label: Mapped[str | None] = mapped_column(sa.String, nullable=True)
+    notes: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+
     # Polling cadence (source platforms)
     default_poll_min: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
     min_poll_min: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)

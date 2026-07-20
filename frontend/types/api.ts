@@ -225,6 +225,8 @@ export interface AdminProviderPolicy {
   auth_type: string
   supports_webhooks: boolean
   enabled: boolean
+  tier_label: string | null
+  notes: string | null
   default_poll_min: number | null
   min_poll_min: number | null
   window_seconds: number | null
@@ -242,6 +244,30 @@ export interface AdminProviderPolicy {
   headroom_pct: number
   free_reserve_pct: number
   updated_at: string
+}
+
+export interface AdminProviderOverviewRow {
+  platform: string
+  role: 'source' | 'destination' | 'both'
+  enabled: boolean
+  tier_label: string | null
+  notes: string | null
+  connected_users: number
+  monthly_cost_cents: number
+  /** Extra context for Strava's aggregated capacity, e.g. "10 athlete slots across 1 app(s)" */
+  capacity_note: string | null
+  default_poll_min: number | null
+  min_poll_min: number | null
+  window_seconds: number | null
+  window_limit: number | null
+  daily_limit: number | null
+  read_limit_15min: number | null
+  read_limit_daily: number | null
+  overall_limit_15min: number | null
+  overall_limit_daily: number | null
+  refresh_strategy: 'webhook' | 'poll' | 'none'
+  initial_backfill_limit: number | null
+  page_size: number | null
 }
 
 export interface AdminStravaApp {

@@ -33,7 +33,10 @@ async def test_self_hosted_user_is_admin_and_registry_seeded(
     assert providers["strava"]["athlete_capacity"] == 10
     assert providers["strava"]["monthly_cost_cents"] == 1199
     assert providers["strava"]["supports_webhooks"] is True
+    assert providers["strava"]["tier_label"] == "Standard, self-upgraded (10 athletes)"
     assert providers["komoot"]["default_poll_min"] == 120
+    assert providers["komoot"]["tier_label"] == "Unofficial (no published tier)"
+    assert providers["komoot"]["notes"]
 
 
 @pytest.mark.asyncio
@@ -49,6 +52,22 @@ async def test_update_provider(
         )
     assert r.status_code == 200
     assert r.json()["default_poll_min"] == 90
+
+
+@pytest.mark.asyncio
+async def test_update_provider_tier_label_and_notes(
+    async_client: AsyncClient, free_user_headers: dict, db: AsyncSession
+):
+    await ensure_registry_seeded(db)
+    with patch("app.api.deps.settings.DEPLOYMENT_MODE", "selfhosted"):
+        r = await async_client.patch(
+            "/api/v1/admin/providers/strava",
+            json={"tier_label": "Extended Access", "notes": "Upgraded via review."},
+            headers=free_user_headers,
+        )
+    assert r.status_code == 200
+    assert r.json()["tier_label"] == "Extended Access"
+    assert r.json()["notes"] == "Upgraded via review."
 
 
 @pytest.mark.asyncio
@@ -119,3 +138,69 @@ async def test_metrics_overview(async_client: AsyncClient, free_user_headers: di
     assert data["self_hosted"] is True
     assert data["strava"]["athlete_capacity"] >= 10
     assert data["monthly_cost_cents"] >= 1199
+
+
+@pytest.mark.asyncio
+async def test_metrics_providers_overview(
+    async_client: AsyncClient, free_user, free_user_headers: dict, db: AsyncSession
+):
+    """Cross-provider overview aggregates real connected-user counts and, for
+    Strava, rolls up cost/capacity from the app pool rather than provider_policy."""
+    from datetime import UTC, datetime
+
+    from app.db.models.connection import Connection
+    from app.db.models.user import StravaApp, StravaToken
+
+    await ensure_registry_seeded(db)
+
+    db.add(
+        StravaApp(
+            id=1,
+            client_id="1",
+            client_secret=b"enc",
+            display_name="App",
+            is_active=True,
+            athlete_cap=10,
+            monthly_cost_cents=1199,
+        )
+    )
+    db.add(
+        StravaToken(
+            user_id=free_user.id,
+            strava_app_id=1,
+            strava_athlete_id=1,
+            access_token=b"e",
+            refresh_token=b"e",
+            expires_at=datetime.now(UTC),
+            connected_at=datetime.now(UTC),
+        )
+    )
+    db.add(Connection(user_id=free_user.id, platform="komoot", display_name="K", status="active"))
+    await db.commit()
+
+    with patch("app.api.deps.settings.DEPLOYMENT_MODE", "selfhosted"):
+        r = await async_client.get("/api/v1/admin/metrics/providers", headers=free_user_headers)
+    assert r.status_code == 200
+    rows = {row["platform"]: row for row in r.json()}
+
+    strava = rows["strava"]
+    assert strava["connected_users"] == 1
+    assert strava["monthly_cost_cents"] == 1199
+    assert strava["capacity_note"] == "10 athlete slots across 1 app(s)"
+    assert strava["tier_label"] == "Standard, self-upgraded (10 athletes)"
+
+    komoot = rows["komoot"]
+    assert komoot["connected_users"] == 1
+    assert komoot["capacity_note"] is None
+
+    runalyze = rows["runalyze"]
+    assert runalyze["connected_users"] == 0
+
+
+@pytest.mark.asyncio
+async def test_metrics_providers_forbidden_for_non_admin(
+    async_client: AsyncClient, free_user_headers: dict
+):
+    with patch("app.api.deps.settings.DEPLOYMENT_MODE", "cloud"):
+        r = await async_client.get("/api/v1/admin/metrics/providers", headers=free_user_headers)
+    assert r.status_code == 403

@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models.governance import GovernorConfig, ProviderPolicy
 
 # Seed values reflect today's hardcoded limits (rate_limit.py, polling.py) plus the
-# researched provider limits/costs. Admin edits take precedence after first seed.
+# researched provider limits/costs. Admin edits take precedence after first seed —
+# ensure_registry_seeded() never overwrites an existing row.
 DEFAULT_PROVIDER_POLICIES: list[dict] = [
     dict(
         platform="komoot",
@@ -23,6 +24,13 @@ DEFAULT_PROVIDER_POLICIES: list[dict] = [
         refresh_strategy="poll",
         initial_backfill_limit=50,
         page_size=50,
+        tier_label="Unofficial (no published tier)",
+        notes=(
+            "No public API — uses the unofficial web API (v006/v007, Basic Auth). "
+            "No documented rate limits, no webhooks, and it can break without "
+            "notice. Poll conservatively and back off on errors; there is no paid "
+            "tier to upgrade to."
+        ),
     ),
     dict(
         platform="garmin",
@@ -33,6 +41,13 @@ DEFAULT_PROVIDER_POLICIES: list[dict] = [
         refresh_strategy="poll",
         initial_backfill_limit=50,
         page_size=50,
+        tier_label="Unofficial (no published tier)",
+        notes=(
+            "Uses the unofficial garminconnect SDK — subject to login rate-limits, "
+            "account lockouts and MFA challenges under heavy use. The official "
+            "Garmin Connect Developer Program requires a business entity and a "
+            "one-time $5,000 fee for Health API production access; not used here."
+        ),
     ),
     dict(
         platform="polar",
@@ -41,6 +56,8 @@ DEFAULT_PROVIDER_POLICIES: list[dict] = [
         default_poll_min=60,
         min_poll_min=30,
         refresh_strategy="poll",
+        tier_label="Not yet implemented",
+        notes="Placeholder policy — Polar Flow is not yet wired up as a source.",
     ),
     dict(
         platform="wahoo",
@@ -49,6 +66,8 @@ DEFAULT_PROVIDER_POLICIES: list[dict] = [
         default_poll_min=60,
         min_poll_min=30,
         refresh_strategy="poll",
+        tier_label="Not yet implemented",
+        notes="Placeholder policy — Wahoo is not yet wired up as a source.",
     ),
     dict(
         platform="strava",
@@ -64,6 +83,16 @@ DEFAULT_PROVIDER_POLICIES: list[dict] = [
         monthly_cost_cents=1199,
         initial_backfill_limit=30,
         page_size=30,
+        tier_label="Standard, self-upgraded (10 athletes)",
+        notes=(
+            "Requires an active Strava subscription ($11.99/mo per developer, "
+            "since June 2026). Read/overall limits and athlete cap here are "
+            "per-app defaults for new apps — each strava_apps row self-corrects "
+            "from Strava's response headers once it starts making real calls. "
+            "Beyond 10 athletes: submit for review (up to 9,999) or Extended "
+            "Access (10,000+, no subscription needed, for large/official "
+            "integrations)."
+        ),
     ),
     dict(
         platform="intervals_icu",
@@ -72,6 +101,12 @@ DEFAULT_PROVIDER_POLICIES: list[dict] = [
         refresh_strategy="none",
         window_seconds=1,
         window_limit=10,
+        tier_label="Free / fair-use",
+        notes=(
+            "Official API, free. Documented limits: per-day (resets midnight "
+            "UTC) + per-15min window, plus a hard 10 req/s per-IP edge limit. "
+            "Per-app and per-athlete limits are being added by intervals.icu."
+        ),
     ),
     dict(
         platform="runalyze",
@@ -80,6 +115,12 @@ DEFAULT_PROVIDER_POLICIES: list[dict] = [
         refresh_strategy="none",
         window_seconds=60,
         window_limit=30,
+        tier_label="Free / fair-use",
+        notes=(
+            "Official Personal API, free. No hard rate limit currently enforced "
+            "by Runalyze — governed by a fair-use policy; they may add a limit "
+            "in the future. window_limit here is our own conservative pacing."
+        ),
     ),
 ]
 

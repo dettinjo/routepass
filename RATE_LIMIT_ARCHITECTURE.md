@@ -261,6 +261,13 @@ Per provider: capacity used/total (15-min, daily, **read vs overall** for Strava
 athlete slots used/capacity, error/429 rate, current throttle state, monthly cost,
 webhook health. Sparklines for the last 24h/7d.
 
+✅ **Shipped** (`GET /admin/metrics/providers` + Providers-tab overview table): one
+row per platform with a human-readable `tier_label` + `notes` (why the numbers are
+what they are — e.g. "unofficial, no published limits" vs "Standard, self-upgraded"),
+real connected-user counts (Strava from `strava_tokens`, everyone else from
+`connections`), cost, cadence, and a limits summary. Full `provider_policy` editing
+(all 19 fields, not just poll interval) is in the Manage-providers form below it.
+
 ### 11.3 Strava app pool
 Per app: athletes assigned / cap, 15-min & daily usage (read + overall), cost, status,
 least-loaded ranking; "add app" / "request review" prompts when near cap.

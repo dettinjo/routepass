@@ -7,6 +7,7 @@ import type {
   AdminGovernorConfig,
   AdminGovernorState,
   AdminMetricsOverview,
+  AdminProviderOverviewRow,
   AdminProviderPolicy,
   AdminRevenue,
   AdminStravaApp,
@@ -99,7 +100,18 @@ export function useUpdateAdminProvider() {
   return useMutation({
     mutationFn: ({ platform, ...body }: Partial<AdminProviderPolicy> & { platform: string }) =>
       apiPatch<AdminProviderPolicy>(`/api/v1/admin/providers/${platform}`, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'providers'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['admin', 'providers'] })
+      qc.invalidateQueries({ queryKey: ['admin', 'metrics', 'providers'] })
+    },
+  })
+}
+
+export function useAdminProvidersOverview() {
+  return useQuery<AdminProviderOverviewRow[]>({
+    queryKey: ['admin', 'metrics', 'providers'],
+    queryFn: () => apiGet<AdminProviderOverviewRow[]>('/api/v1/admin/metrics/providers'),
+    staleTime: 30_000,
   })
 }
 
