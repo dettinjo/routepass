@@ -69,3 +69,8 @@ export function maskApiKey(key: string): string {
 export function isPaidTier(tier?: string | null): boolean {
   return !!tier && tier !== 'free'
 }
+
+// Format integer cents as a currency string, e.g. 499 -> "$4.99"
+export function formatCents(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`
+}

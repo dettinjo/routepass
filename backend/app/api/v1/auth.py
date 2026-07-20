@@ -143,6 +143,11 @@ async def get_current_user_profile(
     if is_comp_email(user.email):
         tier = "business"
 
+    # Mirrors require_admin: self-hosted owner + comped accounts are always admin.
+    is_admin_effective = (
+        settings.DEPLOYMENT_MODE == "selfhosted" or user.is_admin or is_comp_email(user.email)
+    )
+
     from app.db.models.connection import Connection as ConnectionModel
     from app.db.models.user import StravaToken
 
@@ -161,6 +166,7 @@ async def get_current_user_profile(
         "email": user.email,
         "name": user.name,
         "is_active": user.is_active,
+        "is_admin": is_admin_effective,
         "tier": tier,
         "connections": [{"platform": p, "connected": True} for p in sorted(connected_platforms)],
         # Legacy fields retained for backward-compatibility until frontend is updated (F3).

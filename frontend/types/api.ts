@@ -14,6 +14,7 @@ export interface UserMe {
   email: string
   name?: string | null
   created_at: string
+  is_admin: boolean
   // Connection status
   komoot_connected: boolean
   strava_connected: boolean
@@ -213,4 +214,146 @@ export interface ApiError {
 
 export interface MessageResponse {
   message: string
+}
+
+// ── Admin ─────────────────────────────────────────────────────────────────────
+
+export interface AdminProviderPolicy {
+  id: string
+  platform: string
+  role: 'source' | 'destination' | 'both'
+  auth_type: string
+  supports_webhooks: boolean
+  enabled: boolean
+  default_poll_min: number | null
+  min_poll_min: number | null
+  window_seconds: number | null
+  window_limit: number | null
+  daily_limit: number | null
+  read_limit_15min: number | null
+  read_limit_daily: number | null
+  overall_limit_15min: number | null
+  overall_limit_daily: number | null
+  athlete_capacity: number | null
+  monthly_cost_cents: number
+  initial_backfill_limit: number | null
+  page_size: number | null
+  refresh_strategy: 'webhook' | 'poll' | 'none'
+  headroom_pct: number
+  free_reserve_pct: number
+  updated_at: string
+}
+
+export interface AdminStravaApp {
+  id: number
+  client_id: string
+  display_name: string
+  is_active: boolean
+  athlete_cap: number
+  monthly_cost_cents: number
+  read_limit_15min: number
+  read_limit_daily: number
+  overall_limit_15min: number
+  overall_limit_daily: number
+}
+
+export interface AdminGovernorConfig {
+  coverage_target_pct: number
+  paid_reservation_pct: number
+  free_degradation_enabled: boolean
+  infra_monthly_cost_cents: number
+  updated_at: string
+}
+
+export interface AdminGovernorState {
+  self_hosted: boolean
+  monthly_cost_cents: number
+  monthly_revenue_cents: number
+  coverage_target_pct: number
+  paid_reservation_pct: number
+  free_degradation_enabled: boolean
+  economic_level: number
+  strava_total_slots: number
+  strava_reserved_paid_slots: number
+  strava_free_capacity_slots: number
+  strava_free_slots_used: number
+  strava_admission_open: boolean
+  free_tier_level: number
+  computed_at: string
+}
+
+export interface AdminMetricsOverview {
+  self_hosted: boolean
+  monthly_cost_cents: number
+  strava: { active_apps: number; athlete_capacity: number }
+  paid_subscriptions: number
+  coverage_target_pct: number
+  paid_reservation_pct: number
+}
+
+export interface AdminRevenue {
+  monthly_revenue_cents: number
+  active_paid_subscriptions: number
+  breakdown_by_plan: Record<string, number>
+}
+
+export interface AdminAlert {
+  severity: 'ok' | 'info' | 'warning' | 'critical'
+  message: string
+}
+
+export interface AdminUserRow {
+  id: string
+  email: string
+  name: string | null
+  tier: Tier
+  subscription_status: string | null
+  is_admin: boolean
+  is_comp: boolean
+  created_at: string
+  last_login_at: string | null
+  connections_count: number
+  error_connections_count: number
+  strava_requests_today: number
+}
+
+export interface AdminUsersPage {
+  total: number
+  limit: number
+  offset: number
+  users: AdminUserRow[]
+}
+
+export interface AdminConnectionDetail {
+  id: string
+  platform: string
+  status: string
+  display_name: string
+  last_error: string | null
+  last_synced_at: string | null
+  poll_interval_effective_min: number | null
+}
+
+export interface AdminJobEntry {
+  job_type: string
+  status: string
+  error_message: string | null
+  enqueued_at: string | null
+  completed_at: string | null
+}
+
+export interface AdminUserDetail {
+  id: string
+  email: string
+  name: string | null
+  is_admin: boolean
+  is_comp: boolean
+  created_at: string
+  last_login_at: string | null
+  tier: Tier
+  subscription_status: string | null
+  stripe_customer_id: string | null
+  connections: AdminConnectionDetail[]
+  recent_jobs: AdminJobEntry[]
+  usage_today: Record<string, number>
 }

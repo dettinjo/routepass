@@ -149,3 +149,25 @@ async def test_me_reports_free_tier_in_cloud(
         resp = await async_client.get("/api/v1/auth/me", headers=free_user_headers)
     assert resp.status_code == 200
     assert resp.json()["tier"] == "free"
+
+
+@pytest.mark.asyncio
+async def test_me_reports_is_admin_effective(
+    async_client: AsyncClient,
+    free_user_headers: dict,
+):
+    """is_admin mirrors require_admin: true in self-hosted or for comp emails."""
+    with patch("app.api.v1.auth.settings.DEPLOYMENT_MODE", "selfhosted"):
+        resp = await async_client.get("/api/v1/auth/me", headers=free_user_headers)
+    assert resp.json()["is_admin"] is True
+
+    with patch("app.api.v1.auth.settings.DEPLOYMENT_MODE", "cloud"):
+        resp = await async_client.get("/api/v1/auth/me", headers=free_user_headers)
+    assert resp.json()["is_admin"] is False
+
+    with (
+        patch("app.api.v1.auth.settings.DEPLOYMENT_MODE", "cloud"),
+        patch("app.core.tiers.settings.ADMIN_EMAILS", "free@test.com"),
+    ):
+        resp = await async_client.get("/api/v1/auth/me", headers=free_user_headers)
+    assert resp.json()["is_admin"] is True

@@ -15,6 +15,7 @@ import {
   ExternalLink,
   ChevronLeft,
   ChevronRight,
+  ShieldCheck,
 } from 'lucide-react'
 import { cn, isPaidTier } from '@/lib/utils'
 import { Badge } from '@/components/ui'
@@ -27,6 +28,7 @@ interface NavItem {
   icon:    React.ElementType
   proOnly?: boolean
   external?: boolean
+  adminOnly?: boolean
 }
 
 const PRIMARY_NAV: NavItem[] = [
@@ -39,6 +41,7 @@ const PRIMARY_NAV: NavItem[] = [
 ]
 
 const SECONDARY_NAV: NavItem[] = [
+  { href: '/admin',     label: 'Admin',     icon: ShieldCheck, adminOnly: true },
   { href: '/billing',   label: 'Billing',   icon: CreditCard },
   { href: '/settings',  label: 'Settings',  icon: Settings2 },
   { href: 'https://routepass.online/docs', label: 'Docs', icon: ExternalLink, external: true },
@@ -48,7 +51,9 @@ export function Sidebar() {
   const pathname  = usePathname()
   const user      = useAuthStore((s) => s.user)
   const isPro     = isPaidTier(user?.tier)
+  const isAdmin   = !!user?.is_admin
   const [collapsed, setCollapsed] = useState(false)
+  const secondaryNav = SECONDARY_NAV.filter((item) => !item.adminOnly || isAdmin)
 
   return (
     <aside
@@ -76,7 +81,7 @@ export function Sidebar() {
 
       {/* Secondary nav */}
       <nav className="px-3 py-4 space-y-1" aria-label="Settings navigation">
-        {SECONDARY_NAV.map((item) => (
+        {secondaryNav.map((item) => (
           <NavLink
             key={item.href}
             item={item}
