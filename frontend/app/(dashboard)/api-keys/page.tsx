@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useAuthStore } from '@/store/auth'
 import { useApiKeys, useCreateApiKey, useRevokeApiKey } from '@/hooks/use-api-keys'
-import { formatRelative } from '@/lib/utils'
+import { formatRelative, isPaidTier } from '@/lib/utils'
 import type { ApiKey, ApiKeyCreated } from '@/types/api'
 
 // ── Newly-created key banner ───────────────────────────────────────────────────
@@ -127,7 +127,7 @@ export default function ApiKeysPage() {
   const [newKey, setNewKey] = useState<ApiKeyCreated | null>(null)
   const { data, isLoading } = useApiKeys()
   const user = useAuthStore((s) => s.user)
-  const isPro = user?.tier === 'pro'
+  const isPro = isPaidTier(user?.tier)
   const keys = data?.data ?? []
   const activeCount = keys.filter((k) => !k.revoked_at).length
 

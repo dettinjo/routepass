@@ -12,8 +12,14 @@ class Settings(BaseSettings):
     STRAVA_CLIENT_SECRET: str
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
-    STRIPE_PRICE_PRO: str = ""
+    STRIPE_PRICE_PRO: str = ""  # legacy alias for the annual plan
+    STRIPE_PRICE_PRO_MONTHLY: str = ""
+    STRIPE_PRICE_PRO_ANNUAL: str = ""
     STRIPE_PRICE_LIFETIME: str = ""
+
+    # Comma-separated emails that are always treated as admin and comped to the top
+    # tier (cloud mode). Lets the operator keep access without a DB flag.
+    ADMIN_EMAILS: str = ""
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GITHUB_CLIENT_ID: str = ""

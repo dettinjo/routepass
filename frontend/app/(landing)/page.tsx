@@ -379,8 +379,8 @@ const PRICING = [
   },
   {
     name: 'Pro',
-    price: '$29',
-    period: '/ year  ·  $3.49/mo',
+    price: '$4.99',
+    period: '/ month  ·  or $39/yr',
     badge: 'Most popular',
     highlight: true,
     features: [
@@ -389,6 +389,7 @@ const PRICING = [
       '12-month history backfill',
       '5 sync rules per pipeline',
       'REST API + outbound webhooks',
+      'Priority sync + reserved Strava slot',
       'Email support',
     ],
     cta: 'Get started',
@@ -397,7 +398,7 @@ const PRICING = [
   },
   {
     name: 'Lifetime',
-    price: '$79',
+    price: '$99',
     period: 'one-time',
     badge: 'Limited · ~200 slots',
     highlight: false,

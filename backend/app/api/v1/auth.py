@@ -137,6 +137,12 @@ async def get_current_user_profile(
     if settings.DEPLOYMENT_MODE == "selfhosted" and tier == "free":
         tier = "pro"
 
+    # Operator-comped accounts (ADMIN_EMAILS) report the top tier in cloud mode too.
+    from app.core.tiers import is_comp_email
+
+    if is_comp_email(user.email):
+        tier = "business"
+
     from app.db.models.connection import Connection as ConnectionModel
     from app.db.models.user import StravaToken
 

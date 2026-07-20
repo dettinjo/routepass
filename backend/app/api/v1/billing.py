@@ -22,7 +22,30 @@ router = APIRouter(tags=["billing"])
 
 
 class CheckoutRequest(BaseModel):
-    tier: str = "pro"
+    plan: str | None = None
+    tier: str | None = None  # legacy: "pro" | "lifetime"
+
+
+@router.get("/plans")
+async def list_plans() -> dict:
+    """Public pricing catalog + whether checkout is actually wired up (Stripe configured)."""
+    from app.core.tiers import PLANS, billing_configured
+
+    return {
+        "billing_configured": billing_configured(),
+        "currency": "usd",
+        "plans": [
+            {
+                "id": p.id,
+                "name": p.name,
+                "tier": p.tier,
+                "interval": p.interval,
+                "amount_cents": p.amount_cents,
+            }
+            for p in PLANS.values()
+            if p.id != "free"
+        ],
+    }
 
 
 @router.get("/subscription")
@@ -78,14 +101,14 @@ async def create_checkout_session(
             detail="Billing is not available in self-hosted mode.",
         )
 
-    if payload.tier == "pro":
-        price_id = settings.STRIPE_PRICE_PRO
-        checkout_mode = "subscription"
-    elif payload.tier == "lifetime":
-        price_id = settings.STRIPE_PRICE_LIFETIME
-        checkout_mode = "payment"
-    else:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid subscription tier.")
+    from app.core.tiers import PLANS, stripe_price_for
+
+    plan_id = payload.plan or {"pro": "pro_annual", "lifetime": "lifetime"}.get(payload.tier or "")
+    plan = PLANS.get(plan_id or "")
+    if plan is None or plan.id == "free":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid subscription plan.")
+    price_id = stripe_price_for(plan)
+    checkout_mode = plan.checkout_mode
 
     if not settings.STRIPE_SECRET_KEY:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not configured.")

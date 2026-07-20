@@ -5,7 +5,7 @@ import { Card, CardHeader, CardTitle, CardContent, CardFooter } from '@/componen
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useBillingSubscription, useCheckout, useBillingPortal } from '@/hooks/use-billing'
-import { formatRelative } from '@/lib/utils'
+import { formatRelative, isPaidTier } from '@/lib/utils'
 
 const FREE_FEATURES = [
   'Komoot → Strava sync',
@@ -36,7 +36,7 @@ export default function BillingPage() {
   const { mutate: checkout, isPending: checkingOut } = useCheckout()
   const { mutate: portal, isPending: openingPortal } = useBillingPortal()
 
-  const isPro = sub?.tier === 'pro' || sub?.tier === 'lifetime'
+  const isPro = isPaidTier(sub?.tier)
 
   return (
     <div className="space-y-6">
@@ -122,7 +122,10 @@ export default function BillingPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-heading-lg text-text-primary font-bold">
-              $29 <span className="text-body text-text-secondary font-normal">/ year</span>
+              $4.99 <span className="text-body text-text-secondary font-normal">/ month</span>
+            </p>
+            <p className="text-caption text-text-secondary -mt-1">
+              or $39 / year (save ~35%) · $99 lifetime
             </p>
             <ul className="space-y-2">
               {PRO_FEATURES.map((f) => (
@@ -133,13 +136,24 @@ export default function BillingPage() {
               ))}
             </ul>
           </CardContent>
-          <CardFooter>
-            {isPro
-              ? <Badge variant="connected" className="w-full justify-center py-1.5">Current plan</Badge>
-              : <Button className="w-full" loading={checkingOut} onClick={() => checkout('pro')}>
-                  Upgrade to Pro
+          <CardFooter className="flex-col gap-2 items-stretch">
+            {isPro ? (
+              <Badge variant="connected" className="w-full justify-center py-1.5">Current plan</Badge>
+            ) : (
+              <>
+                <Button className="w-full" loading={checkingOut} onClick={() => checkout('pro_monthly')}>
+                  Go Pro — $4.99/mo
                 </Button>
-            }
+                <div className="flex gap-2">
+                  <Button variant="secondary" size="sm" className="flex-1" loading={checkingOut} onClick={() => checkout('pro_annual')}>
+                    $39 / year
+                  </Button>
+                  <Button variant="secondary" size="sm" className="flex-1" loading={checkingOut} onClick={() => checkout('lifetime')}>
+                    $99 lifetime
+                  </Button>
+                </div>
+              </>
+            )}
           </CardFooter>
         </Card>
       </div>

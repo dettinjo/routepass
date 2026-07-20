@@ -64,3 +64,8 @@ export function truncate(str: string, max: number): string {
 export function maskApiKey(key: string): string {
   return `${key.slice(0, 8)}••••••••`
 }
+
+// Any non-free tier grants Pro-level features (pro, business, lifetime, comped operator).
+export function isPaidTier(tier?: string | null): boolean {
+  return !!tier && tier !== 'free'
+}

@@ -72,7 +72,7 @@ function ProfileCard() {
           <p className="text-label text-text-secondary mb-1">Plan</p>
           <p className="text-body text-text-primary capitalize flex items-center gap-2">
             {user?.tier ?? 'free'}
-            {user?.tier === 'pro' && <Badge variant="pro">Pro</Badge>}
+            {user && user.tier !== 'free' && <Badge variant="pro">Pro</Badge>}
           </p>
         </div>
         <p className="text-caption text-text-disabled">

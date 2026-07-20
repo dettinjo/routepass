@@ -78,7 +78,9 @@ async def require_admin(user: User = Depends(get_current_user)) -> User:
     (mirrors require_tier unlocking all features). In cloud mode, User.is_admin is
     required. Raises HTTP 403 otherwise.
     """
-    if settings.DEPLOYMENT_MODE == "selfhosted" or user.is_admin:
+    from app.core.tiers import is_comp_email
+
+    if settings.DEPLOYMENT_MODE == "selfhosted" or user.is_admin or is_comp_email(user.email):
         return user
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
@@ -103,6 +105,12 @@ def require_tier(min_tier: str) -> Callable:
     ) -> None:
         # Self-hosted: all features unlocked for the instance owner.
         if settings.DEPLOYMENT_MODE == "selfhosted":
+            return
+
+        # Operator-comped accounts (ADMIN_EMAILS) are treated as top tier.
+        from app.core.tiers import is_comp_email
+
+        if is_comp_email(user.email):
             return
 
         from app.db.models.subscription import Subscription

@@ -8,6 +8,7 @@ import { BrandIcon } from '@/components/brand-box'
 import { Button } from '@/components/ui/button'
 import { useAuthStore } from '@/store/auth'
 import { useRules, useCreateRule, useUpdateRule, useDeleteRule } from '@/hooks/use-rules'
+import { isPaidTier } from '@/lib/utils'
 import type { SyncRule } from '@/types/api'
 
 // ── Condition types ────────────────────────────────────────────────────────────
@@ -379,7 +380,7 @@ export default function RulesPage() {
   const [creating, setCreating] = useState(false)
   const { data, isLoading } = useRules()
   const user = useAuthStore((s) => s.user)
-  const isPro = user?.tier === 'pro'
+  const isPro = isPaidTier(user?.tier)
   const rules = data?.data ?? []
   const limit = isPro ? 5 : 1
   const atLimit = rules.length >= limit

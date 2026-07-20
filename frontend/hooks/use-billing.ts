@@ -12,10 +12,12 @@ export function useBillingSubscription() {
   })
 }
 
+export type PlanId = 'pro_monthly' | 'pro_annual' | 'lifetime'
+
 export function useCheckout() {
   return useMutation({
-    mutationFn: (tier: 'pro' | 'lifetime') =>
-      apiPost<{ url: string }>('/api/v1/billing/checkout', { tier }),
+    mutationFn: (plan: PlanId) =>
+      apiPost<{ url: string }>('/api/v1/billing/checkout', { plan }),
     onSuccess: ({ url }) => {
       window.location.href = url
     },

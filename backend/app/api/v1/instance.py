@@ -15,9 +15,13 @@ async def instance_info() -> dict:
     features, display the correct mode badge, etc.). No authentication
     required — all values are intentionally non-sensitive.
     """
+    from app.core.tiers import billing_configured
+
     return {
         "deployment_mode": settings.DEPLOYMENT_MODE,
-        "billing_enabled": settings.DEPLOYMENT_MODE == "cloud",
+        # True only when cloud mode AND Stripe is actually configured, so the UI can
+        # show the pricing page but avoid offering a checkout that would 503.
+        "billing_enabled": billing_configured(),
         "max_users": settings.MAX_USERS,
         "storage_backend": settings.STORAGE_BACKEND,
         "version": "0.1.0",

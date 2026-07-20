@@ -16,7 +16,7 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, isPaidTier } from '@/lib/utils'
 import { Badge } from '@/components/ui'
 import { useAuthStore } from '@/store/auth'
 import { useState } from 'react'
@@ -47,7 +47,7 @@ const SECONDARY_NAV: NavItem[] = [
 export function Sidebar() {
   const pathname  = usePathname()
   const user      = useAuthStore((s) => s.user)
-  const isPro     = user?.tier === 'pro'
+  const isPro     = isPaidTier(user?.tier)
   const [collapsed, setCollapsed] = useState(false)
 
   return (

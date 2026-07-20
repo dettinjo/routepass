@@ -22,15 +22,17 @@ export interface UserMe {
   polar_connected: boolean
   outdooractive_connected: boolean
   // Subscription
-  tier: 'free' | 'pro'
+  tier: Tier
   subscription?: Subscription
 }
+
+export type Tier = 'free' | 'pro' | 'business' | 'lifetime'
 
 // ── Subscription ──────────────────────────────────────────────────────────────
 
 export interface Subscription {
   id: string
-  tier: 'free' | 'pro'
+  tier: Tier
   status: 'active' | 'trialing' | 'past_due' | 'canceled'
   current_period_end: string | null
   stripe_customer_id: string | null
@@ -192,7 +194,7 @@ export interface ApiKeyCreated {
 // ── Billing ───────────────────────────────────────────────────────────────────
 
 export interface BillingSubscription {
-  tier: 'free' | 'pro' | 'lifetime'
+  tier: Tier
   status: 'active' | 'trialing' | 'past_due' | 'canceled'
   stripe_customer_id: string | null
   stripe_subscription_id: string | null
