@@ -7,9 +7,12 @@ the registry into the limiter/scheduler/governor. See RATE_LIMIT_ARCHITECTURE.md
 
 from __future__ import annotations
 
+import logging
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -18,7 +21,19 @@ from app.core.config import settings
 from app.db.models.governance import GovernorConfig, ProviderPolicy
 from app.db.models.user import StravaApp, User
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["admin"])
+
+
+async def _usage_count(redis, key: str) -> int:
+    """Read a usage counter, degrading to 0 if Redis is unavailable rather than
+    failing the whole dashboard request over a non-critical stat."""
+    try:
+        return int(await redis.get(key) or 0)
+    except Exception as exc:
+        logger.warning("admin: usage counter read failed for %s: %s", key, exc)
+        return 0
 
 
 # ── Providers ────────────────────────────────────────────────────────────────
@@ -291,8 +306,8 @@ async def user_usage(
     from datetime import datetime
 
     date_key = datetime.now(deps.UTC).strftime("%Y-%m-%d")
-    overall = int(await redis.get(f"usage:strava:user:{user_id}:overall:{date_key}") or 0)
-    read = int(await redis.get(f"usage:strava:user:{user_id}:read:{date_key}") or 0)
+    overall = await _usage_count(redis, f"usage:strava:user:{user_id}:overall:{date_key}")
+    read = await _usage_count(redis, f"usage:strava:user:{user_id}:read:{date_key}")
     return {
         "user_id": user_id,
         "date": date_key,
@@ -339,3 +354,342 @@ async def metrics_overview(
         "coverage_target_pct": governor.coverage_target_pct,
         "paid_reservation_pct": governor.paid_reservation_pct,
     }
+
+
+# ── Revenue (real MRR, from Stripe-backed subscriptions) ────────────────────────
+
+
+@router.get("/metrics/revenue")
+async def metrics_revenue(
+    _: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(deps.get_db),
+) -> dict:
+    """Real monthly-recurring-revenue estimate + a breakdown by plan.
+
+    Reuses the governor's conservative revenue estimate (same number the
+    degradation ladder acts on) so the dashboard and the enforcement logic never
+    disagree about "how much revenue do we have".
+    """
+    from app.core.governor import get_state
+    from app.core.tiers import PLANS, stripe_price_for
+    from app.db.models.subscription import Subscription
+
+    state = await get_state(db)
+
+    subs = (
+        (
+            await db.execute(
+                select(Subscription).where(
+                    Subscription.tier != "free", Subscription.status == "active"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    price_to_plan = {
+        stripe_price_for(plan): plan.id
+        for plan in PLANS.values()
+        if plan.id != "free" and stripe_price_for(plan)
+    }
+    breakdown: dict[str, int] = {}
+    for sub in subs:
+        plan_id = price_to_plan.get(sub.stripe_price_id or "") or (
+            "lifetime" if sub.tier == "lifetime" else "pro_annual"
+        )
+        breakdown[plan_id] = breakdown.get(plan_id, 0) + 1
+
+    return {
+        "monthly_revenue_cents": state.monthly_revenue_cents,
+        "active_paid_subscriptions": len(subs),
+        "breakdown_by_plan": breakdown,
+    }
+
+
+# ── Users ────────────────────────────────────────────────────────────────────
+
+
+def _serialize_user_row(
+    user: User,
+    tier: str | None,
+    sub_status: str | None,
+    conn_count: int,
+    error_conn_count: int,
+    strava_requests_today: int,
+) -> dict:
+    from app.core.tiers import is_comp_email
+
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "name": user.name,
+        "tier": tier or "free",
+        "subscription_status": sub_status,
+        "is_admin": user.is_admin,
+        "is_comp": is_comp_email(user.email),
+        "created_at": user.created_at.isoformat(),
+        "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+        "connections_count": conn_count,
+        "error_connections_count": error_conn_count,
+        "strava_requests_today": strava_requests_today,
+    }
+
+
+@router.get("/users")
+async def list_users(
+    limit: int = 50,
+    offset: int = 0,
+    search: str | None = None,
+    _: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(deps.get_db),
+    redis=Depends(deps.get_redis),
+) -> dict:
+    """Paginated user list with connection health and today's Strava usage."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    from app.db.models.connection import Connection as ConnectionModel
+    from app.db.models.subscription import Subscription
+
+    limit = max(1, min(limit, 200))
+
+    base_stmt = select(User)
+    if search:
+        base_stmt = base_stmt.where(User.email.ilike(f"%{search}%"))
+
+    total = (await db.execute(select(func.count()).select_from(base_stmt.subquery()))).scalar() or 0
+
+    users = (
+        (await db.execute(base_stmt.order_by(User.created_at.desc()).limit(limit).offset(offset)))
+        .scalars()
+        .all()
+    )
+
+    if not users:
+        return {"total": total, "limit": limit, "offset": offset, "users": []}
+
+    user_ids = [u.id for u in users]
+
+    subs = (
+        (await db.execute(select(Subscription).where(Subscription.user_id.in_(user_ids))))
+        .scalars()
+        .all()
+    )
+    sub_by_user = {s.user_id: s for s in subs}
+
+    conn_rows = (
+        await db.execute(
+            select(ConnectionModel.user_id, ConnectionModel.status).where(
+                ConnectionModel.user_id.in_(user_ids)
+            )
+        )
+    ).all()
+    conn_count: dict = {}
+    error_count: dict = {}
+    for uid, conn_status in conn_rows:
+        conn_count[uid] = conn_count.get(uid, 0) + 1
+        if conn_status == "error":
+            error_count[uid] = error_count.get(uid, 0) + 1
+
+    date_key = _dt.now(_UTC).strftime("%Y-%m-%d")
+    result_users = []
+    for u in users:
+        sub = sub_by_user.get(u.id)
+        usage = await _usage_count(redis, f"usage:strava:user:{u.id}:overall:{date_key}")
+        result_users.append(
+            _serialize_user_row(
+                u,
+                sub.tier if sub else None,
+                sub.status if sub else None,
+                conn_count.get(u.id, 0),
+                error_count.get(u.id, 0),
+                usage,
+            )
+        )
+
+    return {"total": total, "limit": limit, "offset": offset, "users": result_users}
+
+
+@router.get("/users/{user_id}")
+async def get_user_detail(
+    user_id: UUID,
+    _: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(deps.get_db),
+    redis=Depends(deps.get_redis),
+) -> dict:
+    """Per-user rate insight: connections, recent jobs, and today's usage per
+    provider — the drill-down behind the users table."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    from app.core.polling import effective_poll_interval_min
+    from app.core.tiers import is_comp_email
+    from app.db.models.connection import Connection as ConnectionModel
+    from app.db.models.subscription import Subscription
+    from app.db.models.sync import ConnectionSyncState, JobAuditLog
+
+    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+
+    sub = (
+        await db.execute(select(Subscription).where(Subscription.user_id == user_id))
+    ).scalar_one_or_none()
+
+    conn_rows = (
+        await db.execute(
+            select(
+                ConnectionModel, ConnectionSyncState.last_error, ConnectionSyncState.last_synced_at
+            )
+            .outerjoin(ConnectionSyncState, ConnectionSyncState.connection_id == ConnectionModel.id)
+            .where(ConnectionModel.user_id == user_id)
+        )
+    ).all()
+
+    connections = []
+    for conn, last_error, last_synced_at in conn_rows:
+        connections.append(
+            {
+                "id": str(conn.id),
+                "platform": conn.platform,
+                "status": conn.status,
+                "display_name": conn.display_name,
+                "last_error": last_error,
+                "last_synced_at": last_synced_at.isoformat() if last_synced_at else None,
+                "poll_interval_effective_min": effective_poll_interval_min(
+                    conn.platform, conn.poll_interval_min
+                ),
+            }
+        )
+
+    jobs = (
+        (
+            await db.execute(
+                select(JobAuditLog)
+                .where(JobAuditLog.user_id == user_id)
+                .order_by(JobAuditLog.enqueued_at.desc())
+                .limit(20)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    recent_jobs = [
+        {
+            "job_type": j.job_type,
+            "status": j.status,
+            "error_message": j.error_message,
+            "enqueued_at": j.enqueued_at.isoformat() if j.enqueued_at else None,
+            "completed_at": j.completed_at.isoformat() if j.completed_at else None,
+        }
+        for j in jobs
+    ]
+
+    date_key = _dt.now(_UTC).strftime("%Y-%m-%d")
+    usage_today = {}
+    for platform in ("strava", "intervals_icu", "runalyze"):
+        usage_today[platform] = await _usage_count(
+            redis, f"usage:{platform}:user:{user_id}:overall:{date_key}"
+        )
+
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "name": user.name,
+        "is_admin": user.is_admin,
+        "is_comp": is_comp_email(user.email),
+        "created_at": user.created_at.isoformat(),
+        "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+        "tier": sub.tier if sub else "free",
+        "subscription_status": sub.status if sub else None,
+        "stripe_customer_id": sub.stripe_customer_id if sub else None,
+        "connections": connections,
+        "recent_jobs": recent_jobs,
+        "usage_today": usage_today,
+    }
+
+
+# ── Alerts ───────────────────────────────────────────────────────────────────
+
+
+@router.get("/alerts")
+async def list_alerts(
+    _: User = Depends(deps.require_admin),
+    db: AsyncSession = Depends(deps.get_db),
+) -> list[dict]:
+    """Computed alert list surfaced on the Overview tab."""
+    from app.core.governor import (
+        LEVEL_DEFERRED,
+        LEVEL_PAUSED,
+        LEVEL_SOFT_THROTTLE,
+        get_state,
+    )
+    from app.db.models.connection import Connection as ConnectionModel
+
+    alerts: list[dict] = []
+    state = await get_state(db)
+
+    if not state.self_hosted:
+        if state.economic_level >= LEVEL_PAUSED:
+            cost = state.monthly_cost_cents / 100
+            revenue = state.monthly_revenue_cents / 100
+            alerts.append(
+                {
+                    "severity": "critical",
+                    "message": (
+                        f"Free-tier syncing is paused: cost (${cost:.2f}) far exceeds "
+                        f"revenue (${revenue:.2f})."
+                    ),
+                }
+            )
+        elif state.economic_level >= LEVEL_DEFERRED:
+            alerts.append(
+                {
+                    "severity": "warning",
+                    "message": "Free-tier syncing is deferred — cost is approaching revenue.",
+                }
+            )
+        elif state.economic_level >= LEVEL_SOFT_THROTTLE:
+            alerts.append(
+                {
+                    "severity": "info",
+                    "message": "Free-tier poll intervals are stretched (soft throttle).",
+                }
+            )
+
+        if not state.strava_admission_open:
+            alerts.append(
+                {
+                    "severity": "warning",
+                    "message": (
+                        f"Strava free slots are full "
+                        f"({state.strava_free_slots_used}/{state.strava_free_capacity_slots}) — "
+                        "new free connections are waitlisted."
+                    ),
+                }
+            )
+        elif state.strava_free_capacity_slots and (
+            state.strava_free_slots_used / state.strava_free_capacity_slots > 0.8
+        ):
+            alerts.append({"severity": "info", "message": "Strava free slots are over 80% full."})
+
+    error_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(ConnectionModel)
+            .where(ConnectionModel.status == "error")
+        )
+    ).scalar() or 0
+    if error_count > 0:
+        alerts.append(
+            {
+                "severity": "warning",
+                "message": f"{error_count} connection(s) are currently in an error state.",
+            }
+        )
+
+    if not alerts:
+        alerts.append({"severity": "ok", "message": "No active alerts."})
+
+    return alerts
