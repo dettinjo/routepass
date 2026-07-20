@@ -139,3 +139,124 @@ def test_backwards_compatible_names():
     assert rate_limit.WINDOW_15MIN_LIMIT == 90
     assert rate_limit.DAILY_LIMIT == 950
     assert rate_limit.RateLimitGuard is RateLimiter
+
+
+# ── Live-limit self-correction (RateLimiter._maybe_sync_live_limits) ────────────
+
+
+async def _make_test_session_factory():
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from app.db.base import Base
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    return engine, async_sessionmaker(engine, expire_on_commit=False)
+
+
+def _fn_with_headers(headers: dict | None):
+    class _FakeClient:
+        last_rate_limit_headers = headers
+
+    async def fn():
+        return "ok"
+
+    fn.__self__ = _FakeClient()
+    return fn
+
+
+@pytest.mark.asyncio
+async def test_maybe_sync_live_limits_corrects_drifted_app():
+    from app.db.models.user import StravaApp
+
+    engine, session_factory = await _make_test_session_factory()
+    async with session_factory() as s:
+        s.add(
+            StravaApp(
+                id=1,
+                client_id="c",
+                client_secret=b"enc",
+                display_name="A",
+                is_active=True,
+                overall_limit_15min=100,
+                overall_limit_daily=1000,
+                read_limit_15min=100,
+                read_limit_daily=1000,
+            )
+        )
+        await s.commit()
+
+    lim, fake = _limiter()
+    fn = _fn_with_headers({"X-RateLimit-Limit": "400,4000", "X-ReadRateLimit-Limit": "200,2000"})
+
+    with patch("app.db.session.AsyncSessionLocal", session_factory):
+        await lim._maybe_sync_live_limits(1, fn)
+
+    async with session_factory() as s:
+        from sqlalchemy import select
+
+        app = (await s.execute(select(StravaApp).where(StravaApp.id == 1))).scalar_one()
+    assert app.overall_limit_15min == 400
+    assert app.overall_limit_daily == 4000
+    assert app.read_limit_15min == 200
+    assert app.read_limit_daily == 2000
+
+    # Cache invalidated so the corrected numbers apply on the next call.
+    assert fake.store.get("routepass:limits:strava:1") is None
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_maybe_sync_live_limits_noop_without_headers():
+    lim, fake = _limiter()
+    fn = _fn_with_headers(None)
+
+    with patch("app.db.session.AsyncSessionLocal") as mock_session:
+        await lim._maybe_sync_live_limits(1, fn)
+        mock_session.assert_not_called()
+
+    assert "routepass:limits:strava:1:live_sync" not in fake.store
+
+
+@pytest.mark.asyncio
+async def test_maybe_sync_live_limits_throttled_within_ttl():
+    from app.db.models.user import StravaApp
+
+    engine, session_factory = await _make_test_session_factory()
+    async with session_factory() as s:
+        s.add(
+            StravaApp(
+                id=1,
+                client_id="c",
+                client_secret=b"enc",
+                display_name="A",
+                is_active=True,
+                overall_limit_15min=100,
+                overall_limit_daily=1000,
+            )
+        )
+        await s.commit()
+
+    lim, fake = _limiter()
+    fn = _fn_with_headers({"X-RateLimit-Limit": "400,4000"})
+
+    with patch("app.db.session.AsyncSessionLocal", session_factory):
+        await lim._maybe_sync_live_limits(1, fn)  # first call syncs
+
+        # Reset the app back to drifted values to prove the second call is a no-op.
+        async with session_factory() as s:
+            from sqlalchemy import select
+
+            app = (await s.execute(select(StravaApp).where(StravaApp.id == 1))).scalar_one()
+            app.overall_limit_15min = 999
+            await s.commit()
+
+        await lim._maybe_sync_live_limits(1, fn)  # throttled — must not touch DB
+
+        async with session_factory() as s:
+            from sqlalchemy import select
+
+            app = (await s.execute(select(StravaApp).where(StravaApp.id == 1))).scalar_one()
+    assert app.overall_limit_15min == 999  # untouched by the throttled second call
+    await engine.dispose()

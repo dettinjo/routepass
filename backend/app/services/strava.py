@@ -70,6 +70,20 @@ class StravaClient:
     def __init__(self, access_token: str) -> None:
         self.access_token = access_token
         self._auth_header = {"Authorization": f"Bearer {self.access_token}"}
+        # Populated from the most recent response's rate-limit headers. Strava has
+        # no dedicated "get my current limits" endpoint — the only way to know our
+        # stored config (athlete-upgrade tier, etc.) still matches reality is to
+        # read these headers, which RateLimiter uses to self-correct the registry.
+        self.last_rate_limit_headers: dict[str, str] | None = None
+
+    def _capture_rate_limit_headers(self, resp: httpx.Response) -> None:
+        headers = {}
+        for key in ("X-RateLimit-Limit", "X-ReadRateLimit-Limit"):
+            value = resp.headers.get(key)
+            if value:
+                headers[key] = value
+        if headers:
+            self.last_rate_limit_headers = headers
 
     def _client(self) -> httpx.AsyncClient:
         return httpx.AsyncClient(
@@ -116,6 +130,7 @@ class StravaClient:
         async with httpx.AsyncClient(headers=self._auth_header, timeout=60.0) as client:
             resp = await client.post(f"{STRAVA_BASE}/api/v3/uploads", data=data, files=files)
             resp.raise_for_status()
+            self._capture_rate_limit_headers(resp)
 
             upload_id = str(resp.json()["id"])
             logger.debug("Upload accepted — upload_id=%s", upload_id)
@@ -129,6 +144,7 @@ class StravaClient:
             for attempt in range(1, UPLOAD_MAX_ATTEMPTS + 1):
                 resp = await client.get(url)
                 resp.raise_for_status()
+                self._capture_rate_limit_headers(resp)
                 data = resp.json()
 
                 error = data.get("error")
@@ -162,6 +178,7 @@ class StravaClient:
                 json={"hide_from_home": hide_from_home},
             )
             resp.raise_for_status()
+            self._capture_rate_limit_headers(resp)
             logger.debug("Updated activity %s (hide_from_home=%s)", activity_id, hide_from_home)
 
     async def delete_activity(self, activity_id: str) -> None:
@@ -169,6 +186,7 @@ class StravaClient:
         async with self._client() as client:
             resp = await client.delete(f"{STRAVA_BASE}/api/v3/activities/{activity_id}")
             resp.raise_for_status()
+            self._capture_rate_limit_headers(resp)
             logger.debug("Deleted Strava activity %s", activity_id)
 
     async def get_activity(self, activity_id: str) -> dict[str, Any]:
@@ -176,6 +194,7 @@ class StravaClient:
         async with self._client() as client:
             resp = await client.get(f"{STRAVA_BASE}/api/v3/activities/{activity_id}")
             resp.raise_for_status()
+            self._capture_rate_limit_headers(resp)
             return resp.json()
 
     async def get_activities(
@@ -190,6 +209,7 @@ class StravaClient:
         async with self._client() as client:
             resp = await client.get(url, params=params)
             resp.raise_for_status()
+            self._capture_rate_limit_headers(resp)
             return resp.json()
 
     async def get_activity_streams(self, activity_id: str) -> dict[str, Any]:
@@ -199,4 +219,5 @@ class StravaClient:
         async with self._client() as client:
             resp = await client.get(url, params=params)
             resp.raise_for_status()
+            self._capture_rate_limit_headers(resp)
             return resp.json()

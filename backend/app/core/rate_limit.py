@@ -32,6 +32,7 @@ DAILY_LIMIT = FALLBACK_OVERALL_DAILY
 _STRAVA_WRITE_METHODS = {"upload_gpx", "update_activity", "delete_activity"}
 
 _LIMITS_CACHE_TTL = 60  # seconds; admin edits take effect within this window
+_LIVE_LIMIT_SYNC_TTL = 300  # seconds; throttles the opportunistic Strava-header sync
 
 # Attributes the current request/job to a user so the limiter can record per-user
 # usage without threading user_id through every call site. Set at job/request entry.
@@ -235,7 +236,76 @@ class RateLimiter:
                 pipe.expire(uokey, 86400 * 40)
         await pipe.execute()
 
-        return await fn(*args, **kwargs)
+        result = await fn(*args, **kwargs)
+        await self._maybe_sync_live_limits(app_id, fn)
+        return result
+
+    # ── Live-limit self-correction ──────────────────────────────────────────────
+
+    async def _maybe_sync_live_limits(self, app_id: int, fn: Callable) -> None:
+        """Opportunistically correct our stored Strava limits from the real values
+        Strava reports on the response headers of the call we just made.
+
+        Strava has no dedicated "get my current limits" endpoint (athlete-count
+        upgrades, tier changes, etc. only show up in response headers or the web
+        dashboard), so this is the only way our registry can stay in sync with
+        reality without a human re-entering numbers by hand. Throttled per app so
+        it's at most one extra DB round-trip every few minutes, not per call.
+        """
+        client = getattr(fn, "__self__", None)
+        headers = getattr(client, "last_rate_limit_headers", None)
+        if not headers:
+            return
+
+        r = await self.get_redis()
+        throttle_key = f"routepass:limits:strava:{app_id}:live_sync"
+        if await r.get(throttle_key):
+            return
+        await r.set(throttle_key, 1, ex=_LIVE_LIMIT_SYNC_TTL)
+
+        try:
+            overall = headers.get("X-RateLimit-Limit")
+            read = headers.get("X-ReadRateLimit-Limit")
+            if not overall and not read:
+                return
+
+            from sqlalchemy import select
+
+            from app.db.models.user import StravaApp
+            from app.db.session import AsyncSessionLocal
+
+            async with AsyncSessionLocal() as db:
+                app = (
+                    await db.execute(select(StravaApp).where(StravaApp.id == app_id))
+                ).scalar_one_or_none()
+                if app is None:
+                    return
+
+                changed = False
+                if overall:
+                    o15, oday = (int(x) for x in overall.split(","))
+                    if app.overall_limit_15min != o15 or app.overall_limit_daily != oday:
+                        app.overall_limit_15min, app.overall_limit_daily = o15, oday
+                        changed = True
+                if read:
+                    r15, rday = (int(x) for x in read.split(","))
+                    if app.read_limit_15min != r15 or app.read_limit_daily != rday:
+                        app.read_limit_15min, app.read_limit_daily = r15, rday
+                        changed = True
+
+                if changed:
+                    await db.commit()
+                    logger.info(
+                        "Rate limiter: synced live Strava limits for app %s from response headers.",
+                        app_id,
+                    )
+                    # Drop the cached effective limits so the corrected numbers
+                    # apply on the very next call instead of waiting out the TTL.
+                    await r.delete(f"routepass:limits:strava:{app_id}")
+        except Exception as exc:
+            logger.warning(
+                "Rate limiter: failed to sync live Strava limits for app %s: %s", app_id, exc
+            )
 
 
 RateLimitGuard = RateLimiter  # backwards-compatible alias

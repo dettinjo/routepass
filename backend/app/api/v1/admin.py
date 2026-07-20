@@ -228,14 +228,18 @@ class StravaAppUpdate(BaseModel):
     monthly_cost_cents: int | None = None
 
 
-def _serialize_app(a: StravaApp) -> dict:
-    # Never expose client_secret.
+def _serialize_app(a: StravaApp, connected_athletes: int | None = None) -> dict:
+    # Never expose client_secret. Strava has no API for athlete_cap or how many
+    # athletes are currently connected (dashboard-only) — but we ARE the source of
+    # truth for who has connected through us, so connected_athletes is a real
+    # count from our own DB, not a Strava-reported number.
     return {
         "id": a.id,
         "client_id": a.client_id,
         "display_name": a.display_name,
         "is_active": a.is_active,
         "athlete_cap": a.athlete_cap,
+        "connected_athletes": connected_athletes,
         "monthly_cost_cents": a.monthly_cost_cents,
         "read_limit_15min": a.read_limit_15min,
         "read_limit_daily": a.read_limit_daily,
@@ -249,8 +253,18 @@ async def list_strava_apps(
     _: User = Depends(deps.require_admin),
     db: AsyncSession = Depends(deps.get_db),
 ) -> list[dict]:
-    result = await db.execute(select(StravaApp).order_by(StravaApp.id))
-    return [_serialize_app(a) for a in result.scalars().all()]
+    from app.db.models.user import StravaToken
+
+    apps = (await db.execute(select(StravaApp).order_by(StravaApp.id))).scalars().all()
+
+    counts_rows = (
+        await db.execute(
+            select(StravaToken.strava_app_id, func.count()).group_by(StravaToken.strava_app_id)
+        )
+    ).all()
+    counts = dict(counts_rows)
+
+    return [_serialize_app(a, counts.get(a.id, 0)) for a in apps]
 
 
 @router.post("/strava-apps", status_code=status.HTTP_201_CREATED)

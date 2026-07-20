@@ -96,11 +96,20 @@ function StravaAppRow({ app }: { app: AdminStravaApp }) {
           <Badge variant={app.is_active ? 'connected' : 'neutral'}>
             {app.is_active ? 'active' : 'inactive'}
           </Badge>
+          {app.connected_athletes !== null && (
+            <Badge variant={app.connected_athletes >= app.athlete_cap ? 'error' : 'neutral'}>
+              {app.connected_athletes}/{app.athlete_cap} connected
+            </Badge>
+          )}
         </div>
         <p className="text-caption text-text-disabled mt-0.5">
-          {app.athlete_cap} slots · {formatCents(app.monthly_cost_cents)}/mo · read{' '}
-          {app.read_limit_15min}/15min·{app.read_limit_daily}/day · overall {app.overall_limit_15min}
-          /15min·{app.overall_limit_daily}/day
+          {app.athlete_cap} slot cap (manual — Strava has no API for this) ·{' '}
+          {formatCents(app.monthly_cost_cents)}/mo · read {app.read_limit_15min}/15min·
+          {app.read_limit_daily}/day · overall {app.overall_limit_15min}/15min·
+          {app.overall_limit_daily}/day
+        </p>
+        <p className="text-caption text-text-disabled">
+          Limits above sync automatically from Strava&rsquo;s response headers.
         </p>
       </div>
       <Button

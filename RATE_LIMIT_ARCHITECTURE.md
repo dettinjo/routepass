@@ -188,6 +188,18 @@ Single guard: one `if settings.DEPLOYMENT_MODE == "selfhosted": return UNLIMITED
 `read_limit_15min`, `read_limit_daily`, `overall_limit_15min`, `overall_limit_daily`.
 → the credential + capacity + cost unit.
 
+**Keeping `strava_apps` limits honest:** Strava has no "get my current limits"
+endpoint — only response headers on real calls (`X-RateLimit-Limit` /
+`X-ReadRateLimit-Limit`, `"15min,daily"`) and the web Settings Dashboard expose
+it. `StravaClient` captures these headers on every call; `RateLimiter` (after a
+successful call, throttled to ~once per 5 min per app) diffs them against the
+stored `strava_apps` row and self-corrects on drift, invalidating the cached
+effective limits so the fix applies immediately. `athlete_cap` and "athletes
+currently connected" are dashboard-only on Strava's side and stay a manual
+admin field — except "currently connected", which we don't need Strava for at
+all: it's a live count of our own `strava_tokens` rows per app, shown next to
+the manual cap in the admin Strava-apps view.
+
 **`governor_config`** (singleton): `coverage_target_pct`, `paid_reservation_pct`,
 `free_degradation_enabled`, `infra_monthly_cost_cents`, `updated_at`.
 

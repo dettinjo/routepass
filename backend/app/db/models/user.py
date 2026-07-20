@@ -41,8 +41,12 @@ class StravaApp(Base):
     monthly_cost_cents: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=1199)
     read_limit_15min: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=200)
     read_limit_daily: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=2000)
-    overall_limit_15min: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=100)
-    overall_limit_daily: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=1000)
+    # Defaults match Strava's "self-upgraded" (10-athlete) Standard tier, which is
+    # what every real production app ends up on — not the 1-athlete "single-player"
+    # defaults for a freshly created, unconfigured app. Kept in sync automatically
+    # per-app by RateLimiter._maybe_sync_live_limits from Strava's response headers.
+    overall_limit_15min: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=400)
+    overall_limit_daily: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=4000)
 
 
 class User(Base):

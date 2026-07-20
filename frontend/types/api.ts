@@ -250,6 +250,9 @@ export interface AdminStravaApp {
   display_name: string
   is_active: boolean
   athlete_cap: number
+  /** Real count of athletes connected through us (our own DB) — Strava has no
+   * API for this, only its web dashboard, so this is authoritative on our side. */
+  connected_athletes: number | null
   monthly_cost_cents: number
   read_limit_15min: number
   read_limit_daily: number
