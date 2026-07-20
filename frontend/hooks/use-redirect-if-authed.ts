@@ -6,20 +6,24 @@ import { useAuthStore } from '@/store/auth'
 
 /**
  * Redirects an already-authenticated visitor away from public pages (landing,
- * login, register) to the dashboard, once the session-restore attempt has
- * finished. Returns true while a redirect is pending so callers can render a
- * placeholder instead of flashing the public page.
+ * login, register) to the dashboard. Returns true whenever the public page
+ * should NOT be rendered yet — either because the session-restore check is
+ * still in flight (we don't know yet) or because a session was found and the
+ * redirect is in flight. This prevents the public page from flashing before an
+ * active session gets bounced to the dashboard: callers render a placeholder
+ * while this is true and the real public content only once it's false.
  */
 export function useRedirectIfAuthed(to = '/dashboard'): boolean {
   const router = useRouter()
   const initialized = useAuthStore((s) => s.initialized)
   const token = useAuthStore((s) => s.token)
 
-  const redirecting = initialized && !!token
+  const authed = initialized && !!token
+  const hidePublicContent = !initialized || authed
 
   useEffect(() => {
-    if (redirecting) router.replace(to)
-  }, [redirecting, router, to])
+    if (authed) router.replace(to)
+  }, [authed, router, to])
 
-  return redirecting
+  return hidePublicContent
 }
