@@ -92,6 +92,30 @@ class SyncedActivity(Base):
     # Object storage key for the GPX file (A5). When set, gpx_data is cleared.
     # When STORAGE_BACKEND=db, this is always NULL and gpx_data holds the bytes.
     gpx_storage_key: Mapped[str | None] = mapped_column(sa.String, nullable=True, index=True)
+
+    # ── Computed track metrics (app.services.metrics; backfilled by a cron) ──────
+    # Aggregate scalars kept as columns so the overview/stats queries can SUM/AVG
+    # them cheaply; everything else (zones, splits, IF, work) lives in
+    # metrics_detail JSON, and the LTTB-downsampled per-point series for charts is
+    # gzipped in track_gz (lazy-loaded only on the detail view).
+    metrics_computed_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True, index=True
+    )
+    moving_time_s: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    elevation_down_m: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    calories: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    avg_speed_ms: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    avg_hr: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    max_hr: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    avg_power: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    max_power: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    normalized_power: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    tss: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    avg_cadence: Mapped[float | None] = mapped_column(sa.Float, nullable=True)
+    metrics_available: Mapped[list | None] = mapped_column(sa.JSON, nullable=True)
+    metrics_detail: Mapped[dict | None] = mapped_column(sa.JSON, nullable=True)
+    track_gz: Mapped[bytes | None] = mapped_column(sa.LargeBinary, nullable=True)
+
     pipeline_id: Mapped[UUID | None] = mapped_column(
         sa.UUID(as_uuid=True),
         sa.ForeignKey("pipelines.id", ondelete="SET NULL"),

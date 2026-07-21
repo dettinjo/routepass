@@ -4,7 +4,7 @@ import json
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import selectinload
 
 from app.core import governor, security
@@ -1494,3 +1494,168 @@ async def sync_activity_to_komoot(ctx: dict, activity_id: str, user_id: str) -> 
             activity.sync_status = "failed"
             activity.conflict_reason = f"Komoot upload failed: {exc}"
             await db.commit()
+
+
+# ── Track metric computation (docs/GPX_ANALYSIS_PLAN.md) ─────────────────────────
+
+
+async def _resolve_track_for_metrics(db: object, activity: SyncedActivity, user: User):
+    """Return (NormalizedTrack | None, calories_hint | None) for an activity.
+
+    Prefers stored GPX (komoot/import) — free to parse; falls back to Strava streams
+    (rate-limited) for Strava-native activities. Calories come from Strava's detailed
+    activity when available, otherwise the engine estimates from power work.
+    """
+    from app.services import metrics as _metrics
+
+    gpx_bytes: bytes | None = None
+    if activity.gpx_data:
+        gpx_bytes = activity.gpx_data
+    elif activity.gpx_storage_key:
+        try:
+            from app.services.storage import StorageService
+
+            gpx_bytes = await StorageService.get_gpx(activity.gpx_storage_key)
+        except Exception as exc:
+            logger.warning("metrics: storage fetch failed for %s: %s", activity.id, exc)
+
+    if gpx_bytes:
+        return _metrics.parse_gpx(gpx_bytes), None
+
+    if activity.source == "strava" and activity.strava_activity_id and user.strava_token:
+        resolved = await _resolve_strava_client(db, user)
+        if not resolved:
+            return None, None
+        strava, strava_app, tier_str = resolved
+        streams = await rate_limit_guard.call(
+            strava_app.id,
+            tier_str,
+            strava.get_activity_streams,
+            activity.strava_activity_id,
+            user_id=str(user.id),
+        )
+        track = _metrics.normalize_strava_streams(streams or {})
+        calories = None
+        try:
+            detail = await rate_limit_guard.call(
+                strava_app.id,
+                tier_str,
+                strava.get_activity,
+                activity.strava_activity_id,
+                user_id=str(user.id),
+            )
+            calories = (detail or {}).get("calories")
+        except Exception as exc:
+            logger.debug("metrics: calories fetch failed for %s: %s", activity.id, exc)
+        return track, calories
+
+    return None, None
+
+
+def _apply_metrics(activity: SyncedActivity, result) -> None:
+    import gzip
+
+    s = result.summary
+    activity.moving_time_s = int(s["moving_time_s"]) if s.get("moving_time_s") is not None else None
+    activity.elevation_down_m = s.get("elevation_loss_m")
+    activity.calories = s.get("calories")
+    activity.avg_speed_ms = s.get("avg_speed_ms")
+    activity.avg_hr = s.get("avg_hr")
+    activity.max_hr = s.get("max_hr")
+    activity.avg_power = s.get("avg_power")
+    activity.max_power = s.get("max_power")
+    activity.normalized_power = s.get("normalized_power")
+    activity.tss = s.get("tss")
+    activity.avg_cadence = s.get("avg_cadence")
+
+    # Backfill the summary fields the ingest path may have left empty.
+    if activity.distance_m is None and s.get("distance_m") is not None:
+        activity.distance_m = s["distance_m"]
+    if activity.elevation_up_m is None and s.get("elevation_gain_m") is not None:
+        activity.elevation_up_m = s["elevation_gain_m"]
+    if activity.duration_seconds is None and s.get("elapsed_time_s") is not None:
+        activity.duration_seconds = int(s["elapsed_time_s"])
+
+    activity.metrics_available = result.available
+    activity.metrics_detail = result.detail
+    activity.track_gz = (
+        gzip.compress(json.dumps(result.track_points).encode()) if result.track_points else None
+    )
+    activity.metrics_computed_at = datetime.now(UTC)
+
+
+async def compute_activity_metrics(ctx: dict, activity_id: str) -> None:
+    """Compute and persist track metrics for one activity (idempotent)."""
+    from uuid import UUID
+
+    from app.services.metrics import compute_metrics
+
+    aid = UUID(activity_id) if isinstance(activity_id, str) else activity_id
+    async with AsyncSessionLocal() as db:
+        act = (
+            await db.execute(select(SyncedActivity).where(SyncedActivity.id == aid))
+        ).scalar_one_or_none()
+        if act is None:
+            return
+        current_user_id.set(str(act.user_id))
+
+        user = (
+            await db.execute(
+                select(User)
+                .where(User.id == act.user_id)
+                .options(selectinload(User.strava_token), selectinload(User.subscription))
+            )
+        ).scalar_one_or_none()
+        if user is None:
+            return
+
+        try:
+            track, calories = await _resolve_track_for_metrics(db, act, user)
+            if track is None or track.n < 2:
+                # No usable track — stamp it so the backfill doesn't retry forever.
+                act.metrics_computed_at = datetime.now(UTC)
+                act.metrics_available = []
+                await db.commit()
+                return
+            result = compute_metrics(track, sport_type=act.sport_type, calories_hint=calories)
+            _apply_metrics(act, result)
+            await db.commit()
+            logger.info("metrics: computed for activity %s (%s)", act.id, result.available)
+        except Exception as exc:
+            # Leave metrics_computed_at NULL so it retries next backfill tick.
+            logger.error("metrics: compute failed for activity %s: %s", act.id, exc)
+
+
+async def metrics_backfill_scheduler(ctx: dict) -> None:
+    """Cron: enqueue metric computation for activities that don't have it yet."""
+    redis = ctx.get("redis")
+    if not redis:
+        return
+    if not await redis.set("routepass:metrics_backfill_lock", 1, nx=True, ex=290):
+        return
+
+    async with AsyncSessionLocal() as db:
+        ids = (
+            (
+                await db.execute(
+                    select(SyncedActivity.id)
+                    .where(
+                        SyncedActivity.metrics_computed_at.is_(None),
+                        or_(
+                            SyncedActivity.gpx_data.isnot(None),
+                            SyncedActivity.gpx_storage_key.isnot(None),
+                            SyncedActivity.strava_activity_id.isnot(None),
+                        ),
+                    )
+                    .order_by(SyncedActivity.synced_at.desc())
+                    .limit(25)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    for aid in ids:
+        await redis.enqueue_job("compute_activity_metrics", str(aid), _job_id=f"metrics_{aid}")
+    if ids:
+        logger.info("metrics_backfill: enqueued %d activities", len(ids))

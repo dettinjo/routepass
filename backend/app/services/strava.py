@@ -212,10 +212,17 @@ class StravaClient:
             self._capture_rate_limit_headers(resp)
             return resp.json()
 
+    # Rich stream set for metric analysis. GPX generation only reads latlng/
+    # altitude/time and ignores the rest, so a single fetch serves both.
+    STREAM_KEYS = (
+        "time,latlng,altitude,heartrate,watts,cadence,temp,"
+        "velocity_smoothed,moving,grade_smoothed,distance"
+    )
+
     async def get_activity_streams(self, activity_id: str) -> dict[str, Any]:
-        """Fetch latlng, altitude and time streams for an activity (key_by_type=true)."""
+        """Fetch all analysis streams for an activity (key_by_type=true)."""
         url = f"{STRAVA_BASE}/api/v3/activities/{activity_id}/streams"
-        params = {"keys": "latlng,altitude,time", "key_by_type": "true"}
+        params = {"keys": self.STREAM_KEYS, "key_by_type": "true"}
         async with self._client() as client:
             resp = await client.get(url, params=params)
             resp.raise_for_status()

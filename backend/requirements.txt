@@ -32,6 +32,9 @@ python-multipart>=0.0.9
 # GPX parsing (for activity import)
 gpxpy>=1.6
 
+# Track metric computation (elevation gain/loss, NP/TSS, zones, downsampling)
+numpy>=1.26
+
 # Garmin Connect (unofficial SDK — optional; only needed when Garmin source is used)
 garminconnect>=0.2.0
 

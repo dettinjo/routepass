@@ -1117,3 +1117,80 @@ async def download_activity_gpx(
             )
         },
     )
+
+
+# ── Track metrics (docs/GPX_ANALYSIS_PLAN.md) ───────────────────────────────────
+
+
+async def _load_owned_activity(activity_id: UUID, user: User, db: AsyncSession) -> SyncedActivity:
+    activity = (
+        await db.execute(
+            select(SyncedActivity).where(
+                SyncedActivity.id == activity_id,
+                SyncedActivity.user_id == user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if activity is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Activity not found.")
+    return activity
+
+
+@router.get("/{activity_id}/metrics")
+async def get_activity_metrics(
+    activity_id: UUID,
+    user: User = Depends(deps.get_current_user),
+    db: AsyncSession = Depends(deps.get_db),
+) -> dict:
+    """Computed summary metrics + zones + splits for an activity.
+
+    `computed` is false when the backfill job hasn't reached this activity yet
+    (or it has no usable track) — the client shows a "computing…" state.
+    """
+    a = await _load_owned_activity(activity_id, user, db)
+    return {
+        "activity_id": str(a.id),
+        "computed": a.metrics_computed_at is not None,
+        "computed_at": a.metrics_computed_at.isoformat() if a.metrics_computed_at else None,
+        "available": a.metrics_available or [],
+        "summary": {
+            "distance_m": a.distance_m,
+            "elapsed_time_s": a.duration_seconds,
+            "moving_time_s": a.moving_time_s,
+            "elevation_gain_m": a.elevation_up_m,
+            "elevation_loss_m": a.elevation_down_m,
+            "avg_speed_ms": a.avg_speed_ms,
+            "avg_hr": a.avg_hr,
+            "max_hr": a.max_hr,
+            "avg_power": a.avg_power,
+            "max_power": a.max_power,
+            "normalized_power": a.normalized_power,
+            "tss": a.tss,
+            "avg_cadence": a.avg_cadence,
+            "calories": a.calories,
+        },
+        "detail": a.metrics_detail or {},
+    }
+
+
+@router.get("/{activity_id}/track")
+async def get_activity_track(
+    activity_id: UUID,
+    user: User = Depends(deps.get_current_user),
+    db: AsyncSession = Depends(deps.get_db),
+) -> dict:
+    """LTTB-downsampled per-point series for charts (elevation/HR/power/…)."""
+    import gzip
+
+    a = await _load_owned_activity(activity_id, user, db)
+    if not a.track_gz:
+        return {
+            "activity_id": str(a.id),
+            "computed": a.metrics_computed_at is not None,
+            "points": [],
+        }
+    try:
+        points = json.loads(gzip.decompress(a.track_gz).decode())
+    except Exception:
+        points = []
+    return {"activity_id": str(a.id), "computed": True, "points": points}

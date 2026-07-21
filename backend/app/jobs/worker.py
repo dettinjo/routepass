@@ -8,6 +8,8 @@ from arq.cron import cron
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal, engine
 from app.jobs.sync_jobs import (
+    compute_activity_metrics,
+    metrics_backfill_scheduler,
     poll_user_sources,
     process_strava_activity,
     run_pipeline,
@@ -62,6 +64,7 @@ class WorkerSettings:
         run_pipeline,
         sync_gpx_to_strava,
         sync_activity_to_komoot,
+        compute_activity_metrics,
     ]
 
     cron_jobs = [
@@ -75,6 +78,12 @@ class WorkerSettings:
             recompute_governor_state,
             hour=None,
             minute=set(range(0, 60, 10)),  # every 10 minutes
+            run_at_startup=True,
+        ),
+        cron(
+            metrics_backfill_scheduler,
+            hour=None,
+            minute=set(range(2, 60, 5)),  # every 5 minutes, offset from the source poll
             run_at_startup=True,
         ),
     ]
