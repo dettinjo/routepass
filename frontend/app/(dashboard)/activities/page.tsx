@@ -60,6 +60,13 @@ import { parseGpxPoints } from './gpx-utils'
 // Leaflet must never run on the server. `next/dynamic` with `ssr: false` ensures
 // the entire activity-map module (and its `import('leaflet')` call) is excluded
 // from SSR and the initial JS bundle, eliminating the ChunkLoadError.
+// Only rendered inside the detail modal; lazy-load so recharts stays out of the
+// initial /activities bundle.
+const ActivityAnalysis = dynamic(
+  () => import('./activity-analysis').then((m) => m.ActivityAnalysis),
+  { ssr: false },
+)
+
 const ActivityMap = dynamic(
   () => import('./activity-map').then((m) => m.ActivityMap),
   {
@@ -1420,6 +1427,9 @@ function ActivityDetail({
             </div>
           )
         })()}
+
+        {/* Detailed track analysis — profile panels, zones, splits */}
+        {act.has_gpx && <ActivityAnalysis activityId={act.id} />}
 
         {/* Body */}
         <div className="px-6 pb-4 space-y-5">

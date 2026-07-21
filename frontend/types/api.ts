@@ -386,3 +386,71 @@ export interface AdminUserDetail {
   recent_jobs: AdminJobEntry[]
   usage_today: Record<string, number>
 }
+
+// ── Activity metrics (docs/GPX_ANALYSIS_PLAN.md) ────────────────────────────────
+
+export interface ActivityMetricsSummary {
+  distance_m: number | null
+  elapsed_time_s: number | null
+  moving_time_s: number | null
+  elevation_gain_m: number | null
+  elevation_loss_m: number | null
+  avg_speed_ms: number | null
+  avg_hr: number | null
+  max_hr: number | null
+  avg_power: number | null
+  max_power: number | null
+  normalized_power: number | null
+  tss: number | null
+  avg_cadence: number | null
+  calories: number | null
+}
+
+export interface ActivityZones {
+  bounds: number[]
+  seconds: number[]
+  hr_max_used?: number
+  ftp_used?: number
+}
+
+export interface ActivitySplit {
+  index: number
+  distance_m: number
+  duration_s: number
+  speed_ms: number | null
+  avg_hr: number | null
+  avg_power: number | null
+  elevation_gain_m: number
+}
+
+export interface ActivityMetrics {
+  activity_id: string
+  computed: boolean
+  computed_at: string | null
+  available: string[]
+  summary: ActivityMetricsSummary
+  detail: {
+    hr_zones?: ActivityZones
+    power_zones?: ActivityZones
+    splits?: ActivitySplit[]
+  }
+}
+
+export interface ActivityTrackPoint {
+  t: number
+  d: number | null
+  ele: number | null
+  hr: number | null
+  power: number | null
+  cad: number | null
+  speed: number | null
+  temp: number | null
+  lat: number | null
+  lon: number | null
+}
+
+export interface ActivityTrack {
+  activity_id: string
+  computed: boolean
+  points: ActivityTrackPoint[]
+}

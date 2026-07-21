@@ -45,6 +45,23 @@
     --color-info:          #60a5fa;
     --color-info-light:    rgba(96,165,250,0.12);
 
+    /* Chart series — validated data-viz palette (dark steps).
+     * Each analysis panel is single-series so these never share a plot;
+     * used one-per-panel. See the dataviz skill. */
+    --chart-elevation: #3987e5;  /* blue */
+    --chart-hr:        #e66767;  /* red */
+    --chart-power:     #9085e9;  /* violet */
+    --chart-speed:     #199e70;  /* aqua */
+    --chart-cadence:   #c98500;  /* yellow */
+    /* Ordinal blue ramp for zone bars (dark: no darker than step 600). */
+    --chart-zone-1: #86b6ef;
+    --chart-zone-2: #5598e7;
+    --chart-zone-3: #3987e5;
+    --chart-zone-4: #256abf;
+    --chart-zone-5: #184f95;
+    --chart-zone-6: #6da7ec;
+    --chart-zone-7: #104281;
+
     /* Radius */
     --radius-sm:   4px;
     --radius-md:   8px;
@@ -79,6 +96,20 @@
     --color-text-secondary: #6B7280;
     --color-text-disabled:  #9CA3AF;
     --color-text-inverse:   #FFFFFF;
+
+    /* Chart series — validated data-viz palette (light steps). */
+    --chart-elevation: #2a78d6;
+    --chart-hr:        #e34948;
+    --chart-power:     #4a3aa7;
+    --chart-speed:     #1baf7a;
+    --chart-cadence:   #eda100;
+    --chart-zone-1: #86b6ef;
+    --chart-zone-2: #5598e7;
+    --chart-zone-3: #2a78d6;
+    --chart-zone-4: #1c5cab;
+    --chart-zone-5: #104281;
+    --chart-zone-6: #6da7ec;
+    --chart-zone-7: #0d366b;
   }
 }
 
