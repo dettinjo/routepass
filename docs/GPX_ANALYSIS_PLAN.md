@@ -4,8 +4,8 @@ Comprehensive per-activity, aggregate, and multi-day-trip track metrics with
 interactive charts. Compute server-side (Python + numpy), cache, serve JSON;
 render client-side (recharts + react-leaflet, both already in the app).
 
-Status: **Phase 1 shipped** (metric engine + ingestion + API, dark). Phases 2–5
-below are the UI/aggregate/trip work.
+Status: **Phases 1–2 shipped** (metric engine + ingestion + API; activity
+detail analysis UI). Phases 3–5 below are the aggregate/trip/training-load work.
 
 ## Architecture
 
@@ -56,10 +56,23 @@ Data richness degrades by source (Strava richest; Komoot routes = geo+ele only).
   (every 5 min, 25/tick, rate-limit-safe) resolving GPX or Strava streams.
 - `GET /activities/{id}/metrics` and `/track`.
 
-## Phases 2–5 (planned)
+## Phase 2 (shipped)
 
-2. **Activity detail** view: metric-colored map + stacked elevation/HR/power/
-   speed profile with crosshair↔map hover-sync, zone bars, splits table.
+- `frontend/app/(dashboard)/activities/activity-analysis.tsx` — lazy-loaded in
+  the detail modal (keeps recharts out of the /activities bundle). Stacked
+  single-series profile panels (elevation/HR/power/speed/cadence) sharing a
+  synced crosshair via recharts `syncId` — never dual-axis; HR/power
+  time-in-zone bars (ordinal blue ramp); per-km splits table; enriched metric
+  tiles gated on `metrics_available`.
+- `frontend/hooks/use-activity-analysis.ts` — metrics/track hooks, poll while
+  the backfill cron computes.
+- Chart-series + zone-ramp tokens in `globals.css` (dark + light).
+
+Map↔crosshair hover-sync (highlighting the map point under the chart cursor)
+is deferred — the map and profile currently render independently.
+
+## Phases 3–5 (planned)
+
 3. **Overview/aggregate** stats wired to the existing activity filters.
 4. **Multi-day trip** analysis: multi-select + `POST /activities/analysis` +
    trip view (stage table, cumulative profile, day bars, multi-stage map).
