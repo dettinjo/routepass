@@ -2,7 +2,13 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiDelete, apiGet, apiPost } from '@/lib/api'
-import type { ActivitiesResponse, ActivityFilters, ImportResult, SeedResult } from '@/types/api'
+import type {
+  ActivitiesResponse,
+  ActivityFilters,
+  ActivityOverview,
+  ImportResult,
+  SeedResult,
+} from '@/types/api'
 
 /**
  * Fire-and-forget sync trigger.  Enqueues a background poll for all connected
@@ -62,6 +68,16 @@ export function useActivities({ skip = 0, limit = 50, filters = {} }: UseActivit
   return useQuery<ActivitiesResponse>({
     queryKey: ['activities', { skip, limit, ...filters }],
     queryFn: () => apiGet(`/api/v1/activities?${buildActivityQs(skip, limit, filters)}`),
+  })
+}
+
+/** Aggregate stats over all activities matching the current filters. */
+export function useActivitiesOverview(filters: ActivityFilters, enabled = true) {
+  return useQuery<ActivityOverview>({
+    queryKey: ['activities-overview', filters],
+    queryFn: () => apiGet(`/api/v1/activities/overview?${buildFilterQs(filters)}`),
+    enabled,
+    staleTime: 30_000,
   })
 }
 

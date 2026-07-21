@@ -467,6 +467,149 @@ async def get_activity_ids(
     return {"ids": ids, "count": len(ids)}
 
 
+# ── Overview / aggregate stats ────────────────────────────────────────────────
+
+
+def _period_key(dt: datetime, grain: str) -> tuple[str, str]:
+    """Return (sort_key, human_label) for a datetime bucketed by grain."""
+    if grain == "month":
+        return dt.strftime("%Y-%m"), dt.strftime("%b %Y")
+    iso = dt.isocalendar()  # (year, week, weekday)
+    return f"{iso[0]}-W{iso[1]:02d}", f"W{iso[1]:02d} {iso[0]}"
+
+
+@router.get("/overview")
+async def get_activities_overview(
+    source: str | None = Query(None),
+    sync_status: str | None = Query(None),
+    sport_type: str | None = Query(None),
+    search: str | None = Query(None),
+    synced: bool | None = Query(None),
+    date_from: str | None = Query(None),
+    date_to: str | None = Query(None),
+    user: User = Depends(deps.get_current_user),
+    db: AsyncSession = Depends(deps.get_db),
+) -> dict:
+    """Aggregate stats over all activities matching the same filters as the list.
+
+    Totals, per-sport breakdown, and a time trend — computed from the stored
+    metric columns (cheap SUM/AVG) so this stays a single scan. Metrics that
+    require track computation (calories, TSS, moving time) sum only over
+    activities that have them; distance/duration/elevation come from the base
+    columns present on every activity.
+    """
+    sub = (
+        await db.execute(select(Subscription).where(Subscription.user_id == user.id))
+    ).scalar_one_or_none()
+    tier = sub.tier if sub else "free"
+    history_days = _ACTIVITY_HISTORY_DAYS.get(tier, 30)
+    cutoff = datetime.now(UTC) - timedelta(days=history_days)
+
+    filters = _build_activity_filters(
+        user.id, cutoff, source, sync_status, sport_type, search, synced, date_from, date_to
+    )
+    rows = (
+        await db.execute(
+            select(
+                SyncedActivity.sport_type,
+                SyncedActivity.distance_m,
+                SyncedActivity.duration_seconds,
+                SyncedActivity.elevation_up_m,
+                SyncedActivity.moving_time_s,
+                SyncedActivity.calories,
+                SyncedActivity.tss,
+                SyncedActivity.started_at,
+                SyncedActivity.metrics_computed_at,
+            ).where(*filters)
+        )
+    ).all()
+
+    def _f(v: object) -> float:
+        return float(v) if v is not None else 0.0
+
+    totals = {
+        "count": len(rows),
+        "distance_m": 0.0,
+        "duration_s": 0.0,
+        "moving_time_s": 0.0,
+        "elevation_up_m": 0.0,
+        "calories": 0.0,
+        "tss": 0.0,
+        "metrics_pending": 0,
+    }
+    by_sport: dict[str, dict] = {}
+    dated: list[tuple[datetime, float, float, float]] = []
+
+    for sport, dist, dur, elev, moving, cal, tss, started, mcomputed in rows:
+        totals["distance_m"] += _f(dist)
+        totals["duration_s"] += _f(dur)
+        totals["moving_time_s"] += _f(moving)
+        totals["elevation_up_m"] += _f(elev)
+        totals["calories"] += _f(cal)
+        totals["tss"] += _f(tss)
+        if mcomputed is None:
+            totals["metrics_pending"] += 1
+
+        key = sport or "other"
+        s = by_sport.setdefault(
+            key,
+            {
+                "sport_type": key,
+                "count": 0,
+                "distance_m": 0.0,
+                "duration_s": 0.0,
+                "elevation_up_m": 0.0,
+            },
+        )
+        s["count"] += 1
+        s["distance_m"] += _f(dist)
+        s["duration_s"] += _f(dur)
+        s["elevation_up_m"] += _f(elev)
+
+        if started is not None:
+            dated.append((started, _f(dist), _f(dur), _f(elev)))
+
+    totals["avg_speed_ms"] = (
+        totals["distance_m"] / totals["duration_s"] if totals["duration_s"] > 0 else None
+    )
+
+    # Trend: weekly buckets for short spans, monthly for long ones.
+    grain = "week"
+    trend: list[dict] = []
+    if dated:
+        span_days = (max(d[0] for d in dated) - min(d[0] for d in dated)).days
+        grain = "month" if span_days > 120 else "week"
+        buckets: dict[str, dict] = {}
+        for started, dist, dur, elev in dated:
+            key, label = _period_key(started, grain)
+            b = buckets.setdefault(
+                key,
+                {
+                    "period": key,
+                    "label": label,
+                    "count": 0,
+                    "distance_m": 0.0,
+                    "duration_s": 0.0,
+                    "elevation_up_m": 0.0,
+                },
+            )
+            b["count"] += 1
+            b["distance_m"] += dist
+            b["duration_s"] += dur
+            b["elevation_up_m"] += elev
+        trend = [buckets[k] for k in sorted(buckets)]
+
+    by_sport_list = sorted(by_sport.values(), key=lambda s: s["distance_m"], reverse=True)
+
+    return {
+        "totals": totals,
+        "by_sport": by_sport_list,
+        "trend": trend,
+        "grain": grain,
+        "history_days": history_days,
+    }
+
+
 # ── Detail ────────────────────────────────────────────────────────────────────
 
 

@@ -85,6 +85,10 @@ class User(Base):
     is_admin: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
     name: Mapped[str | None] = mapped_column(sa.String, nullable=True)
 
+    # Training profile — unlocks TSS + proper power/HR zones in metric compute.
+    ftp: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+    hr_max: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)
+
     # Relationships
     subscription: Mapped[Subscription] = relationship(
         "Subscription", back_populates="user", uselist=False

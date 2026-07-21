@@ -1617,7 +1617,13 @@ async def compute_activity_metrics(ctx: dict, activity_id: str) -> None:
                 act.metrics_available = []
                 await db.commit()
                 return
-            result = compute_metrics(track, sport_type=act.sport_type, calories_hint=calories)
+            result = compute_metrics(
+                track,
+                sport_type=act.sport_type,
+                ftp=user.ftp,
+                hr_max=user.hr_max,
+                calories_hint=calories,
+            )
             _apply_metrics(act, result)
             await db.commit()
             logger.info("metrics: computed for activity %s (%s)", act.id, result.available)

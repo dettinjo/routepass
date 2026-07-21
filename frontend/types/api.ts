@@ -15,6 +15,9 @@ export interface UserMe {
   name?: string | null
   created_at: string
   is_admin: boolean
+  // Training profile — unlocks TSS + proper power/HR zones in metrics
+  ftp?: number | null
+  hr_max?: number | null
   // Connection status
   komoot_connected: boolean
   strava_connected: boolean
@@ -453,4 +456,43 @@ export interface ActivityTrack {
   activity_id: string
   computed: boolean
   points: ActivityTrackPoint[]
+}
+
+// ── Activity overview / aggregate stats ─────────────────────────────────────────
+
+export interface OverviewTotals {
+  count: number
+  distance_m: number
+  duration_s: number
+  moving_time_s: number
+  elevation_up_m: number
+  calories: number
+  tss: number
+  metrics_pending: number
+  avg_speed_ms: number | null
+}
+
+export interface OverviewSport {
+  sport_type: string
+  count: number
+  distance_m: number
+  duration_s: number
+  elevation_up_m: number
+}
+
+export interface OverviewTrendPoint {
+  period: string
+  label: string
+  count: number
+  distance_m: number
+  duration_s: number
+  elevation_up_m: number
+}
+
+export interface ActivityOverview {
+  totals: OverviewTotals
+  by_sport: OverviewSport[]
+  trend: OverviewTrendPoint[]
+  grain: 'week' | 'month'
+  history_days: number
 }

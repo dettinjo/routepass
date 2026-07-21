@@ -83,6 +83,103 @@ function ProfileCard() {
   )
 }
 
+// ── Training profile card ────────────────────────────────────────────────────────
+
+function TrainingProfileCard() {
+  const user    = useAuthStore((s) => s.user)
+  const setUser = useAuthStore((s) => s.setUser)
+
+  const [ftp, setFtp]       = useState(user?.ftp != null ? String(user.ftp) : '')
+  const [hrMax, setHrMax]   = useState(user?.hr_max != null ? String(user.hr_max) : '')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved]   = useState(false)
+  const [error, setError]   = useState<string | null>(null)
+
+  async function save() {
+    setSaving(true)
+    setError(null)
+    try {
+      // Empty string clears the value; backend treats -1 as "unset".
+      const ftpVal   = ftp.trim() === '' ? -1 : parseInt(ftp, 10)
+      const hrMaxVal = hrMax.trim() === '' ? -1 : parseInt(hrMax, 10)
+      if (Number.isNaN(ftpVal) || Number.isNaN(hrMaxVal)) {
+        setError('Enter whole numbers only.')
+        return
+      }
+      const res = await apiPatch<{ ftp: number | null; hr_max: number | null }>(
+        '/api/v1/auth/me/settings',
+        { ftp: ftpVal, hr_max: hrMaxVal },
+      )
+      if (user) setUser({ ...user, ftp: res.ftp, hr_max: res.hr_max })
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Training profile</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-body-sm text-text-secondary">
+          Set these to unlock Training Stress Score (TSS) and accurate power &
+          heart-rate zones in your activity analysis. Changing them recomputes
+          affected activities in the background.
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-label text-text-secondary mb-1" htmlFor="profile-ftp">
+              FTP <span className="text-text-disabled">(watts)</span>
+            </label>
+            <input
+              id="profile-ftp"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={2000}
+              placeholder="e.g. 250"
+              value={ftp}
+              onChange={(e) => setFtp(e.target.value)}
+              className="w-full h-9 px-3 text-body bg-surface-raised border border-border rounded-md
+                         text-text-primary placeholder:text-text-disabled
+                         focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent"
+            />
+          </div>
+          <div>
+            <label className="block text-label text-text-secondary mb-1" htmlFor="profile-hrmax">
+              Max HR <span className="text-text-disabled">(bpm)</span>
+            </label>
+            <input
+              id="profile-hrmax"
+              type="number"
+              inputMode="numeric"
+              min={100}
+              max={260}
+              placeholder="e.g. 188"
+              value={hrMax}
+              onChange={(e) => setHrMax(e.target.value)}
+              className="w-full h-9 px-3 text-body bg-surface-raised border border-border rounded-md
+                         text-text-primary placeholder:text-text-disabled
+                         focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent"
+            />
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <Button variant="secondary" size="sm" loading={saving} onClick={save}>
+            {saved ? '✓ Saved' : 'Save profile'}
+          </Button>
+          {error && <p className="text-body-sm text-error">{error}</p>}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 // ── Danger zone ────────────────────────────────────────────────────────────────
 
 function DangerZoneCard() {
@@ -155,6 +252,7 @@ export default function SettingsPage() {
 
       <div className="space-y-4 max-w-xl">
         <ProfileCard />
+        <TrainingProfileCard />
         <DangerZoneCard />
       </div>
     </div>

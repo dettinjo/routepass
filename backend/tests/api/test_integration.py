@@ -119,6 +119,73 @@ async def test_update_settings_unknown_fields_ignored(
 
 
 @pytest.mark.asyncio
+async def test_update_training_profile(
+    async_client: AsyncClient, free_user: User, free_user_headers: dict
+):
+    resp = await async_client.patch(
+        "/api/v1/auth/me/settings",
+        headers=free_user_headers,
+        json={"ftp": 250, "hr_max": 188},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ftp"] == 250
+    assert resp.json()["hr_max"] == 188
+
+    me = await async_client.get("/api/v1/auth/me", headers=free_user_headers)
+    assert me.json()["ftp"] == 250
+    assert me.json()["hr_max"] == 188
+
+    # Sentinel -1 clears the value back to unset.
+    cleared = await async_client.patch(
+        "/api/v1/auth/me/settings",
+        headers=free_user_headers,
+        json={"ftp": -1},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["ftp"] is None
+    assert cleared.json()["hr_max"] == 188
+
+
+@pytest.mark.asyncio
+async def test_training_profile_change_invalidates_metrics(
+    async_client: AsyncClient, free_user: User, free_user_headers: dict, db: AsyncSession
+):
+    from datetime import UTC, datetime
+
+    from app.db.models.sync import SyncedActivity
+
+    power_act = SyncedActivity(
+        user_id=free_user.id,
+        source="import",
+        activity_name="Power ride",
+        metrics_computed_at=datetime.now(UTC),
+        metrics_available=["distance", "power", "heartrate"],
+    )
+    plain_act = SyncedActivity(
+        user_id=free_user.id,
+        source="import",
+        activity_name="Walk",
+        metrics_computed_at=datetime.now(UTC),
+        metrics_available=["distance", "elevation"],
+    )
+    db.add_all([power_act, plain_act])
+    await db.commit()
+
+    resp = await async_client.patch(
+        "/api/v1/auth/me/settings",
+        headers=free_user_headers,
+        json={"ftp": 240},
+    )
+    assert resp.status_code == 200
+
+    await db.refresh(power_act)
+    await db.refresh(plain_act)
+    # HR/power activity is invalidated for recompute; profile-independent one is not.
+    assert power_act.metrics_computed_at is None
+    assert plain_act.metrics_computed_at is not None
+
+
+@pytest.mark.asyncio
 async def test_unauthenticated_request_returns_401(async_client: AsyncClient):
     resp = await async_client.get("/api/v1/auth/me")
     assert resp.status_code == 401

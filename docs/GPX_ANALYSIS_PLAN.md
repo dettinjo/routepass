@@ -4,8 +4,9 @@ Comprehensive per-activity, aggregate, and multi-day-trip track metrics with
 interactive charts. Compute server-side (Python + numpy), cache, serve JSON;
 render client-side (recharts + react-leaflet, both already in the app).
 
-Status: **Phases 1–2 shipped** (metric engine + ingestion + API; activity
-detail analysis UI). Phases 3–5 below are the aggregate/trip/training-load work.
+Status: **Phases 1–3 shipped** (metric engine + ingestion + API; activity
+detail analysis UI; aggregate overview + training profile). Phases 4–5 below
+are the multi-day-trip and training-load work.
 
 ## Architecture
 
@@ -71,9 +72,24 @@ Data richness degrades by source (Strava richest; Komoot routes = geo+ele only).
 Map↔crosshair hover-sync (highlighting the map point under the chart cursor)
 is deferred — the map and profile currently render independently.
 
-## Phases 3–5 (planned)
+## Phase 3 (shipped)
 
-3. **Overview/aggregate** stats wired to the existing activity filters.
+- `GET /activities/overview` — totals, per-sport breakdown, and a time trend
+  (weekly ≤120d span, else monthly), honouring the same filters as the list.
+  Sums the stored metric columns in one scan; profile-independent
+  distance/duration/elevation from base columns, calories/TSS/moving-time from
+  computed metrics.
+- `frontend/app/(dashboard)/activities/activity-overview.tsx` — lazy-loaded
+  collapsible panel above the list, reacts to active filters: total tiles +
+  distance-by-sport bars + distance-per-period trend bars (single-hue
+  magnitude, recharts).
+- **Training profile**: `users.ftp` / `users.hr_max` (migration 018), edited on
+  the settings page, returned by `/auth/me`, threaded into `compute_metrics`
+  (unlocks TSS + proper power/HR zones). Changing them invalidates
+  (`metrics_computed_at → NULL`) and re-enqueues recompute for the user's
+  HR/power activities only.
+
+## Phases 4–5 (planned)
 4. **Multi-day trip** analysis: multi-select + `POST /activities/analysis` +
    trip view (stage table, cumulative profile, day bars, multi-stage map).
 5. **Training load** (CTL/ATL/TSB, PRs, decoupling) — Pro-gate candidate.
@@ -82,5 +98,5 @@ is deferred — the map and profile currently render independently.
 
 1. Units — metric only vs metric/imperial toggle.
 2. Pro-gating — gate advanced (power/TSS, training load, multi-day) behind Pro?
-3. Zones/FTP — a small "training profile" setting for HR-max/FTP to unlock
-   TSS & proper zones (Phase 1 uses observed HR max, no FTP → no TSS yet).
+3. ~~Zones/FTP training-profile setting~~ — **done (Phase 3):** `users.ftp` /
+   `users.hr_max` unlock TSS + proper zones.

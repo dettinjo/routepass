@@ -159,3 +159,119 @@ async def test_download_activity_gpx(async_client: AsyncClient):
     mock_download_gpx.assert_awaited_once_with("tour_42")
 
     app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_activities_overview(
+    async_client: AsyncClient, free_user: User, free_user_headers: dict, db
+):
+    """Overview aggregates totals, per-sport breakdown, and a time trend."""
+    from datetime import timedelta
+
+    now = datetime.now(UTC)
+    db.add_all(
+        [
+            SyncedActivity(
+                user_id=free_user.id,
+                source="strava",
+                strava_activity_id="s1",
+                activity_name="Ride A",
+                sport_type="Ride",
+                distance_m=20000,
+                duration_seconds=3600,
+                elevation_up_m=300,
+                calories=500,
+                tss=60,
+                moving_time_s=3400,
+                metrics_computed_at=now,
+                started_at=now - timedelta(days=1),
+                synced_at=now,
+            ),
+            SyncedActivity(
+                user_id=free_user.id,
+                source="strava",
+                strava_activity_id="s2",
+                activity_name="Ride B",
+                sport_type="Ride",
+                distance_m=10000,
+                duration_seconds=1800,
+                elevation_up_m=100,
+                started_at=now - timedelta(days=3),
+                synced_at=now,
+            ),
+            SyncedActivity(
+                user_id=free_user.id,
+                source="strava",
+                strava_activity_id="s3",
+                activity_name="Run C",
+                sport_type="Run",
+                distance_m=5000,
+                duration_seconds=1500,
+                elevation_up_m=50,
+                started_at=now - timedelta(days=2),
+                synced_at=now,
+            ),
+        ]
+    )
+    await db.commit()
+
+    resp = await async_client.get("/api/v1/activities/overview", headers=free_user_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["totals"]["count"] == 3
+    assert data["totals"]["distance_m"] == 35000
+    assert data["totals"]["duration_s"] == 6900
+    assert data["totals"]["calories"] == 500
+    assert data["totals"]["tss"] == 60
+    assert data["totals"]["metrics_pending"] == 2  # two without metrics_computed_at
+
+    # By-sport sorted by distance desc → Ride (30km) before Run (5km)
+    assert [s["sport_type"] for s in data["by_sport"]] == ["Ride", "Run"]
+    assert data["by_sport"][0]["count"] == 2
+    assert data["by_sport"][0]["distance_m"] == 30000
+
+    assert data["grain"] == "week"
+    assert sum(b["count"] for b in data["trend"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_activities_overview_sport_filter(
+    async_client: AsyncClient, free_user: User, free_user_headers: dict, db
+):
+    """Overview honours the same filters as the list endpoint."""
+    now = datetime.now(UTC)
+    db.add_all(
+        [
+            SyncedActivity(
+                user_id=free_user.id,
+                source="strava",
+                strava_activity_id="f1",
+                sport_type="Ride",
+                distance_m=20000,
+                duration_seconds=3600,
+                started_at=now,
+                synced_at=now,
+            ),
+            SyncedActivity(
+                user_id=free_user.id,
+                source="strava",
+                strava_activity_id="f2",
+                sport_type="Run",
+                distance_m=5000,
+                duration_seconds=1500,
+                started_at=now,
+                synced_at=now,
+            ),
+        ]
+    )
+    await db.commit()
+
+    resp = await async_client.get(
+        "/api/v1/activities/overview?sport_type=Run", headers=free_user_headers
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["totals"]["count"] == 1
+    assert data["totals"]["distance_m"] == 5000
+    assert [s["sport_type"] for s in data["by_sport"]] == ["Run"]

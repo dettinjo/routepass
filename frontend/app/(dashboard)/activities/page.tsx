@@ -67,6 +67,12 @@ const ActivityAnalysis = dynamic(
   { ssr: false },
 )
 
+// Lazy-loaded (recharts) so the overview panel doesn't weigh down the list.
+const ActivityOverview = dynamic(
+  () => import('./activity-overview').then((m) => m.ActivityOverview),
+  { ssr: false },
+)
+
 const ActivityMap = dynamic(
   () => import('./activity-map').then((m) => m.ActivityMap),
   {
@@ -1947,6 +1953,9 @@ export default function ActivitiesPage() {
           onToggleSelect={() => selectionMode ? exitSelection() : setSelectionMode(true)}
           onImport={() => setShowImport(true)}
         />
+
+        {/* Aggregate overview — reacts to the active filters */}
+        <ActivityOverview filters={filters} />
 
         {/* Card */}
         <Card>

@@ -6,8 +6,8 @@ from datetime import UTC, datetime, timedelta
 import httpx
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
-from sqlalchemy import delete, select
+from pydantic import BaseModel, Field
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -165,6 +165,8 @@ async def get_current_user_profile(
         "id": str(user.id),
         "email": user.email,
         "name": user.name,
+        "ftp": user.ftp,
+        "hr_max": user.hr_max,
         "is_active": user.is_active,
         "is_admin": is_admin_effective,
         "tier": tier,
@@ -581,19 +583,85 @@ async def github_callback(
 
 class UserSettings(BaseModel):
     name: str | None = None
+    # Training profile. Sentinel `-1` clears the value (unset); omitted = unchanged.
+    ftp: int | None = Field(default=None, ge=-1, le=2000)
+    hr_max: int | None = Field(default=None, ge=-1, le=260)
 
 
 @router.patch("/me/settings")
 async def update_user_settings(
     payload: UserSettings,
+    request: Request,
     user: User = Depends(deps.get_current_user),
     db: AsyncSession = Depends(deps.get_db),
 ) -> dict:
-    """Update the current user's profile settings."""
+    """Update the current user's profile settings.
+
+    Changing FTP or HR-max invalidates every computed activity metric (TSS and
+    the power/HR zones depend on them), so we clear their `metrics_computed_at`
+    and enqueue a recompute for the affected activities.
+    """
     if payload.name is not None:
         user.name = payload.name.strip() or None
+
+    training_changed = False
+    if payload.ftp is not None:
+        new_ftp = None if payload.ftp < 0 else payload.ftp
+        if new_ftp != user.ftp:
+            user.ftp = new_ftp
+            training_changed = True
+    if payload.hr_max is not None:
+        new_hr = None if payload.hr_max < 0 else payload.hr_max
+        if new_hr != user.hr_max:
+            user.hr_max = new_hr
+            training_changed = True
+
     await db.commit()
-    return {"name": user.name}
+
+    if training_changed:
+        await _recompute_user_metrics(request, db, user)
+
+    return {"name": user.name, "ftp": user.ftp, "hr_max": user.hr_max}
+
+
+async def _recompute_user_metrics(request: Request, db: AsyncSession, user: User) -> None:
+    """Invalidate + re-enqueue metric computation for a user's HR/power activities.
+
+    Only activities whose metrics depend on the training profile need it — those
+    with heartrate or power in `metrics_available`. Distance/elevation/speed are
+    profile-independent, so leave them untouched.
+    """
+    from app.db.models.sync import SyncedActivity
+
+    rows = (
+        await db.execute(
+            select(SyncedActivity.id, SyncedActivity.metrics_available).where(
+                SyncedActivity.user_id == user.id,
+                SyncedActivity.metrics_computed_at.isnot(None),
+            )
+        )
+    ).all()
+    affected = [
+        aid
+        for aid, avail in rows
+        if isinstance(avail, list) and ("heartrate" in avail or "power" in avail)
+    ]
+    if not affected:
+        return
+
+    await db.execute(
+        update(SyncedActivity)
+        .where(SyncedActivity.id.in_(affected))
+        .values(metrics_computed_at=None)
+    )
+    await db.commit()
+
+    arq_pool = getattr(request.app.state, "arq_pool", None)
+    if arq_pool:
+        for aid in affected:
+            await arq_pool.enqueue_job(
+                "compute_activity_metrics", str(aid), _job_id=f"metrics_{aid}"
+            )
 
 
 @router.delete("/account", status_code=status.HTTP_204_NO_CONTENT)
