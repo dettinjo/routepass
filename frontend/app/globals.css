@@ -61,6 +61,19 @@
     --chart-zone-5: #184f95;
     --chart-zone-6: #6da7ec;
     --chart-zone-7: #104281;
+    /* Categorical theme (fixed hue order, never cycled) — used where color
+     * carries identity across a fixed set of entities, e.g. one polyline per
+     * trip stage. Validated via the dataviz skill against this dark surface
+     * (#111111): worst adjacent CVD dE 10.3 (floor band) — ship with direct
+     * labels (tooltips/legend), never color alone. */
+    --chart-cat-1: #3987e5;  /* blue */
+    --chart-cat-2: #199e70;  /* aqua */
+    --chart-cat-3: #c98500;  /* yellow */
+    --chart-cat-4: #008300;  /* green */
+    --chart-cat-5: #9085e9;  /* violet */
+    --chart-cat-6: #e66767;  /* red */
+    --chart-cat-7: #d55181;  /* magenta */
+    --chart-cat-8: #d95926;  /* orange */
 
     /* Radius */
     --radius-sm:   4px;
@@ -110,6 +123,16 @@
     --chart-zone-5: #104281;
     --chart-zone-6: #6da7ec;
     --chart-zone-7: #0d366b;
+    /* Categorical theme (light steps). Validated against #FAFAFA: aqua/yellow/
+     * magenta sit sub-3:1 — relief rule applies (direct labels shipped). */
+    --chart-cat-1: #2a78d6;
+    --chart-cat-2: #1baf7a;
+    --chart-cat-3: #eda100;
+    --chart-cat-4: #008300;
+    --chart-cat-5: #4a3aa7;
+    --chart-cat-6: #e34948;
+    --chart-cat-7: #e87ba4;
+    --chart-cat-8: #eb6834;
   }
 }
 

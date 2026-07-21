@@ -165,7 +165,7 @@ function ProfilePanel({
   )
 }
 
-function ZoneBar({ title, zones, prefix }: { title: string; zones: ActivityZones; prefix: string }) {
+export function ZoneBar({ title, zones, prefix }: { title: string; zones: ActivityZones; prefix: string }) {
   const total = zones.seconds.reduce((a, b) => a + b, 0)
   if (total <= 0) return null
   return (

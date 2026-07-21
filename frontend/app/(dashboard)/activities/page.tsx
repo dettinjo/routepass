@@ -73,6 +73,13 @@ const ActivityOverview = dynamic(
   { ssr: false },
 )
 
+const TripView = dynamic(
+  () => import('./trip-view').then((m) => m.TripView),
+  { ssr: false },
+)
+
+const TRIP_MAX_STAGES = 20
+
 const ActivityMap = dynamic(
   () => import('./activity-map').then((m) => m.ActivityMap),
   {
@@ -1582,15 +1589,18 @@ function BulkActionBar({
   connectedPlatforms,
   loading,
   onSync,
+  onAnalyzeTrip,
   onCancel,
 }: {
   count: number
   connectedPlatforms: PlatformKey[]
   loading: boolean
   onSync: (dest: PlatformKey) => void
+  onAnalyzeTrip: () => void
   onCancel: () => void
 }) {
   if (count === 0) return null
+  const canAnalyze = count >= 2
   return (
     <div className="fixed bottom-[68px] md:bottom-6 left-1/2 -translate-x-1/2 z-40
       flex items-center gap-2 px-4 py-3 bg-surface border border-border-strong rounded-xl shadow-xl
@@ -1598,6 +1608,18 @@ function BulkActionBar({
       <span className="text-body-sm text-text-primary font-medium flex-shrink-0">
         {count} selected
       </span>
+      <div className="w-px h-4 bg-border flex-shrink-0" />
+      <Button
+        variant="secondary"
+        size="sm"
+        disabled={!canAnalyze}
+        onClick={onAnalyzeTrip}
+        className="flex-shrink-0"
+        title={canAnalyze ? undefined : 'Select at least 2 activities'}
+      >
+        <Layers className="w-3.5 h-3.5" />
+        Analyze trip
+      </Button>
       <div className="w-px h-4 bg-border flex-shrink-0" />
       {connectedPlatforms.length > 0 ? (
         connectedPlatforms.map((p) => {
@@ -1885,6 +1907,7 @@ export default function ActivitiesPage() {
   // ── UI state ──────────────────────────────────────────────────────────────────
   const [selected, setSelected]     = useState<Activity | null>(null)
   const [showImport, setShowImport] = useState(false)
+  const [tripIds, setTripIds]       = useState<string[] | null>(null)
 
   const { data, isLoading, isFetching } = useActivities({ skip, limit: PAGE_SIZE, filters })
   const rawActivities = useMemo(() => data?.data ?? [], [data])
@@ -1917,6 +1940,10 @@ export default function ActivitiesPage() {
   const handleBulkSync = useCallback((dest: PlatformKey) => {
     bulkSync({ ids: Array.from(selectedIds), destination: dest }, { onSuccess: exitSelection })
   }, [bulkSync, selectedIds, exitSelection])
+
+  const handleAnalyzeTrip = useCallback(() => {
+    setTripIds(Array.from(selectedIds).slice(0, TRIP_MAX_STAGES))
+  }, [selectedIds])
 
   const activeFilterCount = Object.keys(filters).length
   const isFiltered        = activeFilterCount > 0
@@ -2083,8 +2110,11 @@ export default function ActivitiesPage() {
         connectedPlatforms={connectedPlatforms}
         loading={bulkSyncing}
         onSync={handleBulkSync}
+        onAnalyzeTrip={handleAnalyzeTrip}
         onCancel={exitSelection}
       />
+
+      {tripIds && <TripView activityIds={tripIds} onClose={() => setTripIds(null)} />}
     </>
   )
 }

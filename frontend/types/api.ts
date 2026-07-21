@@ -496,3 +496,65 @@ export interface ActivityOverview {
   grain: 'week' | 'month'
   history_days: number
 }
+
+// ── Multi-day trip analysis ──────────────────────────────────────────────────────
+
+export interface TripStage {
+  id: string
+  name: string | null
+  sport_type: string | null
+  started_at: string | null
+  distance_m: number | null
+  duration_s: number | null
+  moving_time_s: number | null
+  elevation_gain_m: number | null
+  elevation_loss_m: number | null
+  avg_speed_ms: number | null
+  avg_hr: number | null
+  avg_power: number | null
+  calories: number | null
+  tss: number | null
+  has_track: boolean
+  cumulative_distance_start_m: number
+}
+
+export interface TripTotals {
+  count: number
+  distance_m: number
+  duration_s: number
+  moving_time_s: number
+  elevation_gain_m: number
+  elevation_loss_m: number
+  calories: number
+  tss: number
+  avg_speed_ms: number | null
+}
+
+export interface TripDayBar {
+  date: string
+  distance_m: number
+  elevation_gain_m: number
+  count: number
+}
+
+export interface TripProfilePoint {
+  x: number | null
+  ele: number | null
+  stage: number
+}
+
+export interface TripMapStage {
+  stage: number
+  name: string | null
+  points: { lat: number; lon: number }[]
+}
+
+export interface TripAnalysis {
+  stages: TripStage[]
+  totals: TripTotals
+  day_bars: TripDayBar[]
+  profile: TripProfilePoint[]
+  map_stages: TripMapStage[]
+  hr_zones: ActivityZones | null
+  power_zones: ActivityZones | null
+}

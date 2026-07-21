@@ -8,6 +8,7 @@ import type {
   ActivityOverview,
   ImportResult,
   SeedResult,
+  TripAnalysis,
 } from '@/types/api'
 
 /**
@@ -88,6 +89,14 @@ export function useActivityIds(filters: ActivityFilters, enabled: boolean) {
     queryFn: () => apiGet(`/api/v1/activities/ids?${buildFilterQs(filters)}`),
     enabled,
     staleTime: 0,  // always fresh when triggered
+  })
+}
+
+/** Combine several selected activities (trip stages) into one view. */
+export function useTripAnalysis() {
+  return useMutation({
+    mutationFn: (activityIds: string[]) =>
+      apiPost<TripAnalysis>('/api/v1/activities/analysis', { activity_ids: activityIds }),
   })
 }
 

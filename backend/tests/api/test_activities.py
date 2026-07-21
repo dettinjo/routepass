@@ -275,3 +275,149 @@ async def test_activities_overview_sport_filter(
     assert data["totals"]["count"] == 1
     assert data["totals"]["distance_m"] == 5000
     assert [s["sport_type"] for s in data["by_sport"]] == ["Run"]
+
+
+@pytest.mark.asyncio
+async def test_trip_analysis_combines_stages(
+    async_client: AsyncClient, free_user: User, free_user_headers: dict, db
+):
+    """POST /activities/analysis combines stages ordered by started_at."""
+    import gzip
+    import json as _json
+    from datetime import timedelta
+
+    now = datetime.now(UTC)
+    track_day1 = [
+        {"t": 0, "d": 0, "ele": 100, "lat": 47.0, "lon": 8.0},
+        {"t": 60, "d": 1000, "ele": 120, "lat": 47.01, "lon": 8.01},
+    ]
+    track_day2 = [
+        {"t": 0, "d": 0, "ele": 200, "lat": 47.5, "lon": 8.5},
+        {"t": 60, "d": 2000, "ele": 250, "lat": 47.51, "lon": 8.51},
+    ]
+    day2 = SyncedActivity(
+        user_id=free_user.id,
+        source="strava",
+        strava_activity_id="trip_day2",
+        activity_name="Day 2",
+        sport_type="Ride",
+        distance_m=20000,
+        duration_seconds=3600,
+        elevation_up_m=300,
+        elevation_down_m=100,
+        calories=600,
+        tss=70,
+        moving_time_s=3400,
+        metrics_computed_at=now,
+        metrics_detail={
+            "hr_zones": {"bounds": [100, 120, 140, 160], "seconds": [10, 20, 30, 40, 50]},
+        },
+        track_gz=gzip.compress(_json.dumps(track_day2).encode()),
+        started_at=now - timedelta(days=1),
+        synced_at=now,
+    )
+    day1 = SyncedActivity(
+        user_id=free_user.id,
+        source="strava",
+        strava_activity_id="trip_day1",
+        activity_name="Day 1",
+        sport_type="Ride",
+        distance_m=15000,
+        duration_seconds=3000,
+        elevation_up_m=200,
+        elevation_down_m=50,
+        calories=400,
+        tss=50,
+        moving_time_s=2800,
+        metrics_computed_at=now,
+        metrics_detail={
+            "hr_zones": {"bounds": [100, 120, 140, 160], "seconds": [5, 15, 25, 35, 45]},
+        },
+        track_gz=gzip.compress(_json.dumps(track_day1).encode()),
+        started_at=now - timedelta(days=2),
+        synced_at=now,
+    )
+    db.add_all([day1, day2])
+    await db.commit()
+    await db.refresh(day1)
+    await db.refresh(day2)
+
+    resp = await async_client.post(
+        "/api/v1/activities/analysis",
+        headers=free_user_headers,
+        json={"activity_ids": [str(day2.id), str(day1.id)]},  # deliberately out of order
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+
+    # Ordered by started_at: day1 first, day2 second.
+    assert [s["name"] for s in data["stages"]] == ["Day 1", "Day 2"]
+    assert data["stages"][1]["cumulative_distance_start_m"] == 15000
+
+    assert data["totals"]["count"] == 2
+    assert data["totals"]["distance_m"] == 35000
+    assert data["totals"]["calories"] == 1000
+    assert data["totals"]["tss"] == 120
+
+    assert len(data["day_bars"]) == 2
+
+    # Profile concatenates both tracks with a cumulative distance offset.
+    assert len(data["profile"]) == 4
+    stage2_points = [p for p in data["profile"] if p["stage"] == 1]
+    assert stage2_points[0]["x"] == 15.0  # 15000m offset + 0m = 15km
+    assert stage2_points[1]["x"] == 17.0  # 15000m offset + 2000m = 17km
+
+    assert len(data["map_stages"]) == 2
+
+    # HR zone seconds summed position-wise across stages.
+    assert data["hr_zones"]["seconds"] == [15, 35, 55, 75, 95]
+
+
+@pytest.mark.asyncio
+async def test_trip_analysis_requires_two_activities(
+    async_client: AsyncClient, free_user_headers: dict
+):
+    resp = await async_client.post(
+        "/api/v1/activities/analysis",
+        headers=free_user_headers,
+        json={"activity_ids": ["11111111-1111-1111-1111-111111111111"]},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_trip_analysis_rejects_other_users_activity(
+    async_client: AsyncClient, free_user: User, free_user_headers: dict, db
+):
+    from app.core import security as _security
+
+    other = User(email="other_trip@test.com", password_hash=_security.hash_password("pw123456"))
+    db.add(other)
+    await db.commit()
+    await db.refresh(other)
+
+    mine = SyncedActivity(
+        user_id=free_user.id,
+        source="import",
+        activity_name="Mine",
+        distance_m=1000,
+        synced_at=datetime.now(UTC),
+    )
+    theirs = SyncedActivity(
+        user_id=other.id,
+        source="import",
+        activity_name="Theirs",
+        distance_m=1000,
+        synced_at=datetime.now(UTC),
+    )
+    db.add_all([mine, theirs])
+    await db.commit()
+    await db.refresh(mine)
+    await db.refresh(theirs)
+
+    resp = await async_client.post(
+        "/api/v1/activities/analysis",
+        headers=free_user_headers,
+        json={"activity_ids": [str(mine.id), str(theirs.id)]},
+    )
+    assert resp.status_code == 404

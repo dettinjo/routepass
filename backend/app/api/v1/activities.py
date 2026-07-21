@@ -22,6 +22,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1337,3 +1338,175 @@ async def get_activity_track(
     except Exception:
         points = []
     return {"activity_id": str(a.id), "computed": True, "points": points}
+
+
+# ── Multi-day trip analysis (docs/GPX_ANALYSIS_PLAN.md phase 4) ────────────────
+
+
+class TripAnalysisRequest(BaseModel):
+    activity_ids: list[UUID] = Field(min_length=2, max_length=20)
+
+
+@router.post("/analysis")
+async def analyze_trip(
+    payload: TripAnalysisRequest,
+    user: User = Depends(deps.get_current_user),
+    db: AsyncSession = Depends(deps.get_db),
+) -> dict:
+    """Combine several activities (e.g. stages of a multi-day trip) into one view.
+
+    Stages are ordered by started_at. Per-point elevation profiles and map
+    polylines are decoded from track_gz where available and concatenated with
+    a running distance offset; HR/power zone seconds are summed position-wise
+    across stages (assumes the fixed zone-boundary layout from
+    app.services.metrics, not literal per-activity thresholds, which is close
+    enough for a trip-level view since HR-max/FTP rarely change mid-trip).
+    """
+    import gzip
+
+    rows = (
+        (
+            await db.execute(
+                select(SyncedActivity).where(
+                    SyncedActivity.id.in_(payload.activity_ids),
+                    SyncedActivity.user_id == user.id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    found_ids = {a.id for a in rows}
+    missing = [str(i) for i in payload.activity_ids if i not in found_ids]
+    if missing:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"Activities not found: {', '.join(missing)}"
+        )
+
+    rows.sort(key=lambda a: a.started_at or datetime.min.replace(tzinfo=UTC))
+
+    def _f(v: object) -> float:
+        return float(v) if v is not None else 0.0
+
+    totals = {
+        "count": len(rows),
+        "distance_m": 0.0,
+        "duration_s": 0.0,
+        "moving_time_s": 0.0,
+        "elevation_gain_m": 0.0,
+        "elevation_loss_m": 0.0,
+        "calories": 0.0,
+        "tss": 0.0,
+    }
+    stages: list[dict] = []
+    day_buckets: dict[str, dict] = {}
+    profile: list[dict] = []
+    map_stages: list[dict] = []
+    hr_zone_seconds: list[float] | None = None
+    hr_zone_bounds: list[float] | None = None
+    power_zone_seconds: list[float] | None = None
+    power_zone_bounds: list[float] | None = None
+    cum_distance_m = 0.0
+
+    for idx, a in enumerate(rows):
+        dist = _f(a.distance_m)
+        totals["distance_m"] += dist
+        totals["duration_s"] += _f(a.duration_seconds)
+        totals["moving_time_s"] += _f(a.moving_time_s)
+        totals["elevation_gain_m"] += _f(a.elevation_up_m)
+        totals["elevation_loss_m"] += _f(a.elevation_down_m)
+        totals["calories"] += _f(a.calories)
+        totals["tss"] += _f(a.tss)
+
+        stages.append(
+            {
+                "id": str(a.id),
+                "name": a.activity_name,
+                "sport_type": a.sport_type,
+                "started_at": a.started_at.isoformat() if a.started_at else None,
+                "distance_m": a.distance_m,
+                "duration_s": a.duration_seconds,
+                "moving_time_s": a.moving_time_s,
+                "elevation_gain_m": a.elevation_up_m,
+                "elevation_loss_m": a.elevation_down_m,
+                "avg_speed_ms": a.avg_speed_ms,
+                "avg_hr": a.avg_hr,
+                "avg_power": a.avg_power,
+                "calories": a.calories,
+                "tss": a.tss,
+                "has_track": bool(a.track_gz),
+                "cumulative_distance_start_m": round(cum_distance_m, 1),
+            }
+        )
+
+        if a.started_at is not None:
+            day_key = a.started_at.date().isoformat()
+            day = day_buckets.setdefault(
+                day_key,
+                {"date": day_key, "distance_m": 0.0, "elevation_gain_m": 0.0, "count": 0},
+            )
+            day["distance_m"] += dist
+            day["elevation_gain_m"] += _f(a.elevation_up_m)
+            day["count"] += 1
+
+        detail = a.metrics_detail or {}
+        hz = detail.get("hr_zones") or {}
+        if hz.get("seconds"):
+            secs = hz["seconds"]
+            if hr_zone_seconds is None:
+                hr_zone_seconds = [0.0] * len(secs)
+                hr_zone_bounds = hz.get("bounds")
+            for i, sec in enumerate(secs[: len(hr_zone_seconds)]):
+                hr_zone_seconds[i] += sec
+        pz = detail.get("power_zones") or {}
+        if pz.get("seconds"):
+            secs = pz["seconds"]
+            if power_zone_seconds is None:
+                power_zone_seconds = [0.0] * len(secs)
+                power_zone_bounds = pz.get("bounds")
+            for i, sec in enumerate(secs[: len(power_zone_seconds)]):
+                power_zone_seconds[i] += sec
+
+        if a.track_gz:
+            try:
+                points = json.loads(gzip.decompress(a.track_gz).decode())
+            except Exception:
+                points = []
+            stage_latlng = []
+            for p in points:
+                d = p.get("d")
+                x_m = cum_distance_m + d if d is not None else None
+                profile.append(
+                    {
+                        "x": round(x_m / 1000, 3) if x_m is not None else None,
+                        "ele": p.get("ele"),
+                        "stage": idx,
+                    }
+                )
+                if p.get("lat") is not None and p.get("lon") is not None:
+                    stage_latlng.append({"lat": p["lat"], "lon": p["lon"]})
+            if stage_latlng:
+                map_stages.append({"stage": idx, "name": a.activity_name, "points": stage_latlng})
+
+        cum_distance_m += dist
+
+    totals["avg_speed_ms"] = (
+        totals["distance_m"] / totals["duration_s"] if totals["duration_s"] > 0 else None
+    )
+
+    return {
+        "stages": stages,
+        "totals": totals,
+        "day_bars": [day_buckets[k] for k in sorted(day_buckets)],
+        "profile": profile,
+        "map_stages": map_stages,
+        "hr_zones": (
+            {"bounds": hr_zone_bounds, "seconds": hr_zone_seconds} if hr_zone_seconds else None
+        ),
+        "power_zones": (
+            {"bounds": power_zone_bounds, "seconds": power_zone_seconds}
+            if power_zone_seconds
+            else None
+        ),
+    }

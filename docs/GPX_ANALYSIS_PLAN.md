@@ -4,9 +4,9 @@ Comprehensive per-activity, aggregate, and multi-day-trip track metrics with
 interactive charts. Compute server-side (Python + numpy), cache, serve JSON;
 render client-side (recharts + react-leaflet, both already in the app).
 
-Status: **Phases 1–3 shipped** (metric engine + ingestion + API; activity
-detail analysis UI; aggregate overview + training profile). Phases 4–5 below
-are the multi-day-trip and training-load work.
+Status: **Phases 1–4 shipped** (metric engine + ingestion + API; activity
+detail analysis UI; aggregate overview + training profile; multi-day trip
+analysis). Phase 5 below is the remaining training-load work.
 
 ## Architecture
 
@@ -89,14 +89,39 @@ is deferred — the map and profile currently render independently.
   (`metrics_computed_at → NULL`) and re-enqueues recompute for the user's
   HR/power activities only.
 
-## Phases 4–5 (planned)
-4. **Multi-day trip** analysis: multi-select + `POST /activities/analysis` +
-   trip view (stage table, cumulative profile, day bars, multi-stage map).
+## Phase 4 (shipped)
+
+- `POST /activities/analysis` — takes `activity_ids` (2–20, any tier), orders
+  stages by `started_at`, and returns combined totals, a per-stage table
+  (with a `cumulative_distance_start_m` offset per stage), day-bucketed
+  distance bars, a concatenated elevation profile (per-point `x` = running
+  distance across all stages, in km), multi-stage map polylines (decoded
+  from `track_gz`), and HR/power zone-seconds summed position-wise across
+  stages.
+- `frontend/app/(dashboard)/activities/trip-view.tsx` — modal triggered from
+  the existing multi-select bulk-action bar ("Analyze trip", enabled at ≥2
+  selected, capped at 20). Totals tiles, `trip-map.tsx` (one polyline per
+  stage), a single elevation-profile chart with dashed `ReferenceLine`s at
+  stage boundaries, day bars, combined zone bars (reusing `ZoneBar` from
+  Phase 2), and a stage table with a categorical color dot per row.
+- New **categorical theme** (`--chart-cat-1..8` in `globals.css`, dark +
+  light) — the first genuinely categorical palette in the app (Phases 1–3
+  are all single-hue sequential). Validated via the dataviz skill against
+  both surfaces; worst-case CVD sits in the 8–12 floor band, so identity
+  never relies on color alone — every stage also gets a tooltip and a table
+  row (the "relief rule"). Stages beyond the 8th slot fold into a neutral
+  gray rather than cycling hues.
+- Trip analysis is ungated (available to all tiers), consistent with Phases
+  1–3.
+
+## Phase 5 (planned)
+
 5. **Training load** (CTL/ATL/TSB, PRs, decoupling) — Pro-gate candidate.
 
 ## Open decisions (for the UI phases)
 
 1. Units — metric only vs metric/imperial toggle.
-2. Pro-gating — gate advanced (power/TSS, training load, multi-day) behind Pro?
+2. Pro-gating — power/TSS and multi-day trip analysis shipped ungated
+   (Phases 3–4); training load (Phase 5) remains the pro-gate candidate.
 3. ~~Zones/FTP training-profile setting~~ — **done (Phase 3):** `users.ftp` /
    `users.hr_max` unlock TSS + proper zones.
