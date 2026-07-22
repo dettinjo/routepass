@@ -4,9 +4,9 @@ Comprehensive per-activity, aggregate, and multi-day-trip track metrics with
 interactive charts. Compute server-side (Python + numpy), cache, serve JSON;
 render client-side (recharts + react-leaflet, both already in the app).
 
-Status: **Phases 1–4 shipped** (metric engine + ingestion + API; activity
+Status: **All 5 phases shipped** (metric engine + ingestion + API; activity
 detail analysis UI; aggregate overview + training profile; multi-day trip
-analysis). Phase 5 below is the remaining training-load work.
+analysis; training load + records, Pro-gated).
 
 ## Architecture
 
@@ -114,14 +114,47 @@ is deferred — the map and profile currently render independently.
 - Trip analysis is ungated (available to all tiers), consistent with Phases
   1–3.
 
-## Phase 5 (planned)
+## Phase 5 (shipped)
 
-5. **Training load** (CTL/ATL/TSB, PRs, decoupling) — Pro-gate candidate.
+- **Metric engine additions** (`app/services/metrics.py`):
+  - hrTSS fallback — when no FTP/power is available, TSS is estimated from
+    %HRmax using the same formula shape as power-TSS (`moving_hours *
+    intensity^2 * 100`), so non-power sports (running, hiking, …) get a TSS
+    at all. `detail.tss_method` records which formula was used
+    (`"power"` | `"hr_estimate"`) so the UI can caveat the estimate.
+  - Aerobic decoupling (`detail.decoupling`) — % drift in effort-per-heartbeat
+    (Pw:Hr if power present, else Pa:Hr from raw speed) between the first and
+    second half of the activity by time. Requires HR + power/speed and ≥20
+    min moving time; shorter/intermittent efforts don't produce a stable
+    signal so it's omitted rather than shown noisy.
+- `GET /activities/training-load?days=` (Pro) — Coggan PMC: CTL (fitness,
+  42-day EWMA of daily summed TSS), ATL (fatigue, 7-day EWMA), TSB (form) =
+  yesterday's CTL − yesterday's ATL. Seeded at 0 from the athlete's first
+  TSS-bearing activity (not just the requested window) so the recursion is
+  reasonably warmed up; only the last `days` are returned. Includes a
+  `status` classification (`very_fresh`…`very_fatigued`) from TSB thresholds.
+- `GET /activities/records` (Pro) — all-time bests overall and per sport
+  (longest distance/duration, most elevation gain, highest avg speed/power/NP/
+  TSS), read straight from the stored per-activity aggregate columns — no
+  track re-parsing.
+- `frontend/app/(dashboard)/activities/training-load.tsx` — lazy-loaded,
+  always full-history (independent of the activities list filters above it):
+  Fitness/Fatigue/Form tiles + status badge, two `syncId`-synced panels
+  (CTL+ATL same-scale line chart with a legend since it's 2 series; a
+  separate single-hue TSB area with a zero reference line — never combined
+  into one dual-axis chart), and the records list. Free tier sees the same
+  Pro upsell pattern as `/api-keys`.
+- Per-activity decoupling + `tss_method` surfaced in Phase 2's
+  `activity-analysis.tsx` metric tiles/notes.
+- Pro-gated via the existing `require_tier("pro")` dependency, consistent
+  with `/api-keys`; self-hosted and comped accounts unlocked as usual.
 
-## Open decisions (for the UI phases)
+## Open decisions
 
-1. Units — metric only vs metric/imperial toggle.
-2. Pro-gating — power/TSS and multi-day trip analysis shipped ungated
-   (Phases 3–4); training load (Phase 5) remains the pro-gate candidate.
+1. Units — metric only vs metric/imperial toggle. Still open; everything
+   shipped so far is metric-only.
+2. ~~Pro-gating~~ — **decided:** power/TSS, multi-day trip analysis, and
+   overview are ungated (Phases 1–4); training load + records (Phase 5) are
+   Pro-gated.
 3. ~~Zones/FTP training-profile setting~~ — **done (Phase 3):** `users.ftp` /
    `users.hr_max` unlock TSS + proper zones.

@@ -14,7 +14,12 @@ import {
 } from 'recharts'
 import { formatDuration } from '@/lib/utils'
 import { useActivityMetrics, useActivityTrack } from '@/hooks/use-activity-analysis'
-import type { ActivityMetricsSummary, ActivityTrackPoint, ActivityZones } from '@/types/api'
+import type {
+  ActivityDecoupling,
+  ActivityMetricsSummary,
+  ActivityTrackPoint,
+  ActivityZones,
+} from '@/types/api'
 
 // One panel per metric — never a dual-axis chart. Each is a single series, so it
 // needs no legend (the panel title names it). syncId ties a shared crosshair
@@ -48,7 +53,10 @@ const ZONE_COLORS = [
 
 // Tiles that complement (never duplicate) the modal's top stat grid, which
 // already shows distance / duration / elevation gain / avg+max speed.
-function buildTiles(s: ActivityMetricsSummary): { label: string; value: string }[] {
+function buildTiles(
+  s: ActivityMetricsSummary,
+  tssMethod: 'power' | 'hr_estimate' | undefined,
+): { label: string; value: string }[] {
   const tiles: { label: string; value: string }[] = []
   const push = (label: string, v: string | null) => {
     if (v != null) tiles.push({ label, value: v })
@@ -61,9 +69,23 @@ function buildTiles(s: ActivityMetricsSummary): { label: string; value: string }
   push('Avg power', s.avg_power != null ? `${Math.round(s.avg_power)} W` : null)
   push('Max power', s.max_power != null ? `${Math.round(s.max_power)} W` : null)
   push('Norm. power', s.normalized_power != null ? `${Math.round(s.normalized_power)} W` : null)
-  push('TSS', s.tss != null ? `${Math.round(s.tss)}` : null)
+  push('TSS' + (tssMethod === 'hr_estimate' ? ' (est.)' : ''), s.tss != null ? `${Math.round(s.tss)}` : null)
   push('Avg cadence', s.avg_cadence != null ? `${Math.round(s.avg_cadence)} rpm` : null)
   return tiles
+}
+
+function DecouplingNote({ decoupling }: { decoupling: ActivityDecoupling }) {
+  const drifted = decoupling.pct >= 5
+  return (
+    <p className="text-caption text-text-secondary">
+      Aerobic decoupling ({decoupling.metric === 'power' ? 'Pw:Hr' : 'Pa:Hr'}):{' '}
+      <span className={drifted ? 'text-warning font-medium' : 'text-text-primary font-medium'}>
+        {decoupling.pct > 0 ? '+' : ''}
+        {decoupling.pct}%
+      </span>
+      {drifted && ' — noticeable cardiac drift'}
+    </p>
+  )
 }
 
 function buildData(points: ActivityTrackPoint[], hasDistance: boolean) {
@@ -225,7 +247,8 @@ export function ActivityAnalysis({ activityId }: { activityId: string }) {
   const hrZones = metrics.detail.hr_zones
   const powerZones = metrics.detail.power_zones
   const splits = metrics.detail.splits ?? []
-  const tiles = buildTiles(metrics.summary)
+  const decoupling = metrics.detail.decoupling
+  const tiles = buildTiles(metrics.summary, metrics.detail.tss_method)
 
   return (
     <div className="px-6 pb-5 space-y-5">
@@ -255,6 +278,8 @@ export function ActivityAnalysis({ activityId }: { activityId: string }) {
           ))}
         </div>
       )}
+
+      {decoupling && <DecouplingNote decoupling={decoupling} />}
 
       {/* Zones */}
       {(hrZones || powerZones) && (

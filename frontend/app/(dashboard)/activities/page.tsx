@@ -78,6 +78,11 @@ const TripView = dynamic(
   { ssr: false },
 )
 
+const TrainingLoad = dynamic(
+  () => import('./training-load').then((m) => m.TrainingLoad),
+  { ssr: false },
+)
+
 const TRIP_MAX_STAGES = 20
 
 const ActivityMap = dynamic(
@@ -1980,6 +1985,9 @@ export default function ActivitiesPage() {
           onToggleSelect={() => selectionMode ? exitSelection() : setSelectionMode(true)}
           onImport={() => setShowImport(true)}
         />
+
+        {/* Training load — always full-history, independent of the filters below */}
+        <TrainingLoad />
 
         {/* Aggregate overview — reacts to the active filters */}
         <ActivityOverview filters={filters} />

@@ -166,3 +166,66 @@ def test_route_without_biometrics_degrades():
     assert "power" not in res.available
     assert "heartrate" not in res.available
     assert "avg_hr" not in res.summary
+
+
+def _drifting_hr_streams(n=1800, speed=4.0, hr_start=140, hr_end=165):
+    """A synthetic 30-min run at constant pace with HR drifting upward — the
+    classic cardiac-drift signature aerobic decoupling should pick up."""
+    t = list(range(n))
+    dist = [speed * i for i in range(n)]
+    hr = [hr_start + (hr_end - hr_start) * (i / (n - 1)) for i in range(n)]
+    lat = [47.0 for _ in range(n)]
+    lon = [8.0 + i * speed / 111_320 for i in range(n)]
+    return {
+        "time": {"data": t},
+        "distance": {"data": dist},
+        "heartrate": {"data": hr},
+        "velocity_smoothed": {"data": [speed] * n},
+        "latlng": {"data": [[la, lo] for la, lo in zip(lat, lon)]},
+    }
+
+
+def test_decoupling_detects_hr_drift():
+    track = m.normalize_strava_streams(_drifting_hr_streams())
+    res = m.compute_metrics(track, sport_type="running", hr_max=190)
+    assert "decoupling" in res.detail
+    dec = res.detail["decoupling"]
+    assert dec["metric"] == "speed"
+    # Pace held constant while HR climbed -> positive decoupling (drift).
+    assert dec["pct"] > 5
+
+
+def test_decoupling_absent_for_short_activity():
+    track = m.normalize_strava_streams(_drifting_hr_streams(n=300))  # 5 min
+    res = m.compute_metrics(track, sport_type="running", hr_max=190)
+    assert "decoupling" not in res.detail
+    assert "decoupling" not in res.available
+
+
+def test_decoupling_near_zero_for_steady_effort():
+    track = m.normalize_strava_streams(_constant_ride_streams(n=1800))
+    res = m.compute_metrics(track, sport_type="cycling", ftp=200, hr_max=190)
+    assert "decoupling" in res.detail
+    assert res.detail["decoupling"]["pct"] == pytest.approx(0, abs=1)
+
+
+def test_hr_tss_fallback_without_power():
+    """No power/FTP: TSS still gets estimated from %HRmax so runners/hikers get a
+    training-load number at all."""
+    n = 3600
+    streams = {
+        "time": {"data": list(range(n))},
+        "distance": {"data": [3.0 * i for i in range(n)]},
+        "heartrate": {"data": [152] * n},
+        "latlng": {"data": [[47.0, 8.0 + i * 3.0 / 111_320] for i in range(n)]},
+    }
+    track = m.normalize_strava_streams(streams)
+    res = m.compute_metrics(track, sport_type="running", hr_max=190)
+    assert res.detail.get("tss_method") == "hr_estimate"
+    assert res.summary["tss"] is not None and res.summary["tss"] > 0
+
+
+def test_power_tss_takes_precedence_over_hr_estimate():
+    track = m.normalize_strava_streams(_constant_ride_streams(n=600))
+    res = m.compute_metrics(track, sport_type="cycling", ftp=200, hr_max=190)
+    assert res.detail.get("tss_method") == "power"

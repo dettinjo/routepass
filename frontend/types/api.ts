@@ -426,6 +426,13 @@ export interface ActivitySplit {
   elevation_gain_m: number
 }
 
+export interface ActivityDecoupling {
+  metric: 'power' | 'speed'
+  pct: number
+  first_half_ratio: number
+  second_half_ratio: number
+}
+
 export interface ActivityMetrics {
   activity_id: string
   computed: boolean
@@ -436,6 +443,8 @@ export interface ActivityMetrics {
     hr_zones?: ActivityZones
     power_zones?: ActivityZones
     splits?: ActivitySplit[]
+    tss_method?: 'power' | 'hr_estimate'
+    decoupling?: ActivityDecoupling
   }
 }
 
@@ -557,4 +566,61 @@ export interface TripAnalysis {
   map_stages: TripMapStage[]
   hr_zones: ActivityZones | null
   power_zones: ActivityZones | null
+}
+
+// ── Training load (Pro) ──────────────────────────────────────────────────────────
+
+export type TsbStatus = 'very_fresh' | 'fresh' | 'neutral' | 'fatigued' | 'very_fatigued'
+
+export interface TrainingLoadPoint {
+  date: string
+  tss: number
+  ctl: number
+  atl: number
+  tsb: number
+}
+
+export interface TrainingLoadCurrent {
+  ctl: number
+  atl: number
+  tsb: number
+  status: TsbStatus
+}
+
+export interface TrainingLoad {
+  available: boolean
+  series: TrainingLoadPoint[]
+  current: TrainingLoadCurrent | null
+  history_days?: number
+}
+
+// ── Personal records (Pro) ───────────────────────────────────────────────────────
+
+export interface RecordEntry {
+  activity_id: string
+  name: string | null
+  sport_type: string | null
+  started_at: string | null
+  value: number
+}
+
+export interface OverallRecords {
+  longest_distance_m: RecordEntry | null
+  longest_duration_s: RecordEntry | null
+  most_elevation_gain_m: RecordEntry | null
+  highest_avg_speed_ms: RecordEntry | null
+  highest_avg_power_w: RecordEntry | null
+  highest_normalized_power_w: RecordEntry | null
+  highest_tss: RecordEntry | null
+}
+
+export interface SportRecords {
+  longest_distance_m: RecordEntry | null
+  highest_avg_speed_ms: RecordEntry | null
+  most_elevation_gain_m: RecordEntry | null
+}
+
+export interface ActivityRecords {
+  overall: OverallRecords
+  by_sport: Record<string, SportRecords>
 }

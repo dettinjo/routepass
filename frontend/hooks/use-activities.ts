@@ -6,8 +6,10 @@ import type {
   ActivitiesResponse,
   ActivityFilters,
   ActivityOverview,
+  ActivityRecords,
   ImportResult,
   SeedResult,
+  TrainingLoad,
   TripAnalysis,
 } from '@/types/api'
 
@@ -79,6 +81,28 @@ export function useActivitiesOverview(filters: ActivityFilters, enabled = true) 
     queryFn: () => apiGet(`/api/v1/activities/overview?${buildFilterQs(filters)}`),
     enabled,
     staleTime: 30_000,
+  })
+}
+
+/** Coggan CTL/ATL/TSB series — Pro only (backend 402s for free tier). */
+export function useTrainingLoad(days = 90, enabled = true) {
+  return useQuery<TrainingLoad>({
+    queryKey: ['training-load', days],
+    queryFn: () => apiGet<TrainingLoad>(`/api/v1/activities/training-load?days=${days}`),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false, // don't retry a 402 — it won't resolve without an upgrade
+  })
+}
+
+/** All-time personal records, overall + per sport — Pro only. */
+export function useActivityRecords(enabled = true) {
+  return useQuery<ActivityRecords>({
+    queryKey: ['activity-records'],
+    queryFn: () => apiGet<ActivityRecords>('/api/v1/activities/records'),
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
   })
 }
 

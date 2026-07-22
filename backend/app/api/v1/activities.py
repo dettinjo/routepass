@@ -4,7 +4,7 @@ import io
 import json
 import logging
 import math
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
 
 import gpxpy
@@ -609,6 +609,163 @@ async def get_activities_overview(
         "grain": grain,
         "history_days": history_days,
     }
+
+
+# ── Training load (docs/GPX_ANALYSIS_PLAN.md phase 5) — Pro ────────────────────
+
+_CTL_DAYS = 42.0
+_ATL_DAYS = 7.0
+_CTL_ALPHA = 1 - math.exp(-1 / _CTL_DAYS)
+_ATL_ALPHA = 1 - math.exp(-1 / _ATL_DAYS)
+
+
+def _tsb_status(tsb: float) -> str:
+    if tsb >= 25:
+        return "very_fresh"
+    if tsb >= 5:
+        return "fresh"
+    if tsb >= -10:
+        return "neutral"
+    if tsb >= -30:
+        return "fatigued"
+    return "very_fatigued"
+
+
+@router.get("/training-load")
+async def get_training_load(
+    days: int = Query(90, ge=7, le=180),
+    user: User = Depends(deps.get_current_user),
+    _tier: None = Depends(deps.require_tier("pro")),
+    db: AsyncSession = Depends(deps.get_db),
+) -> dict:
+    """Coggan Performance Manager Chart: CTL (fitness, 42-day EWMA of daily TSS),
+    ATL (fatigue, 7-day EWMA), and TSB (form) = yesterday's CTL - yesterday's ATL.
+
+    The recursion is seeded at 0 from the athlete's first TSS-bearing activity
+    (not just the start of the requested window) so CTL/ATL are reasonably
+    warmed up by the time the returned window begins; only the last `days` of
+    the series are returned, but the whole history feeds the computation.
+    """
+    rows = (
+        await db.execute(
+            select(SyncedActivity.started_at, SyncedActivity.tss).where(
+                SyncedActivity.user_id == user.id,
+                SyncedActivity.tss.isnot(None),
+                SyncedActivity.started_at.isnot(None),
+            )
+        )
+    ).all()
+
+    if not rows:
+        return {"available": False, "series": [], "current": None}
+
+    daily: dict[date, float] = {}
+    for started_at, tss in rows:
+        d = started_at.date()
+        daily[d] = daily.get(d, 0.0) + float(tss)
+
+    first_day = min(daily)
+    last_day = max(datetime.now(UTC).date(), max(daily))
+
+    ctl = atl = 0.0
+    series: list[dict] = []
+    d = first_day
+    while d <= last_day:
+        tss_today = daily.get(d, 0.0)
+        tsb = round(ctl - atl, 1)  # form going into today, before today's session
+        ctl += (tss_today - ctl) * _CTL_ALPHA
+        atl += (tss_today - atl) * _ATL_ALPHA
+        series.append(
+            {
+                "date": d.isoformat(),
+                "tss": round(tss_today, 1),
+                "ctl": round(ctl, 1),
+                "atl": round(atl, 1),
+                "tsb": tsb,
+            }
+        )
+        d += timedelta(days=1)
+
+    latest = series[-1]
+    return {
+        "available": True,
+        "series": series[-days:],
+        "current": {
+            "ctl": latest["ctl"],
+            "atl": latest["atl"],
+            "tsb": latest["tsb"],
+            "status": _tsb_status(latest["tsb"]),
+        },
+        "history_days": (last_day - first_day).days + 1,
+    }
+
+
+# ── Personal records (docs/GPX_ANALYSIS_PLAN.md phase 5) — Pro ─────────────────
+
+_RECORD_COLUMNS = {
+    "longest_distance_m": SyncedActivity.distance_m,
+    "longest_duration_s": SyncedActivity.duration_seconds,
+    "most_elevation_gain_m": SyncedActivity.elevation_up_m,
+    "highest_avg_speed_ms": SyncedActivity.avg_speed_ms,
+    "highest_avg_power_w": SyncedActivity.avg_power,
+    "highest_normalized_power_w": SyncedActivity.normalized_power,
+    "highest_tss": SyncedActivity.tss,
+}
+
+
+def _best_of(rows: list, attr: str) -> dict | None:
+    candidates = [r for r in rows if getattr(r, attr) is not None]
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda r: getattr(r, attr))
+    return {
+        "activity_id": str(best.id),
+        "name": best.activity_name,
+        "sport_type": best.sport_type,
+        "started_at": best.started_at.isoformat() if best.started_at else None,
+        "value": getattr(best, attr),
+    }
+
+
+@router.get("/records")
+async def get_activity_records(
+    user: User = Depends(deps.get_current_user),
+    _tier: None = Depends(deps.require_tier("pro")),
+    db: AsyncSession = Depends(deps.get_db),
+) -> dict:
+    """All-time bests overall and per sport, from the stored per-activity
+    aggregate columns (no re-parsing of tracks — cheap even for a full history).
+    """
+    rows = (
+        await db.execute(
+            select(
+                SyncedActivity.id,
+                SyncedActivity.activity_name,
+                SyncedActivity.sport_type,
+                SyncedActivity.started_at,
+                SyncedActivity.distance_m,
+                SyncedActivity.duration_seconds,
+                SyncedActivity.elevation_up_m,
+                SyncedActivity.avg_speed_ms,
+                SyncedActivity.avg_power,
+                SyncedActivity.normalized_power,
+                SyncedActivity.tss,
+            ).where(SyncedActivity.user_id == user.id)
+        )
+    ).all()
+
+    overall = {key: _best_of(rows, attr.key) for key, attr in _RECORD_COLUMNS.items()}
+
+    by_sport: dict[str, dict] = {}
+    for sport in sorted({r.sport_type for r in rows if r.sport_type}):
+        sport_rows = [r for r in rows if r.sport_type == sport]
+        by_sport[sport] = {
+            key: _best_of(sport_rows, attr.key)
+            for key, attr in _RECORD_COLUMNS.items()
+            if key in ("longest_distance_m", "highest_avg_speed_ms", "most_elevation_gain_m")
+        }
+
+    return {"overall": overall, "by_sport": by_sport}
 
 
 # ── Detail ────────────────────────────────────────────────────────────────────

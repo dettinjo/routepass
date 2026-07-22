@@ -311,6 +311,56 @@ def _normalized_power(power: np.ndarray, time_s: np.ndarray) -> float | None:
     return float(np.mean(rolled**4) ** 0.25)
 
 
+_DECOUPLING_MIN_MOVING_S = 1200.0  # 20 min — shorter/non-steady efforts don't drift meaningfully
+
+
+def _decoupling(track: NormalizedTrack, moving: np.ndarray) -> dict[str, Any] | None:
+    """Aerobic decoupling: % drift in effort-per-heartbeat from the first half
+    of the activity to the second half (Pw:Hr if power is present, else Pa:Hr
+    using raw speed — not grade-adjusted). Positive = cardiac drift (HR rising
+    relative to output, a sign of aerobic fatigue or heat); requires HR plus
+    power or speed and >=20 min moving time, since shorter or intermittent
+    efforts don't produce a stable enough ratio to compare halves.
+    """
+    if track.hr is None:
+        return None
+    metric = track.power if track.power is not None else track.speed_ms
+    metric_name = "power" if track.power is not None else "speed"
+    if metric is None:
+        return None
+
+    idx = np.where(moving)[0]
+    if idx.size < 4:
+        return None
+    t = track.time_s[idx]
+    if float(t[-1] - t[0]) < _DECOUPLING_MIN_MOVING_S:
+        return None
+
+    mid_time = t[0] + (t[-1] - t[0]) / 2
+    half1 = idx[t <= mid_time]
+    half2 = idx[t > mid_time]
+    if half1.size < 2 or half2.size < 2:
+        return None
+
+    hr1 = _safe_stat(track.hr[half1], np.mean)
+    hr2 = _safe_stat(track.hr[half2], np.mean)
+    m1 = _safe_stat(metric[half1], np.mean)
+    m2 = _safe_stat(metric[half2], np.mean)
+    if not hr1 or not hr2 or not m1 or not m2:
+        return None
+
+    ratio1 = m1 / hr1
+    ratio2 = m2 / hr2
+    if ratio1 == 0:
+        return None
+    return {
+        "metric": metric_name,
+        "pct": round((ratio1 - ratio2) / ratio1 * 100, 1),
+        "first_half_ratio": round(ratio1, 4),
+        "second_half_ratio": round(ratio2, 4),
+    }
+
+
 def _zones(values: np.ndarray, time_s: np.ndarray, bounds: list[float]) -> list[float]:
     """Seconds spent in each zone. len == len(bounds)+1."""
     dt = np.diff(time_s, prepend=time_s[0])
@@ -463,6 +513,7 @@ def compute_metrics(
                 summary["tss"] = round(
                     (summary["moving_time_s"] * np_power * intensity) / (ftp * 3600) * 100, 1
                 )
+                detail["tss_method"] = "power"
         # Work in kJ (∫ power dt); for cycling kcal ≈ kJ (human ~24% efficiency).
         work_kj = float(np.sum(np.nan_to_num(track.power) * dt) / 1000.0)
         summary["work_kj"] = round(work_kj, 1)
@@ -475,6 +526,20 @@ def compute_metrics(
                 "seconds": [round(s, 1) for s in _zones(track.power, track.time_s, bounds)],
                 "ftp_used": ftp,
             }
+
+    # hrTSS fallback: mirrors the power-TSS formula shape (moving_hours *
+    # IF^2 * 100) with %HRmax standing in for IF, for sports/activities with
+    # no power meter — the only way most runners/hikers get a TSS at all.
+    if "tss" not in summary and track.hr is not None and hr_max and summary.get("avg_hr"):
+        hr_intensity = summary["avg_hr"] / hr_max
+        if hr_intensity > 0 and summary.get("moving_time_s"):
+            summary["tss"] = round((summary["moving_time_s"] / 3600.0) * (hr_intensity**2) * 100, 1)
+            detail["tss_method"] = "hr_estimate"
+
+    decoupling = _decoupling(track, moving)
+    if decoupling is not None:
+        detail["decoupling"] = decoupling
+        available.append("decoupling")
 
     if track.cadence is not None:
         available.append("cadence")
