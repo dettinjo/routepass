@@ -1,8 +1,9 @@
 name: Build and Publish Docker Images
 
 # Builds every source-built service image in GitHub Actions and pushes them to
-# GHCR. Coolify then only pulls + runs these images (docker-compose.coolify.yml
-# references them by tag), so no compilation happens on the Hetzner server.
+# GHCR. On main, the deploy job then calls the signed Komodo webhook for the
+# `routepass` stack (dettinjo/homelab: stacks/hetzner/routepass), which pulls
+# the new :latest images and recreates the containers. Nothing is built on the server.
 
 on:
   push:
@@ -13,6 +14,7 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -78,3 +80,21 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  deploy:
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via Komodo (signed webhook → pull + redeploy stack "routepass")
+        env:
+          SECRET: ${{ secrets.KOMODO_WEBHOOK_SECRET }}
+        run: |
+          body=$(printf '{"ref":"refs/heads/main","after":"%s","repository":{"full_name":"%s"}}' "$GITHUB_SHA" "$GITHUB_REPOSITORY")
+          sig="sha256=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $NF}')"
+          code=$(curl -s -o /tmp/resp -w '%{http_code}' --max-time 30 -X POST \
+            "https://hooks.joeldettinger.de/listener/github/stack/routepass/deploy" \
+            -H 'Content-Type: application/json' -H 'X-GitHub-Event: push' \
+            -H "X-Hub-Signature-256: $sig" --data "$body")
+          cat /tmp/resp; echo; echo "HTTP $code"
+          [ "$code" -lt 300 ]
