@@ -68,19 +68,21 @@ backend/
 ```python
 from pydantic_settings import BaseSettings
 
+
 class Settings(BaseSettings):
     DATABASE_URL: str
     REDIS_URL: str = "redis://redis:6379"
-    SECRET_KEY: str                      # JWT signing
-    KOMOOT_ENCRYPTION_KEY: str           # Fernet key for Komoot credentials
-    STRAVA_CLIENT_ID: str                # shared Strava app
+    SECRET_KEY: str  # JWT signing
+    KOMOOT_ENCRYPTION_KEY: str  # Fernet key for Komoot credentials
+    STRAVA_CLIENT_ID: str  # shared Strava app
     STRAVA_CLIENT_SECRET: str
     STRIPE_SECRET_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
-    LICENSE_SERVER_URL: str = ""         # for self-hosted license validation
-    ENVIRONMENT: str = "production"      # "development" | "production"
+    LICENSE_SERVER_URL: str = ""  # for self-hosted license validation
+    ENVIRONMENT: str = "production"  # "development" | "production"
 
     model_config = SettingsConfigDict(env_file=".env")
+
 
 settings = Settings()
 ```
@@ -91,6 +93,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 
 engine = create_async_engine(settings.DATABASE_URL)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
@@ -105,9 +108,11 @@ async def get_current_user(
 ) -> User:
     """Validates JWT, returns User. Raises 401 if invalid/expired."""
 
+
 async def require_tier(min_tier: str):
     """Returns a FastAPI dependency that raises 402 if user tier is insufficient."""
     # Tier ranks: free=0, pro=1, business=2
+
 
 async def get_current_api_key_user(
     api_key: str = Security(api_key_header),
@@ -125,10 +130,11 @@ from app.db.models.user import User
 
 router = APIRouter(prefix="/sync", tags=["sync"])
 
+
 @router.post("/trigger", response_model=SyncTriggerResponse)
 async def trigger_sync(
     user: User = Depends(get_current_user),
-    _tier: None = Depends(require_tier("pro")),   # omit for free-tier endpoints
+    _tier: None = Depends(require_tier("pro")),  # omit for free-tier endpoints
     db: AsyncSession = Depends(get_db),
 ):
     """Trigger a manual sync. (full docstring added by document-and-test skill)"""
@@ -162,8 +168,10 @@ await db.commit()
 from cryptography.fernet import Fernet
 from app.core.config import settings
 
+
 def get_fernet() -> Fernet:
     return Fernet(settings.KOMOOT_ENCRYPTION_KEY.encode())
+
 
 encrypted = get_fernet().encrypt(plaintext.encode())
 plaintext = get_fernet().decrypt(encrypted).decode()
@@ -200,19 +208,24 @@ async def poll_user_sources(ctx: dict, user_id: str) -> None:
     activities on every poll. Unique constraints enforce idempotency at the DB layer.
     """
 
+
 async def process_strava_activity(ctx: dict, user_id: str, activity_id: str) -> None:
     """Handles a real-time Strava webhook event — ingests the single activity immediately."""
+
 
 async def source_poll_scheduler(ctx: dict) -> None:
     """Cron (every 5 min): finds users due for a poll, enqueues poll_user_sources per user.
     A user is due when: next_poll_at <= now() OR they have any active source connection.
     """
 
+
 async def sync_gpx_to_strava(ctx: dict, activity_id: str, user_id: str) -> None:
     """Uploads a GPX track to Strava for a single activity (Phase B)."""
 
+
 async def sync_activity_to_komoot(ctx: dict, activity_id: str, user_id: str) -> None:
     """Uploads a GPX track to Komoot for a single activity."""
+
 
 # Backwards-compat aliases (kept so in-flight ARQ jobs don't error)
 poll_komoot_user = poll_user_sources
