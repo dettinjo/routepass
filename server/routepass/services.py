@@ -162,8 +162,16 @@ def status(db: Session, running: bool) -> dict[str, Any]:
     return {
         "public_url": get_settings().public_url or None,
         "connections": {
-            "strava": {"connected": conn["strava"], "athlete": store.get_value(db, "strava.athlete")},
-            "komoot": {"connected": conn["komoot"], "account": store.get_value(db, "komoot.account")},
+            "strava": {
+                "connected": conn["strava"],
+                "athlete": store.get_value(db, "strava.athlete"),
+                "error": store.get_value(db, "strava.error"),
+            },
+            "komoot": {
+                "connected": conn["komoot"],
+                "account": store.get_value(db, "komoot.account"),
+                "error": store.get_value(db, "komoot.error"),
+            },
         },
         "running": running,
         "last_run": serialize.run(last) if last else None,

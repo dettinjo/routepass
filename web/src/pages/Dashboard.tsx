@@ -4,7 +4,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { Legend, LineChart, StackedBars } from "../components/charts";
 import { BrandIcon, IconArrowRight, IconCheck, IconList, IconSparkles, IconSync, IconTimeline, IconTrophy, MetricIcon } from "../components/icons";
 import { ActivityList, FamilyChips, METRICS, metricFormat, type Metric } from "../components/shared";
-import { Card, Seg, Skeleton, Stat } from "../components/ui";
+import { Callout, Card, Seg, Skeleton, Stat } from "../components/ui";
 import { api } from "../lib/api";
 import { FAMILIES, FAMILY_LABEL, familyColor } from "../lib/colors";
 import { ago, duration, int, km, pctDelta } from "../lib/format";
@@ -117,6 +117,16 @@ export default function Dashboard() {
       </div>
 
       <div className="stack gap16">
+        {status && (["strava", "komoot"] as const).map((p) => {
+          const err = status.connections[p].error;
+          return err ? (
+            <Callout key={p} kind="bad">
+              <b className="row nowrap" style={{ gap: 6 }}><BrandIcon provider={p} size={16} />{p === "strava" ? "Strava" : "Komoot"} import failed {ago(err.at)}</b>
+              <div className="small" style={{ marginTop: 4 }}>{err.hint}</div>
+              <Link to="/settings" className="small">Open Settings</Link>
+            </Callout>
+          ) : null;
+        })}
         {status && (!strava || !komoot || !status.last_run) && <SetupCard strava={strava} komoot={komoot} />}
 
         {cov && cov.activities > 0 && (

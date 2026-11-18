@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { BrandIcon, IconApi, IconRefresh, IconTarget, IconImport, IconUser } from "../components/icons";
-import { Card, Skeleton, useToast } from "../components/ui";
+import { Callout, Card, Skeleton, useToast } from "../components/ui";
 import { api, getToken, setToken } from "../lib/api";
 import { ago, int } from "../lib/format";
 import { usePrefs, useSavePrefs, useStatus } from "../lib/hooks";
@@ -38,8 +38,9 @@ function Strava() {
   const rate = status?.strava_rate;
   return (
     <Card title={<span className="row nowrap"><BrandIcon provider="strava" size={22} />Strava</span>}
-      actions={s?.connected ? <span className="badge good">connected</span> : <span className="badge">not connected</span>}>
+      actions={s?.error ? <span className="badge bad">error</span> : s?.connected ? <span className="badge good">connected</span> : <span className="badge">not connected</span>}>
       <div className="stack">
+        {s?.error && <Callout kind="bad"><b>{s.error.hint}</b><div className="xs muted" style={{ marginTop: 4, wordBreak: "break-word" }}>{s.error.message}</div></Callout>}
         {s?.connected && s.athlete && (
           <div className="row between">
             <span>{s.athlete.name || `Athlete ${s.athlete.id}`} <span className="small muted">· since {ago(s.athlete.connected_at)}</span></span>
@@ -106,8 +107,9 @@ function Komoot() {
   const k = status?.connections.komoot;
   return (
     <Card title={<span className="row nowrap"><BrandIcon provider="komoot" size={22} />Komoot</span>}
-      actions={k?.connected ? <span className="badge good">connected</span> : <span className="badge">not connected</span>}>
+      actions={k?.error ? <span className="badge bad">error</span> : k?.connected ? <span className="badge good">connected</span> : <span className="badge">not connected</span>}>
       <div className="stack">
+        {k?.error && <Callout kind="bad"><b>{k.error.hint}</b><div className="xs muted" style={{ marginTop: 4, wordBreak: "break-word" }}>{k.error.message}</div></Callout>}
         {k?.connected && k.account && (
           <div className="row between">
             <span>{k.account.display_name || k.account.email} <span className="small muted">· user {k.account.user_id}</span></span>
