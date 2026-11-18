@@ -1,82 +1,73 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Legend, LineChart, RouteThumb, StackedBars } from "../components/charts";
-import { Card, ProviderBadges, Seg, Skeleton, SportDot, Stat } from "../components/ui";
+import { Legend, LineChart, StackedBars } from "../components/charts";
+import { BrandIcon, IconArrowRight, IconCheck, IconList, IconSparkles, IconSync, IconTimeline, IconTrophy, MetricIcon } from "../components/icons";
+import { ActivityList, FamilyChips, METRICS, metricFormat, type Metric } from "../components/shared";
+import { Card, Seg, Skeleton, Stat } from "../components/ui";
 import { api } from "../lib/api";
 import { FAMILIES, FAMILY_LABEL, familyColor } from "../lib/colors";
-import { activityDate, duration, hours, int, km, pctDelta } from "../lib/format";
+import { ago, duration, int, km, pctDelta } from "../lib/format";
 import { useStatus } from "../lib/hooks";
-import { decodePolyline } from "../lib/polyline";
-import type { ActivityRow, Totals } from "../lib/types";
+import type { Totals } from "../lib/types";
 
-export type Metric = "distance_m" | "moving_time_s" | "elevation_m" | "count" | "load";
-export const METRICS: { value: Metric; label: string }[] = [
-  { value: "distance_m", label: "Distance" },
-  { value: "moving_time_s", label: "Time" },
-  { value: "elevation_m", label: "Elevation" },
-  { value: "load", label: "Load" },
-  { value: "count", label: "Count" },
-];
-export const metricFormat = (m: Metric) => (v: number) =>
-  m === "distance_m" ? `${km(v, 0)} km` : m === "moving_time_s" ? `${hours(v)} h` : m === "elevation_m" ? `${int(v)} m` : int(v);
+export { ActivityList, FamilyChips, METRICS, metricFormat, type Metric };
 
-export function FamilyChips({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+type Period = "week" | "month" | "year";
+const FORM_TEXT: Record<string, [string, string]> = {
+  fresh: ["good", "Rested — a good moment for a hard effort or a race."],
+  transition: ["info", "Very rested; fitness slowly drops without training."],
+  neutral: ["", "Balanced load — maintaining fitness."],
+  productive: ["info", "Training is building fitness. Keep recovery in mind."],
+  overreaching: ["bad", "Fatigue is high — plan easier days."],
+};
+
+function SetupCard({ strava, komoot }: { strava: boolean; komoot: boolean }) {
+  const steps = [
+    { done: strava, label: <>Connect <b>Strava</b></>, icon: "strava" },
+    { done: komoot, label: <>Connect <b>Komoot</b></>, icon: "komoot" },
+    { done: false, label: <>Choose what to sync, or bring everything up to date once</> },
+  ];
   return (
-    <div className="row" style={{ gap: 6 }}>
-      <button className={`chip ${value.length === 0 ? "on" : ""}`} onClick={() => onChange([])}>All</button>
-      {FAMILIES.map((f) => (
-        <button key={f} className={`chip ${value.includes(f) ? "on" : ""}`}
-          onClick={() => onChange(value.includes(f) ? value.filter((x) => x !== f) : [...value, f])}>
-          <span className="dot" style={{ background: familyColor(f) }} />{FAMILY_LABEL[f]}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function PeriodCard({ title, cur, prev }: { title: string; cur: Totals; prev: Totals }) {
-  return (
-    <Card title={title}>
-      <div className="stats" style={{ gridTemplateColumns: "repeat(2, minmax(0,1fr))" }}>
-        <Stat label="Distance" value={km(cur.distance_m, 0)} unit="km" delta={pctDelta(cur.distance_m, prev.distance_m)} />
-        <Stat label="Moving time" value={duration(cur.moving_time_s)} delta={pctDelta(cur.moving_time_s, prev.moving_time_s)} />
-        <Stat label="Elevation" value={int(cur.elevation_m)} unit="m" delta={pctDelta(cur.elevation_m, prev.elevation_m)} />
-        <Stat label="Activities" value={cur.count} delta={pctDelta(cur.count, prev.count)} />
+    <Card title="Get started" icon={IconSparkles} hint="Three steps to one clean activity history">
+      <div className="steps">
+        {steps.map((s, i) => (
+          <div key={i} className={`step ${s.done ? "done" : ""}`}>
+            <span className="n">{s.done ? <IconCheck size={16} /> : i + 1}</span>
+            {s.icon && <BrandIcon provider={s.icon} size={18} />}
+            <span className="grow">{s.label}</span>
+          </div>
+        ))}
+      </div>
+      <div className="row mt16">
+        <Link to={strava && komoot ? "/sync" : "/settings"} className="btn primary" style={{ background: "var(--accent)", color: "var(--accent-ink)", borderColor: "var(--accent)" }}>
+          {strava && komoot ? "Set up sync" : "Connect accounts"}<IconArrowRight size={16} />
+        </Link>
       </div>
     </Card>
   );
 }
 
-export function ActivityList({ items, compact = false }: { items: ActivityRow[]; compact?: boolean }) {
-  const nav = useNavigate();
+function PeriodCard({ periods }: { periods: Record<Period, { current: Totals; previous: Totals }> }) {
+  const [p, setP] = useState<Period>("week");
+  const { current: c, previous: v } = periods[p];
   return (
-    <div className="table-wrap">
-      <table>
-        <tbody>
-          {items.map((a) => (
-            <tr key={a.id} className="click" onClick={() => nav(`/activities/${a.id}`)}>
-              <td style={{ width: 52 }}><RouteThumb points={a.polyline ? decodePolyline(a.polyline) : []} color={familyColor(a.family)} /></td>
-              <td>
-                <div className="name-cell" style={{ minWidth: 0 }}><span className="t">{a.name}</span></div>
-                <div className="small muted row" style={{ gap: 6 }}><SportDot family={a.family} />{a.sport_label} · {activityDate(a)}</div>
-              </td>
-              <td className="r" style={{ whiteSpace: "nowrap" }}>{km(a.distance_m)} km{compact && <div className="small muted">{duration(a.moving_time_s)}</div>}</td>
-              {!compact && <td className="r">{duration(a.moving_time_s)}</td>}
-              {!compact && <td className="r">{int(a.elevation_gain_m)} m</td>}
-              <td className="r" style={{ width: 60 }}><ProviderBadges providers={a.providers} copies={a.copies} all /></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <Card title="Your training" icon={IconTimeline} hint="Compared with the same span of the previous period"
+      actions={<Seg value={p} options={[{ value: "week", label: "Week" }, { value: "month", label: "Month" }, { value: "year", label: "Year" }]} onChange={setP} />}>
+      <div className="stats">
+        <Stat icon="distance" label="Distance" value={km(c.distance_m, 0)} unit="km" delta={pctDelta(c.distance_m, v.distance_m)} />
+        <Stat icon="time" label="Moving time" value={duration(c.moving_time_s)} delta={pctDelta(c.moving_time_s, v.moving_time_s)} />
+        <Stat icon="elevation" label="Climbing" value={int(c.elevation_m)} unit="m" delta={pctDelta(c.elevation_m, v.elevation_m)} />
+        <Stat icon="count" label="Activities" value={c.count} delta={pctDelta(c.count, v.count)} />
+      </div>
+    </Card>
   );
 }
 
 export default function Dashboard() {
+  const nav = useNavigate();
   const [families, setFamilies] = useState<string[]>([]);
   const [metric, setMetric] = useState<Metric>("distance_m");
-  const nav = useNavigate();
   const { data: status } = useStatus();
   const { data, isLoading } = useQuery<any>({
     queryKey: ["dashboard", families],
@@ -86,7 +77,7 @@ export default function Dashboard() {
   const weekly = useMemo(() => {
     if (!data) return null;
     const groups: string[] = data.weekly.groups;
-    const buckets = data.weekly.buckets.slice(-53);
+    const buckets = data.weekly.buckets.slice(-26);
     return {
       series: FAMILIES.filter((f) => groups.includes(f)).map((f) => ({ key: f, label: FAMILY_LABEL[f], color: familyColor(f) })),
       bars: buckets.map((b: any) => ({
@@ -103,107 +94,126 @@ export default function Dashboard() {
     return {
       x: load.series.map((p: any) => new Date(p.date).getTime() / 1000),
       series: [
-        { label: "Fitness (CTL)", color: "var(--series-1)", values: load.series.map((p: any) => p.ctl), fill: true },
-        { label: "Fatigue (ATL)", color: "var(--series-2)", values: load.series.map((p: any) => p.atl) },
+        { label: "Fitness", color: "var(--series-1)", values: load.series.map((p: any) => p.ctl), fill: true },
+        { label: "Fatigue", color: "var(--series-2)", values: load.series.map((p: any) => p.atl) },
       ],
     };
   }, [load]);
 
-  const notConnected = status && (!status.connections.strava.connected || !status.connections.komoot.connected);
+  const strava = !!status?.connections.strava.connected;
+  const komoot = !!status?.connections.komoot.connected;
+  const cov = status?.coverage;
+  const form = load?.status ? FORM_TEXT[load.status] : null;
 
   return (
     <>
       <div className="page-head">
         <div>
-          <h1>Dashboard</h1>
+          <h1>Home</h1>
           <div className="sub">
-            {status ? <>{int(status.coverage.activities)} activities · {int(status.coverage.duplicates_hidden)} cross-platform duplicates merged</> : " "}
+            {status?.last_run ? <>Synced {ago(status.last_run.started_at)} · {int(status.activities)} activities</> : "Not synced yet"}
           </div>
         </div>
-        <FamilyChips value={families} onChange={setFamilies} />
       </div>
 
-      {notConnected && (
-        <div className="callout warn" style={{ marginBottom: 16 }}>
-          {!status!.connections.strava.connected && "Strava is not connected. "}
-          {!status!.connections.komoot.connected && "Komoot is not connected. "}
-          <Link to="/settings">Connect in Settings →</Link>
-        </div>
-      )}
+      <div className="stack gap16">
+        {status && (!strava || !komoot || !status.last_run) && <SetupCard strava={strava} komoot={komoot} />}
 
-      {isLoading || !data ? (
-        <div className="grid g3"><Skeleton h={160} /><Skeleton h={160} /><Skeleton h={160} /></div>
-      ) : (
-        <div className="stack gap16">
-          <div className="grid g3">
-            <PeriodCard title="This week" cur={data.periods.week.current} prev={data.periods.week.previous} />
-            <PeriodCard title="This month" cur={data.periods.month.current} prev={data.periods.month.previous} />
-            <PeriodCard title="Year to date" cur={data.periods.year.current} prev={data.periods.year.previous} />
-          </div>
-
-          <Card title="Weekly volume" hint="Last 12 months — click a week to see its activities"
-            actions={<Seg value={metric} options={METRICS} onChange={setMetric} />}>
-            {weekly && weekly.bars.length ? (
-              <>
-                <StackedBars
-                  data={weekly.bars}
-                  series={weekly.series}
-                  format={metricFormat(metric)}
-                  labelFor={(i) => {
-                    const m = (j: number) => new Date(weekly.bars[j].start).getMonth();
-                    return i === 0 || m(i) !== m(i - 1) ? new Date(weekly.bars[i].start).toLocaleDateString(undefined, { month: "short" }) : "";
-                  }}
-                  onClick={(i) => {
-                    const s = new Date(weekly.bars[i].start);
-                    const e = new Date(s.getTime() + 6 * 86400000);
-                    nav(`/activities?start=${weekly.bars[i].start}&end=${e.toISOString().slice(0, 10)}`);
-                  }}
-                />
-                {weekly.series.length > 1 && <div className="mt8"><Legend items={weekly.series} /></div>}
-              </>
-            ) : <div className="empty">No activities yet</div>}
+        {cov && cov.activities > 0 && (
+          <Card title="One history, both platforms" icon={IconSync}
+            hint={`${int(cov.duplicates_hidden)} duplicates merged — every activity counts once`}
+            actions={<Link to="/sync" className="small">Sync settings</Link>}>
+            <div className="flow">
+              <button className="ghost" style={{ flexDirection: "column", height: "auto", padding: 8 }} onClick={() => nav("/activities?presence=strava_only")}>
+                <BrandIcon provider="strava" size={26} />
+                <span className="big-num">{int(cov.strava_only)}</span>
+                <span className="xs muted">only on Strava</span>
+              </button>
+              <button className="ghost" style={{ flexDirection: "column", height: "auto", padding: 8 }} onClick={() => nav("/activities?presence=both")}>
+                <span className="row nowrap" style={{ gap: 4 }}><BrandIcon provider="strava" size={18} /><IconSync size={16} /><BrandIcon provider="komoot" size={18} /></span>
+                <span className="big-num">{int(cov.both)}</span>
+                <span className="xs muted">on both</span>
+              </button>
+              <button className="ghost" style={{ flexDirection: "column", height: "auto", padding: 8 }} onClick={() => nav("/activities?presence=komoot_only")}>
+                <BrandIcon provider="komoot" size={26} />
+                <span className="big-num">{int(cov.komoot_only)}</span>
+                <span className="xs muted">only on Komoot</span>
+              </button>
+            </div>
           </Card>
+        )}
 
-          <div className="grid g3">
-            <Card title="Form" hint="Fitness 42 d · fatigue 7 d · form = fitness − fatigue" className="span2"
-              actions={load?.current && <span className={`badge ${{ fresh: "good", transition: "info", neutral: "", productive: "info", overreaching: "bad" }[load.status as string] ?? ""}`}>{load.status}</span>}>
-              {load?.current ? (
+        <FamilyChips value={families} onChange={setFamilies} />
+
+        {isLoading || !data ? (
+          <Skeleton h={200} />
+        ) : (
+          <>
+            <div className="grid g2">
+              <PeriodCard periods={data.periods} />
+              <Card title="Form" icon={MetricIcon.load} hint="From the training load of every activity"
+                actions={form && <span className={`badge ${form[0]}`} style={{ textTransform: "capitalize" }}>{load.status}</span>}>
+                {load?.current ? (
+                  <>
+                    {form && <p className="secondary small" style={{ marginBottom: 12 }}>{form[1]}</p>}
+                    <div className="stats" style={{ gridTemplateColumns: "repeat(3, minmax(0,1fr))", marginBottom: 8 }}>
+                      <Stat label="Fitness" value={load.current.ctl.toFixed(0)} title="42-day average load (CTL)" />
+                      <Stat label="Fatigue" value={load.current.atl.toFixed(0)} title="7-day average load (ATL)" />
+                      <Stat label="Form" value={load.current.tsb.toFixed(0)} title="Fitness − fatigue (TSB)" />
+                    </div>
+                    {loadChart && <LineChart x={loadChart.x} series={loadChart.series} xTime height={150} yFormat={(v) => (Math.abs(v) < 10 ? v.toFixed(1) : v.toFixed(0))} />}
+                    <div className="mt8 row between">
+                      <Legend line items={loadChart ? loadChart.series.map((s) => ({ key: s.label, label: s.label, color: s.color })) : []} />
+                      <Link to="/insights/fitness" className="small">Details</Link>
+                    </div>
+                  </>
+                ) : <div className="empty">No training load yet</div>}
+              </Card>
+            </div>
+
+            <Card title="Weekly volume" icon={MetricIcon.distance} hint="Last 6 months — tap a week to see its activities"
+              actions={<select value={metric} onChange={(e) => setMetric(e.target.value as Metric)} style={{ width: "auto", minHeight: 36 }} aria-label="Metric">
+                {METRICS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>}>
+              {weekly && weekly.bars.some((b: any) => Object.values(b.values).some((v) => (v as number) > 0)) ? (
                 <>
-                  <div className="stats" style={{ marginBottom: 12 }}>
-                    <Stat label="Fitness" value={load.current.ctl.toFixed(0)} />
-                    <Stat label="Fatigue" value={load.current.atl.toFixed(0)} />
-                    <Stat label="Form" value={load.current.tsb.toFixed(0)} />
-                    <Stat label="7-day ramp" value={load.ramp_7d != null ? (load.ramp_7d > 0 ? "+" : "") + load.ramp_7d.toFixed(1) : "–"} />
-                  </div>
-                  {loadChart && <LineChart x={loadChart.x} series={loadChart.series} xTime height={180} yFormat={(v) => v.toFixed(0)} />}
-                  <div className="mt8 row between">
-                    <Legend line items={[{ key: "ctl", label: "Fitness (CTL)", color: "var(--series-1)" }, { key: "atl", label: "Fatigue (ATL)", color: "var(--series-2)" }]} />
-                    <Link to="/insights/fitness" className="small">Full history →</Link>
-                  </div>
+                  <StackedBars
+                    data={weekly.bars}
+                    series={weekly.series}
+                    height={200}
+                    format={metricFormat(metric)}
+                    labelFor={(i) => {
+                      const m = (j: number) => new Date(weekly.bars[j].start).getMonth();
+                      return i === 0 || m(i) !== m(i - 1) ? new Date(weekly.bars[i].start).toLocaleDateString(undefined, { month: "short" }) : "";
+                    }}
+                    onClick={(i) => {
+                      const s = new Date(weekly.bars[i].start);
+                      const e = new Date(s.getTime() + 6 * 86400000);
+                      nav(`/activities?start=${weekly.bars[i].start}&end=${e.toISOString().slice(0, 10)}`);
+                    }}
+                  />
+                  {weekly.series.length > 1 && <div className="mt8"><Legend items={weekly.series} /></div>}
                 </>
-              ) : <div className="empty">No training load yet</div>}
+              ) : <div className="empty">No activities in the last 6 months</div>}
             </Card>
-            <Card title="Consistency">
-              <div className="stats" style={{ gridTemplateColumns: "repeat(2, minmax(0,1fr))" }}>
-                <Stat label="Day streak" value={data.streaks.current_days} unit="d" />
-                <Stat label="Longest" value={data.streaks.longest_days} unit="d" />
-                <Stat label="Week streak" value={data.streaks.current_weeks} unit="wk" />
-                <Stat label="Longest" value={data.streaks.longest_weeks} unit="wk" />
-              </div>
-              <div className="mt16 section-label">Platforms</div>
-              <dl className="kv mt8">
-                <dt>On both</dt><dd>{int(data.coverage.both)}</dd>
-                <dt>Strava only</dt><dd>{int(data.coverage.strava_only)}</dd>
-                <dt>Komoot only</dt><dd>{int(data.coverage.komoot_only)}</dd>
-              </dl>
-            </Card>
-          </div>
 
-          <Card title="Recent activities" actions={<Link to="/activities" className="small">All activities →</Link>} flush>
-            {data.recent.length ? <ActivityList items={data.recent} /> : <div className="empty">No activities yet</div>}
-          </Card>
-        </div>
-      )}
+            <div className="grid g2">
+              <Card title="Recent activities" icon={IconList} flush actions={<Link to="/activities" className="small">All</Link>}>
+                {data.recent.length ? <ActivityList items={data.recent.slice(0, 6)} /> : <div className="empty">No activities yet</div>}
+              </Card>
+              <Card title="Consistency" icon={IconTrophy}>
+                <div className="stats">
+                  <Stat icon="days" label="Day streak" value={data.streaks.current_days} unit="d" />
+                  <Stat icon="days" label="Best day streak" value={data.streaks.longest_days} unit="d" />
+                  <Stat icon="count" label="Week streak" value={data.streaks.current_weeks} unit="wk" />
+                  <Stat icon="count" label="Best week streak" value={data.streaks.longest_weeks} unit="wk" />
+                </div>
+                <div className="mt16"><Link to="/insights/records" className="small">Records & best efforts →</Link></div>
+              </Card>
+            </div>
+          </>
+        )}
+      </div>
     </>
   );
 }

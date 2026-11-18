@@ -138,8 +138,55 @@ def test_komoot_sport_mapping():
 
     assert sports.komoot_to_strava("mountaineering") == "Hike"
     assert sports.komoot_to_strava("skitour") == "BackcountrySki"
-    assert sports.komoot_to_strava("racebike") == "Ride"
+    assert sports.komoot_to_strava("mtb_easy") == "GravelRide"
+    assert sports.komoot_to_strava("touringbike") == "Ride"  # legacy alias
     assert sports.family(sports.komoot_to_strava("jogging")) == "run"
+
+
+def test_every_sport_maps_to_a_valid_sport_on_the_other_platform():
+    from routepass.providers import sports
+
+    for strava_type, (_, fam, komoot_id) in sports.STRAVA.items():
+        assert komoot_id in sports.KOMOOT, strava_type
+        assert fam in ("ride", "run", "walk", "winter", "water", "other")
+    for komoot_id, (_, strava_type) in sports.KOMOOT.items():
+        assert strava_type in sports.STRAVA, komoot_id
+    for alias, target in sports.KOMOOT_ALIASES.items():
+        assert target in sports.KOMOOT, alias
+    # a round trip keeps the family for every Komoot sport that has a real counterpart
+    for komoot_id in sports.KOMOOT:
+        strava_type = sports.komoot_to_strava(komoot_id)
+        back = sports.strava_to_komoot(strava_type)
+        if komoot_id not in ("other", "sled", "unicycle"):
+            assert sports.family(sports.komoot_to_strava(back)) == sports.family(strava_type), komoot_id
+    # Komoot's full recordable list (from its web app, Nov 2026)
+    assert set(sports.KOMOOT) == {
+        "hike",
+        "touringbicycle",
+        "mtb",
+        "racebike",
+        "jogging",
+        "mtb_easy",
+        "mtb_advanced",
+        "mountaineering",
+        "e_touringbicycle",
+        "e_mtb",
+        "e_racebike",
+        "e_mtb_easy",
+        "e_mtb_advanced",
+        "climbing",
+        "downhillbike",
+        "unicycle",
+        "nordic",
+        "nordicwalking",
+        "skaten",
+        "skialpin",
+        "skitour",
+        "sled",
+        "snowboard",
+        "snowshoe",
+        "other",
+    }
 
 
 def test_malformed_polyline_does_not_raise():

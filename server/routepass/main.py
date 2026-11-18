@@ -44,6 +44,11 @@ def create_app(*, start_scheduler: bool = True) -> FastAPI:
     settings = get_settings()
     logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     init_db()
+    from routepass.db import session_scope
+    from routepass.engine.ingest import remap_sports_if_needed
+
+    with session_scope() as db:
+        remap_sports_if_needed(db)
 
     mcp_app = mcp.streamable_http_app(
         streamable_http_path="/mcp",

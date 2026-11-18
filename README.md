@@ -8,6 +8,11 @@ one SQLite file.
   ordered rules (sport, distance, elevation, duration, name, weekday, date, commute/indoor,
   HR/power) that skip or shape the copy (title/description templates, sport mapping, Komoot
   visibility, Strava feed muting/commute/gear). Dry-run preview before anything is uploaded.
+- **Everything up to date, once** — "Bring everything up to date" imports the complete history of
+  both platforms, merges duplicates, previews what is missing on each side and then copies it in the
+  background within Strava's rate limits.
+- **All sports** — every Strava sport type (50) and every recordable Komoot sport (25) is mapped
+  explicitly in both directions (`server/routepass/providers/sports.py`, enforced by tests).
 - **No duplicates** — every Strava activity and Komoot tour is matched into one *activity*
   (start time + distance + sport). Something already on the target platform is never copied,
   RoutePass' own uploads are recognised, and a settle delay lets devices that upload to both
@@ -20,6 +25,11 @@ one SQLite file.
   Select several activities to copy them in bulk or to analyse them as one multi-day trip.
 - **API & MCP** — everything the UI does is in the REST API (`/api/docs`) and as MCP tools
   (`/mcp`, streamable HTTP) for AI assistants.
+
+## Interface
+
+Mobile first: bottom tab bar and card lists on phones, sidebar on desktop; light and dark mode.
+Strava and Komoot are shown with their official marks; sports and metrics with Tabler icons.
 
 ## Run
 

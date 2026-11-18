@@ -7,7 +7,8 @@ import { Card, Empty, Seg, Skeleton, SportDot, Stat, Tabs } from "../components/
 import { api } from "../lib/api";
 import { FAMILIES, FAMILY_LABEL, familyColor } from "../lib/colors";
 import { duration, hours, int, km, num, speed } from "../lib/format";
-import { FamilyChips, METRICS, metricFormat, type Metric } from "./Dashboard";
+import { FamilyChips, METRICS, metricFormat, type Metric } from "../components/shared";
+import { SportIcon } from "../components/icons";
 
 type Tab = "trends" | "calendar" | "fitness" | "records" | "power" | "habits" | "map";
 const TABS: { value: Tab; label: string }[] = [
@@ -105,19 +106,18 @@ function Trends({ families }: { families: string[] }) {
         </Card>
         <Card title="By sport" flush>
           {totals.data && (
-            <div className="table-wrap">
-              <table>
-                <thead><tr><th>Sport</th><th className="r">#</th><th className="r">km</th><th className="r">Hours</th><th className="r">Elev. m</th><th className="r">Avg km</th></tr></thead>
-                <tbody>
-                  {totals.data.by_sport.map((s: any) => (
-                    <tr key={s.sport}>
-                      <td><span className="row"><SportDot family={s.family} />{s.label}</span></td>
-                      <td className="r">{int(s.count)}</td><td className="r">{km(s.distance_m, 0)}</td><td className="r">{hours(s.moving_time_s)}</td>
-                      <td className="r">{int(s.elevation_m)}</td><td className="r">{km(s.count ? s.distance_m / s.count : 0)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="list">
+              {totals.data.by_sport.map((s: any) => (
+                <div key={s.sport} className="item" style={{ cursor: "default" }}>
+                  <span className="sport-badge" style={{ width: 36, height: 36, background: `color-mix(in srgb, ${familyColor(s.family)} 16%, transparent)`, color: familyColor(s.family) }}>
+                    <SportIcon sport={s.sport} family={s.family} size={19} />
+                  </span>
+                  <div className="main-col">
+                    <span className="name small">{s.label} <span className="muted">· {int(s.count)}×</span></span>
+                    <div className="metrics"><span>{km(s.distance_m, 0)} km</span><span>{hours(s.moving_time_s)} h</span><span>{int(s.elevation_m)} m</span><span className="extra">⌀ {km(s.count ? s.distance_m / s.count : 0)} km</span></div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </Card>

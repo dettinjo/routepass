@@ -32,6 +32,10 @@ cd web && npx tsc -p . --noEmit && npx vite build
   The sync engine must never upload when the activity already has a live record on the target.
 - Credentials are only stored through `store.set_secret` (Fernet).
 - Schema change: bump `SCHEMA_VERSION` in `db.py` and add the ALTER statements to `_MIGRATIONS`.
+- Sports: change mappings only in `providers/sports.py`, then bump `SPORTS_VERSION` in `engine/ingest.py`
+  so stored activities are remapped once at startup.
+- UI is mobile first (styles.css base = phone, `@media (min-width: 900px)` = desktop). Check every page at
+  390 px for horizontal overflow; charts use `contain: inline-size` and are created once, then `setData`.
 - Charts: one y-axis per chart; categorical colours follow the sport family in fixed order
   (`web/src/lib/colors.ts`), tokens in `styles.css` for light and dark.
 - Deploy: push to `main` → GHCR `ghcr.io/dettinjo/routepass:latest` → Komodo stack

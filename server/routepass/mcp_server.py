@@ -379,3 +379,32 @@ def analyse_trip(activity_ids: list[int]) -> dict[str, Any]:
     for a in out["activities"]:
         a.pop("polyline", None)
     return out
+
+
+@mcp.tool()
+def full_history_sync(
+    action: Literal["status", "analyse", "start", "cancel"] = "status",
+    directions: list[Direction] | None = None,
+    apply_rules: bool = True,
+) -> dict[str, Any]:
+    """Bring both platforms fully up to date, all time. `analyse` imports the complete history of
+    Strava and Komoot, merges duplicates and previews what is missing on each side (runs in the
+    background — poll `status`); `start` queues all those copies (worked off within rate limits);
+    `cancel` drops copies that have not run yet."""
+    import threading
+
+    from routepass.engine import fullsync
+
+    if action == "analyse":
+        dirs = list(directions or ["komoot_to_strava", "strava_to_komoot"])
+        threading.Thread(target=fullsync.analyse, args=(dirs, apply_rules), daemon=True).start()
+        return {"phase": "importing"}
+    with session_scope() as db:
+        if action == "start":
+            out = fullsync.start(db)
+            db.commit()
+            runner.trigger_soon()
+            return out
+        if action == "cancel":
+            return fullsync.cancel(db)
+        return fullsync.state(db)
