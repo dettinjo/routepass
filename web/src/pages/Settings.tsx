@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { BrandIcon, IconApi, IconRefresh, IconTarget, IconImport, IconUser } from "../components/icons";
 import { Callout, Card, Skeleton, useToast } from "../components/ui";
+import { StravaArchive } from "../components/StravaArchive";
 import { api, type Me } from "../lib/api";
 import { useQuery } from "@tanstack/react-query";
 import { ago, int } from "../lib/format";
@@ -25,6 +26,8 @@ function Strava() {
   const [appId, setAppId] = useState("");
   const [secret, setSecret] = useState("");
   const [code, setCode] = useState("");
+  const [sessionCookie, setSessionCookie] = useState("");
+  const [rememberToken, setRememberToken] = useState("");
   const [redirect, setRedirect] = useState<string | null>(null);
   const s = status?.connections.strava;
   const connect = async () => {
@@ -37,22 +40,49 @@ function Strava() {
     }
   };
   const rate = status?.strava_rate;
+  const modeLabel = s?.mode === "web" ? "web session" : s?.mode === "oauth+web" ? "OAuth + web fallback" : null;
   return (
     <Card title={<span className="row nowrap"><BrandIcon provider="strava" size={22} />Strava</span>}
-      actions={s?.error ? <span className="badge bad">error</span> : s?.connected ? <span className="badge good">connected</span> : <span className="badge">not connected</span>}>
+      actions={s?.error ? <span className="badge bad">error</span> : s?.connected ? <span className="badge good">connected{modeLabel ? ` (${modeLabel})` : ""}</span> : <span className="badge">not connected</span>}>
       <div className="stack">
         {s?.error && <Callout kind="bad"><b>{s.error.hint}</b><div className="xs muted" style={{ marginTop: 4, wordBreak: "break-word" }}>{s.error.message}</div></Callout>}
         {s?.connected && s.athlete && (
           <div className="row between">
             <span>{s.athlete.name || `Athlete ${s.athlete.id}`} <span className="small muted">· since {ago(s.athlete.connected_at)}</span></span>
             <div className="row">
-              <button className="sm" onClick={() => call.mutate({ path: "/connections/strava/check", method: "GET" }, { onSuccess: () => toast("Strava token works") })}>Test</button>
+              <button className="sm" onClick={() => call.mutate({ path: "/connections/strava/check", method: "GET" }, { onSuccess: () => toast("Strava connection works") })}>Test</button>
               <button className="sm danger" onClick={() => confirm("Disconnect Strava?") && call.mutate({ path: "/connections/strava", method: "DELETE" })}>Disconnect</button>
             </div>
           </div>
         )}
-        <details open={!s?.connected}>
-          <summary className="small secondary" style={{ cursor: "pointer" }}>Strava API application</summary>
+        <details open={!s?.connected || Boolean(s?.error) || s?.mode === "web" || s?.mode === "oauth+web"}>
+          <summary className="small secondary" style={{ cursor: "pointer" }}>
+            <b>Web session (free · works with Email One-Time Code, Google, or Apple)</b>
+          </summary>
+          <div className="stack mt8">
+            <p className="small muted" style={{ margin: 0 }}>
+              Bypasses Strava’s paid API requirement by using your signed-in browser session on <a href="https://www.strava.com/login" target="_blank" rel="noreferrer">strava.com/login</a> (sign in with <b>Email One-Time Code</b>, <b>Google</b>, or <b>Apple</b> with “Remember me” checked). Then in DevTools either right-click any <span className="mono">strava.com</span> request in <b>Network → Copy → Copy as cURL</b> (or Copy Request Headers), or copy <span className="mono">_strava4_session</span> / <span className="mono">strava_remember_token</span> from <b>Application → Cookies</b>, and paste below.
+            </p>
+            <div className="fields">
+              <label className="field">Session cookie, <span className="mono">Cookie:</span> header, or <span className="mono">Copy as cURL</span>
+                <input type="password" placeholder="Paste _strava4_session, Cookie header, or Copy as cURL…" value={sessionCookie} onChange={(e) => setSessionCookie(e.target.value)} />
+              </label>
+              <label className="field">Remember token (<span className="mono">strava_remember_token</span>, optional if included above)
+                <input type="password" placeholder="optional long-lived token" value={rememberToken} onChange={(e) => setRememberToken(e.target.value)} />
+              </label>
+            </div>
+            <div className="row">
+              <button className="primary sm" disabled={!sessionCookie.trim() && !rememberToken.trim()} onClick={() => call.mutate({ path: "/connections/strava/session", method: "PUT", body: { cookie: sessionCookie, remember_token: rememberToken } }, { onSuccess: () => { setSessionCookie(""); setRememberToken(""); toast("Strava web session connected"); } })}>
+                {s?.mode === "web" || s?.mode === "oauth+web" ? "Update web session" : "Connect web session"}
+              </button>
+              {(s?.mode === "web" || s?.mode === "oauth+web") && (
+                <button className="sm ghost" onClick={() => call.mutate({ path: "/connections/strava/session", method: "DELETE" }, { onSuccess: () => toast("Strava web session removed") })}>Remove web session</button>
+              )}
+            </div>
+          </div>
+        </details>
+        <details>
+          <summary className="small secondary" style={{ cursor: "pointer" }}>Strava OAuth API application (requires paid Strava subscription)</summary>
           <div className="stack mt8">
             <p className="small muted" style={{ margin: 0 }}>
               Uses your own app from <a href="https://www.strava.com/settings/api" target="_blank" rel="noreferrer">strava.com/settings/api</a>. Set its
@@ -62,14 +92,14 @@ function Strava() {
               <label className="field">Client ID<input value={appId} onChange={(e) => setAppId(e.target.value)} /></label>
               <label className="field">Client secret<input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} /></label>
             </div>
-            <div><button className="sm" disabled={!appId || !secret} onClick={() => call.mutate({ path: "/connections/strava/app", method: "PUT", body: { client_id: appId, client_secret: secret } }, { onSuccess: () => toast("Saved Strava app") })}>Save app</button></div>
+            <div className="row">
+              <button className="sm" disabled={!appId || !secret} onClick={() => call.mutate({ path: "/connections/strava/app", method: "PUT", body: { client_id: appId, client_secret: secret } }, { onSuccess: () => toast("Saved Strava app") })}>Save app</button>
+              <button className="sm" onClick={connect}>{s?.connected ? "Reconnect OAuth" : "Connect OAuth"}</button>
+            </div>
           </div>
         </details>
-        <div className="row">
-          <button className="primary" onClick={connect}>{s?.connected ? "Reconnect" : "Connect Strava"}</button>
-        </div>
         <details>
-          <summary className="small secondary" style={{ cursor: "pointer" }}>Redirect can't reach this host? Paste the code</summary>
+          <summary className="small secondary" style={{ cursor: "pointer" }}>Redirect can't reach this host? Paste the OAuth code</summary>
           <div className="stack mt8">
             <p className="small muted" style={{ margin: 0 }}>After approving on Strava, copy the <span className="mono">code=…</span> value from the address bar of the page Strava sent you to.{redirect && <> Redirect used: <span className="mono">{redirect}</span></>}</p>
             <div className="row">
@@ -88,6 +118,7 @@ function Strava() {
             </div>
           </div>
         )}
+        <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}><StravaArchive /></div>
         {rate?.observed_at && (
           <div className="small muted">
             API usage — 15 min: {rate.overall["15min"][0]}/{rate.overall["15min"][1]} (read {rate.read["15min"][0]}/{rate.read["15min"][1]}) ·
@@ -128,12 +159,12 @@ function Komoot() {
   );
 }
 
-function NumberField({ label, value, onSave, step }: { label: string; value: number | null; onSave: (v: number | null) => void; step?: number }) {
+function NumberField({ label, value, onSave, step, min, placeholder }: { label: string; value: number | null; onSave: (v: number | null) => void; step?: number; min?: number; placeholder?: string }) {
   const [v, setV] = useState(value == null ? "" : String(value));
   useEffect(() => setV(value == null ? "" : String(value)), [value]);
   return (
     <label className="field">{label}
-      <input type="number" step={step} value={v} onChange={(e) => setV(e.target.value)} onBlur={() => { const n = v === "" ? null : Number(v); if (n !== value) onSave(n); }} />
+      <input type="number" step={step} min={min} placeholder={placeholder} value={v} onChange={(e) => setV(e.target.value)} onBlur={() => { const n = v === "" ? null : Number(v); if (n !== value) onSave(n); }} />
     </label>
   );
 }
@@ -196,7 +227,20 @@ export default function Settings() {
                   <label className="field">History starts at
                     <input type="date" value={prefs.import.history_start ?? ""} onChange={(e) => save.mutate({ import: { history_start: e.target.value || null } })} />
                   </label>
-                  <NumberField label="Poll every (minutes)" value={prefs.poll_interval_minutes} onSave={(v) => save.mutate({ poll_interval_minutes: v })} />
+                  <NumberField label="Poll every (minutes, min 1)" min={1} placeholder="30" value={prefs.poll_interval_minutes} onSave={(v) => save.mutate({ poll_interval_minutes: v != null ? Math.max(1, v) : null })} />
+                </div>
+                <div className="row" style={{ gap: 6 }}>
+                  <span className="xs muted">Quick presets:</span>
+                  <button type="button" className={`chip ${(prefs.poll_interval_minutes === 1 && prefs.sync.delay_minutes === 0) ? "on" : ""}`}
+                    onClick={() => save.mutate({ poll_interval_minutes: 1, sync: { delay_minutes: 0 } }, { onSuccess: () => toast("Instant sync enabled (1 min poll, 0 min delay)") })}>
+                    1 min + 0 delay (instant)
+                  </button>
+                  <button type="button" className={`chip ${prefs.poll_interval_minutes === 2 ? "on" : ""}`}
+                    onClick={() => save.mutate({ poll_interval_minutes: 2 })}>2 min</button>
+                  <button type="button" className={`chip ${prefs.poll_interval_minutes === 5 ? "on" : ""}`}
+                    onClick={() => save.mutate({ poll_interval_minutes: 5 })}>5 min</button>
+                  <button type="button" className={`chip ${(prefs.poll_interval_minutes === 30 || prefs.poll_interval_minutes == null) ? "on" : ""}`}
+                    onClick={() => save.mutate({ poll_interval_minutes: 30 })}>30 min</button>
                 </div>
                 {status && (
                   <p className="small muted" style={{ marginBottom: 0 }}>

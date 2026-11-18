@@ -3,6 +3,7 @@ from __future__ import annotations
 import secrets
 import threading
 from datetime import date
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -24,6 +25,7 @@ from routepass.engine.clients import (
     STRAVA_APP,
     STRAVA_ATHLETE,
     STRAVA_TOKENS,
+    STRAVA_WEB_SESSION,
     strava_app,
     strava_client,
 )
@@ -460,6 +462,10 @@ def patch_preferences(patch: dict[str, Any], db: Session = Depends(get_session))
         threading.Thread(target=_recompute, daemon=True).start()
     if prefs["matching"] != before["matching"]:
         ingest.match_unlinked(db)
+    if prefs.get("poll_interval_minutes") != before.get("poll_interval_minutes") or prefs["sync"].get(
+        "delay_minutes"
+    ) != before["sync"].get("delay_minutes"):
+        runner.trigger_soon()
     return prefs
 
 
@@ -564,10 +570,59 @@ def strava_code(body: CodeBody, db: Session = Depends(get_session)) -> dict[str,
     return _finish_strava(db, body.code.strip())
 
 
+class StravaSessionBody(BaseModel):
+    cookie: str
+    remember_token: str = ""
+
+
+@router.put("/connections/strava/session", tags=["connections"])
+def strava_session_connect(body: StravaSessionBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    """Connect Strava using a browser session cookie (`_strava4_session` / `strava_remember_token`)."""
+    try:
+        cookies = strava.parse_web_cookies(body.cookie, body.remember_token)
+        with strava.StravaWebClient(cookies) as client:
+            athlete = client.athlete()
+            cookies = dict(client.cookies)
+    except strava.StravaAuthError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except strava.StravaError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    store.set_secret(db, STRAVA_WEB_SESSION, {"cookies": cookies})
+    existing = store.get_value(db, STRAVA_ATHLETE) or {}
+    store.set_value(
+        db,
+        STRAVA_ATHLETE,
+        {
+            **existing,
+            "id": athlete.get("id") or existing.get("id"),
+            "name": athlete.get("name")
+            or f"{athlete.get('firstname', '')} {athlete.get('lastname', '')}".strip(),
+            "connected_at": existing.get("connected_at") or utcnow().isoformat(),
+            "mode": "web",
+        },
+    )
+    store.delete_value(db, "strava.error")
+    runner.trigger_soon()
+    return {
+        "ok": True,
+        "athlete": {"id": athlete.get("id"), "name": athlete.get("name") or athlete.get("firstname")},
+    }
+
+
+@router.delete("/connections/strava/session", tags=["connections"])
+def strava_session_disconnect(db: Session = Depends(get_session)) -> dict[str, bool]:
+    store.delete_value(db, STRAVA_WEB_SESSION)
+    if store.get_value(db, STRAVA_TOKENS) is None:
+        store.delete_value(db, STRAVA_ATHLETE)
+    return {"ok": True}
+
+
 @router.delete("/connections/strava", tags=["connections"])
 def strava_disconnect(db: Session = Depends(get_session)) -> dict[str, bool]:
     store.delete_value(db, STRAVA_TOKENS)
+    store.delete_value(db, STRAVA_WEB_SESSION)
     store.delete_value(db, STRAVA_ATHLETE)
+    store.delete_value(db, "strava.error")
     return {"ok": True}
 
 
@@ -778,3 +833,53 @@ def logout() -> Response:
     resp = Response('{"ok":true}', media_type="application/json")
     resp.delete_cookie(auth.SESSION_COOKIE, path="/")
     return resp
+
+
+# ── Strava data export (archive) ─────────────────────────────────────────────
+
+
+@router.get("/import/strava-archive", tags=["import"])
+def strava_archive_state(db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass.engine import strava_archive
+
+    return {
+        **strava_archive.state(db),
+        "available": sorted(p.name for p in strava_archive.archive_dir().glob("*.zip")),
+    }
+
+
+@router.post("/import/strava-archive", tags=["import"])
+async def strava_archive_upload(request: Request) -> dict[str, Any]:
+    """Upload Strava's 'Download your account' zip as the raw request body (streamed to disk), then import."""
+    from routepass.engine import strava_archive
+
+    target = strava_archive.archive_dir() / f"strava-export-{utcnow():%Y%m%d-%H%M%S}.zip"
+    size = 0
+    with target.open("wb") as fh:
+        async for chunk in request.stream():
+            size += len(chunk)
+            fh.write(chunk)
+    import zipfile
+
+    if size == 0 or not zipfile.is_zipfile(target):
+        target.unlink(missing_ok=True)
+        raise HTTPException(
+            422, "That is not a zip file — upload the archive Strava e-mailed you, unchanged."
+        )
+    strava_archive.start(target)
+    return {"phase": "queued", "file": target.name, "bytes": size}
+
+
+class ArchiveFile(BaseModel):
+    file: str = Field(..., description="Name of a zip in the data directory's imports/ folder")
+
+
+@router.post("/import/strava-archive/file", tags=["import"])
+def strava_archive_from_file(body: ArchiveFile) -> dict[str, Any]:
+    from routepass.engine import strava_archive
+
+    path = strava_archive.archive_dir() / Path(body.file).name
+    if not path.is_file():
+        raise HTTPException(404, f"{path.name} not found in imports/")
+    strava_archive.start(path)
+    return {"phase": "queued", "file": path.name}

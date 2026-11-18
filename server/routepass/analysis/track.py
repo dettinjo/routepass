@@ -412,6 +412,155 @@ def from_gpx(gpx: bytes) -> NormalizedTrack | None:
     )
 
 
+def from_tcx(tcx: bytes) -> NormalizedTrack | None:
+    try:
+        root = ET.fromstring(tcx.strip())
+    except ET.ParseError:
+        return None
+    cols: dict[str, list[float]] = {k: [] for k in ("lat", "lon", "ele", "t", "d", "hr", "cad", "pw", "v")}
+    for tp in root.iter():
+        if _local(tp.tag) != "Trackpoint":
+            continue
+        row = dict.fromkeys(cols, np.nan)
+        for el in tp.iter():
+            name, txt = _local(el.tag), (el.text or "").strip()
+            if not txt:
+                continue
+            try:
+                if name == "Time":
+                    row["t"] = datetime.fromisoformat(txt.replace("Z", "+00:00")).timestamp()
+                elif name == "LatitudeDegrees":
+                    row["lat"] = float(txt)
+                elif name == "LongitudeDegrees":
+                    row["lon"] = float(txt)
+                elif name == "AltitudeMeters":
+                    row["ele"] = float(txt)
+                elif name == "DistanceMeters":
+                    row["d"] = float(txt)
+                elif name in ("Cadence", "RunCadence"):
+                    row["cad"] = float(txt)
+                elif name == "Watts":
+                    row["pw"] = float(txt)
+                elif name == "Speed":
+                    row["v"] = float(txt)
+            except ValueError:
+                continue
+        hr = next((c for c in tp if _local(c.tag) == "HeartRateBpm"), None)
+        if hr is not None:
+            val = next((c for c in hr if _local(c.tag) == "Value"), None)
+            if val is not None and val.text:
+                row["hr"] = float(val.text)
+        if np.isnan(row["t"]):
+            continue
+        for k in cols:
+            cols[k].append(row[k])
+    return _from_columns(cols)
+
+
+def from_fit(fit: bytes) -> NormalizedTrack | None:
+    import io
+
+    import fitdecode
+
+    cols: dict[str, list[float]] = {
+        k: [] for k in ("lat", "lon", "ele", "t", "d", "hr", "cad", "pw", "v", "temp")
+    }
+    semicircle = 180.0 / 2**31
+    try:
+        with fitdecode.FitReader(io.BytesIO(fit), check_crc=fitdecode.CrcCheck.DISABLED) as reader:
+            for frame in reader:
+                if frame.frame_type != fitdecode.FIT_FRAME_DATA or frame.name != "record":
+                    continue
+
+                def get(*names: str, frame=frame) -> float:
+                    for n in names:
+                        if frame.has_field(n):
+                            v = frame.get_value(n)
+                            if v is not None:
+                                return v
+                    return np.nan
+
+                ts = get("timestamp")
+                if not hasattr(ts, "timestamp"):
+                    continue
+                lat, lon = get("position_lat"), get("position_long")
+                cols["t"].append(ts.timestamp())
+                cols["lat"].append(lat * semicircle if lat == lat else np.nan)
+                cols["lon"].append(lon * semicircle if lon == lon else np.nan)
+                cols["ele"].append(float(get("enhanced_altitude", "altitude")))
+                cols["d"].append(float(get("distance")))
+                cols["hr"].append(float(get("heart_rate")))
+                cols["cad"].append(float(get("cadence")))
+                cols["pw"].append(float(get("power")))
+                cols["v"].append(float(get("enhanced_speed", "speed")))
+                cols["temp"].append(float(get("temperature")))
+    except Exception:  # noqa: BLE001 — corrupt or truncated files are skipped, not fatal
+        if len(cols["t"]) < 2:
+            return None
+    return _from_columns(cols)
+
+
+def _from_columns(cols: dict[str, list[float]]) -> NormalizedTrack | None:
+    if len(cols["t"]) < 2:
+        return None
+    t = np.asarray(cols["t"], dtype="float64")
+    order = np.argsort(t, kind="stable")
+    t = t[order]
+
+    def ch(k: str) -> np.ndarray | None:
+        if k not in cols:
+            return None
+        a = np.asarray(cols[k], dtype="float64")[order]
+        return None if np.all(np.isnan(a)) else a
+
+    lat, lon = ch("lat"), ch("lon")
+    has_gps = lat is not None and lon is not None
+    dist = ch("d")
+    if dist is None and has_gps:
+        dist = haversine_cumulative(_fill_nan(lat), _fill_nan(lon))
+    return NormalizedTrack(
+        time_s=t - t[0],
+        lat=lat if has_gps else None,
+        lon=lon if has_gps else None,
+        elevation_m=ch("ele"),
+        distance_m=dist,
+        hr=ch("hr"),
+        power=ch("pw"),
+        cadence=ch("cad"),
+        temp=ch("temp"),
+        speed_ms=ch("v"),
+    )
+
+
+def start_epoch(data: bytes, kind: str) -> float | None:
+    """First timestamp of a recording file (UTC epoch seconds), used to date archive entries."""
+    import io
+    import re as _re
+
+    if kind == "fit":
+        import fitdecode
+
+        try:
+            with fitdecode.FitReader(io.BytesIO(data), check_crc=fitdecode.CrcCheck.DISABLED) as reader:
+                for frame in reader:
+                    if (
+                        frame.frame_type == fitdecode.FIT_FRAME_DATA
+                        and frame.name == "record"
+                        and frame.has_field("timestamp")
+                    ):
+                        return frame.get_value("timestamp").timestamp()
+        except Exception:  # noqa: BLE001
+            return None
+        return None
+    m = _re.search(rb"<(?:\w+:)?(?:time|Time|Id)>\s*([0-9T:\-\.Z+]+)\s*<", data)
+    if not m:
+        return None
+    try:
+        return datetime.fromisoformat(m.group(1).decode().replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
 # ── metrics ──────────────────────────────────────────────────────────────────
 
 

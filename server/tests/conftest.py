@@ -8,6 +8,8 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
+os.environ["NO_PROXY"] = "localhost,127.0.0.1"
+os.environ["no_proxy"] = "localhost,127.0.0.1"
 os.environ.setdefault("ROUTEPASS_SECRET_KEY", "x" * 43 + "=")
 os.environ["ROUTEPASS_SCHEDULER_ENABLED"] = "false"
 os.environ["ROUTEPASS_API_TOKEN"] = "test-token"

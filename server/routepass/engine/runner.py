@@ -15,13 +15,13 @@ from routepass.config import get_settings
 from routepass.db import session_scope
 from routepass.engine import ingest, sync
 from routepass.engine.clients import NotConnected, connected, komoot_client, strava_client
-from routepass.models import SyncJob, SyncRun
+from routepass.models import ProviderActivity, SyncJob, SyncRun
 from routepass.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
-BACKLOG_INTERVAL_S = 120
+BACKLOG_INTERVAL_S = 30
 _wake = threading.Event()
 _stop = threading.Event()
 _thread: threading.Thread | None = None
@@ -95,11 +95,26 @@ def _cycle(trigger: str, full: bool, tracks: bool) -> dict[str, Any]:
         stats["linked"] = ingest.match_unlinked(db)
         note(f"matching: {stats['linked']} records merged into existing activities")
 
-    if conn["strava"] and conn["komoot"]:
+    with session_scope() as db:
+        has_strava_records = (
+            db.scalar(
+                select(func.count())
+                .select_from(ProviderActivity)
+                .where(ProviderActivity.provider == "strava")
+            )
+            or 0
+        )
+        strava_api_ok = conn["strava"] and not _strava_blocked(db)
+    directions = [
+        d
+        for d, ok in (("strava_to_komoot", bool(has_strava_records)), ("komoot_to_strava", strava_api_ok))
+        if ok
+    ]
+    if conn["komoot"] and directions:
         try:
             with session_scope() as db:
                 if prefs["sync"]["auto"]:
-                    stats["planned"] = sync.plan(db)
+                    stats["planned"] = sync.plan(db, directions=directions)
                     note(
                         f"planned: {stats['planned']['queued']} to sync, {stats['planned']['skipped']} skipped by rules"
                     )
@@ -162,13 +177,22 @@ def backlog() -> int:
         )
 
 
+def _strava_blocked(db) -> bool:
+    """Strava refuses API access for the whole application (unless a web session is connected)."""
+    if store.get_value(db, "strava.web_session") is not None:
+        return False
+    err = store.get_value(db, "strava.error") or {}
+    return "Inactive" in (err.get("message") or "")
+
+
 def _error_hint(provider: str, message: str) -> str:
     if provider == "strava" and "Inactive" in message:
         return (
-            "Strava has deactivated this API application. Reactivate it at strava.com/settings/api "
-            "(or create a new application and enter its client id/secret in Settings), then reconnect."
+            "Strava has deactivated this API application (since June 2026 the app owner needs a paid "
+            "subscription at strava.com/settings/api). To sync for free without a subscription, connect "
+            "a Strava web session cookie in Settings → Strava → Web session, or import your Strava data export."
         )
-    if "401" in message or "Authentication" in message or "rejected" in message:
+    if "401" in message or "Authentication" in message or "rejected" in message or "expired" in message:
         return f"{provider.title()} rejected the login — reconnect it in Settings."
     if "429" in message or "rate limit" in message.lower():
         return "Rate limit reached — RoutePass continues automatically later."
@@ -193,7 +217,7 @@ def trigger_soon(delay_s: float = 0) -> None:
 def _interval_s() -> float:
     with session_scope() as db:
         minutes = store.get_preferences(db).get("poll_interval_minutes")
-    return max(5, minutes or get_settings().poll_interval_minutes) * 60.0
+    return max(1, minutes or get_settings().poll_interval_minutes) * 60.0
 
 
 def _loop() -> None:

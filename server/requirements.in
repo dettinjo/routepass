@@ -6,3 +6,4 @@ pydantic-settings
 cryptography
 numpy
 mcp>=2.3
+fitdecode

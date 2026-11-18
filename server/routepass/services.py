@@ -158,12 +158,14 @@ def status(db: Session, running: bool) -> dict[str, Any]:
     job_counts = dict(db.execute(select(SyncJob.status, func.count()).group_by(SyncJob.status)).all())
     pending_tracks = db.scalar(select(func.count()).where(Activity.has_track.is_(False)))
     from routepass.config import get_settings
+    from routepass.engine.clients import strava_mode
 
     return {
         "public_url": get_settings().public_url or None,
         "connections": {
             "strava": {
                 "connected": conn["strava"],
+                "mode": strava_mode(db),
                 "athlete": store.get_value(db, "strava.athlete"),
                 "error": store.get_value(db, "strava.error"),
             },

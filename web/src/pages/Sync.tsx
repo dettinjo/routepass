@@ -488,7 +488,7 @@ export default function SyncPage() {
           {rules ? DIRS.map((d) => <DirectionCard key={d.key} dir={d} rules={rules} />) : <><Skeleton h={300} /><Skeleton h={300} /></>}
         </div>
 
-        <Card title="Safety" icon={IconSettings} hint="Applies to automatic sync">
+        <Card title="Safety & timing" icon={IconSettings} hint="Applies to automatic sync">
           {prefs && (
             <div className="stack">
               <div className="fields">
@@ -496,12 +496,20 @@ export default function SyncPage() {
                   <input type="date" value={prefs.sync.start_date ?? ""} onChange={(e) => savePrefs.mutate({ sync: { start_date: e.target.value || null } })} />
                 </label>
                 <label className="field">Wait before copying (min)
-                  <input type="number" inputMode="numeric" min={0} defaultValue={prefs.sync.delay_minutes} onBlur={(e) => savePrefs.mutate({ sync: { delay_minutes: Number(e.target.value) } })} />
+                  <input key={`delay-${prefs.sync.delay_minutes}`} type="number" inputMode="numeric" min={0} defaultValue={prefs.sync.delay_minutes} onBlur={(e) => savePrefs.mutate({ sync: { delay_minutes: Math.max(0, Number(e.target.value)) } })} />
+                </label>
+                <label className="field">Poll every (min, min 1)
+                  <input key={`poll-${prefs.poll_interval_minutes ?? ""}`} type="number" inputMode="numeric" min={1} placeholder="30" defaultValue={prefs.poll_interval_minutes ?? ""} onBlur={(e) => savePrefs.mutate({ poll_interval_minutes: e.target.value === "" ? null : Math.max(1, Number(e.target.value)) })} />
                 </label>
               </div>
               <Switch checked={prefs.sync.auto} onChange={(v) => savePrefs.mutate({ sync: { auto: v } })} label={<span className="small">Copy automatically after every sync</span>} />
-              <p className="xs muted">The wait lets devices that upload to both platforms arrive first, so they are merged instead of copied. Older activities are only copied by hand or with “Bring everything up to date”.</p>
-              <div><button className="sm" onClick={() => reeval.mutate(undefined, { onSuccess: (r: any) => toast(`Rules re-applied: ${r.queued} to copy, ${r.skipped} left out`) })}>Re-apply rules to left-out activities</button></div>
+              <p className="xs muted">The wait lets devices that upload to both platforms arrive first, so they are merged instead of copied. If your device only uploads to one platform, set wait to <b>0 min</b> and poll to <b>1 min</b> for near-instant sync.</p>
+              <div className="row">
+                <button className="sm" onClick={() => savePrefs.mutate({ poll_interval_minutes: 1, sync: { delay_minutes: 0, auto: true } }, { onSuccess: () => toast("Instant sync enabled: polling every 1 min with 0 min delay") })}>
+                  Enable instant sync (1 min poll · 0 min wait)
+                </button>
+                <button className="sm" onClick={() => reeval.mutate(undefined, { onSuccess: (r: any) => toast(`Rules re-applied: ${r.queued} to copy, ${r.skipped} left out`) })}>Re-apply rules to left-out activities</button>
+              </div>
             </div>
           )}
         </Card>
