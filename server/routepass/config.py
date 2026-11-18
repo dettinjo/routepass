@@ -10,8 +10,18 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ROUTEPASS_", env_file=".env", extra="ignore")
 
     data_dir: Path = Path("./data")
-    # Bearer token for API, MCP and the web UI. Empty disables auth (trusted network only).
+    # Bearer token for API and MCP clients (also accepted as a UI login fallback).
     api_token: str = ""
+    # Who may sign in to the web UI (comma-separated e-mails). With neither this nor api_token set,
+    # the instance is open (trusted network only).
+    allowed_emails: str = ""
+    # Trust `Tailscale-User-Login` on the private listener (only behind `tailscale serve`).
+    trust_tailscale_headers: bool = False
+    # Optional second listener for the internet-facing proxy: API paths only, API token only.
+    port: int = 8000
+    public_port: int = 0
+    google_client_id: str = ""
+    google_client_secret: str = ""
     # Fernet key used to encrypt provider credentials at rest. Generated into data_dir when empty.
     secret_key: str = ""
     # URL where you open the UI (redirect target after Strava OAuth).

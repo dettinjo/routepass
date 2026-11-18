@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from routepass import services, store
+from routepass import auth, services, store
 from routepass.analysis import insights
 from routepass.analysis import track as trk
 from routepass.api import serialize
@@ -31,17 +31,16 @@ from routepass.engine.rules import RuleError
 from routepass.models import SyncRun, Track
 from routepass.providers import komoot, sports, strava
 from routepass.providers.gpx import track_to_gpx
-from routepass.security import token_ok
 from routepass.timeutil import utcnow
 
 Direction = Literal["strava_to_komoot", "komoot_to_strava"]
 
 
 def require_token(request: Request) -> None:
-    header = request.headers.get("authorization", "")
-    presented = header[7:] if header.lower().startswith("bearer ") else request.query_params.get("token")
-    if not token_ok(presented):
-        raise HTTPException(401, "Missing or invalid API token", headers={"WWW-Authenticate": "Bearer"})
+    identity = auth.identify(request)
+    if identity is None:
+        raise HTTPException(401, "Sign in or send the API token", headers={"WWW-Authenticate": "Bearer"})
+    request.state.identity = identity
 
 
 router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_token)])
@@ -696,3 +695,86 @@ def full_history_cancel(db: Session = Depends(get_session)) -> dict[str, Any]:
     from routepass.engine import fullsync
 
     return fullsync.cancel(db)
+
+
+# ── sign-in ──────────────────────────────────────────────────────────────────
+
+
+@public.get("/auth/me", tags=["auth"])
+def auth_me(request: Request) -> dict[str, Any]:
+    identity = auth.identify(request)
+    return {
+        "authenticated": identity is not None,
+        "email": identity.email if identity else None,
+        "name": identity.name if identity else None,
+        "picture": identity.picture if identity else None,
+        "method": identity.method if identity else None,
+        "methods": {
+            "google": auth.google_configured(),
+            "tailscale": get_settings().trust_tailscale_headers,
+            "token": bool(get_settings().api_token),
+        },
+    }
+
+
+@public.get("/auth/google/start", tags=["auth"], include_in_schema=False)
+def google_start() -> RedirectResponse:
+    if not auth.google_configured():
+        raise HTTPException(404, "Google sign-in is not configured")
+    return RedirectResponse(auth.google_start_url())
+
+
+@public.get("/auth/google/callback", tags=["auth"], include_in_schema=False)
+def google_callback(code: str = "", state: str = "", error: str = "") -> RedirectResponse:
+    """Arrives on the public URL; hands the identity to the private UI host with a one-time code."""
+    if error or not code:
+        return RedirectResponse(_ui(f"/login?error={error or 'cancelled'}"))
+    try:
+        identity = auth.google_finish(code, state)
+    except auth.LoginError as exc:
+        from urllib.parse import quote
+
+        return RedirectResponse(_ui(f"/login?error={quote(str(exc))}"))
+    return RedirectResponse(_ui(f"/api/v1/auth/complete?code={auth.handoff_code(identity)}"))
+
+
+@public.get("/auth/complete", tags=["auth"], include_in_schema=False)
+def auth_complete(request: Request, code: str = "") -> RedirectResponse:
+    if auth.is_public_listener(request.scope):
+        raise HTTPException(404)
+    identity = auth.redeem_handoff(code)
+    if identity is None:
+        return RedirectResponse("/login?error=The%20sign-in%20link%20expired")
+    resp = RedirectResponse("/")
+    resp.set_cookie(auth.SESSION_COOKIE, auth.session_cookie(identity), **auth.cookie_kwargs())
+    return resp
+
+
+class TokenLogin(BaseModel):
+    token: str
+
+
+@public.post("/auth/token-login", tags=["auth"])
+def token_login(body: TokenLogin, request: Request) -> Response:
+    from routepass.security import token_ok
+
+    if (
+        auth.is_public_listener(request.scope)
+        or not get_settings().api_token
+        or not token_ok(body.token.strip())
+    ):
+        raise HTTPException(401, "Wrong access token")
+    resp = Response('{"ok":true}', media_type="application/json")
+    resp.set_cookie(
+        auth.SESSION_COOKIE,
+        auth.session_cookie(auth.Identity(email=next(iter(auth.allowed_emails()), None), method="token")),
+        **auth.cookie_kwargs(),
+    )
+    return resp
+
+
+@public.post("/auth/logout", tags=["auth"])
+def logout() -> Response:
+    resp = Response('{"ok":true}', media_type="application/json")
+    resp.delete_cookie(auth.SESSION_COOKIE, path="/")
+    return resp

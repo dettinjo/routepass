@@ -4,7 +4,9 @@ import { Logo } from "./components/Logo";
 import { IconChart, IconHome, IconList, IconRefresh, IconSettings, IconSync } from "./components/icons";
 import { useRunSync, useStatus } from "./lib/hooks";
 import { ago } from "./lib/format";
-import { setToken } from "./lib/api";
+import { useQuery } from "@tanstack/react-query";
+import { api, type Me } from "./lib/api";
+import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Activities from "./pages/Activities";
 import ActivityPage from "./pages/Activity";
@@ -19,20 +21,6 @@ const NAV = [
   { to: "/sync", label: "Sync", icon: IconSync },
   { to: "/settings", label: "Settings", icon: IconSettings },
 ];
-
-function TokenGate() {
-  const [value, setValue] = useState("");
-  return (
-    <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 16 }}>
-      <form className="card stack" style={{ width: "min(420px, 100%)" }} onSubmit={(e) => { e.preventDefault(); setToken(value.trim()); location.reload(); }}>
-        <div className="brand"><Logo />RoutePass</div>
-        <p className="secondary">This instance needs its API token (<span className="mono">ROUTEPASS_API_TOKEN</span>). It is stored in this browser only.</p>
-        <input type="password" autoFocus placeholder="API token" value={value} onChange={(e) => setValue(e.target.value)} />
-        <button className="primary" type="submit">Continue</button>
-      </form>
-    </div>
-  );
-}
 
 function SyncButton({ compact = false }: { compact?: boolean }) {
   const { data } = useStatus();
@@ -61,12 +49,17 @@ function SyncButton({ compact = false }: { compact?: boolean }) {
 
 export default function App() {
   const [locked, setLocked] = useState(false);
+  const me = useQuery<Me>({ queryKey: ["me"], queryFn: () => api("/auth/me"), staleTime: 5 * 60_000 });
   useEffect(() => {
     const on = () => setLocked(true);
     window.addEventListener("routepass:unauthorized", on);
     return () => window.removeEventListener("routepass:unauthorized", on);
   }, []);
-  if (locked) return <TokenGate />;
+  if (me.isLoading) return null;
+  if (locked || !me.data?.authenticated || window.location.pathname === "/login") {
+    if (me.data?.authenticated && window.location.pathname === "/login") window.location.replace("/");
+    return <Login me={me.data ?? null} />;
+  }
   return (
     <div className="app">
       <aside className="sidebar">

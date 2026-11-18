@@ -45,7 +45,11 @@ downloaded in the background within Strava's rate limits.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ROUTEPASS_API_TOKEN` | *(empty)* | Bearer token for UI, API and MCP. Empty = no auth (trusted network only) |
+| `ROUTEPASS_API_TOKEN` | *(empty)* | Bearer token for API and MCP clients; also a fallback UI login |
+| `ROUTEPASS_ALLOWED_EMAILS` | *(empty)* | Who may sign in to the UI (comma-separated). With no token and no e-mails the instance is open |
+| `ROUTEPASS_TRUST_TAILSCALE_HEADERS` | `false` | Sign in automatically from `Tailscale-User-Login` (only behind `tailscale serve`; never on the public port) |
+| `ROUTEPASS_GOOGLE_CLIENT_ID` / `_SECRET` | | "Sign in with Google" (redirect URI: `<PUBLIC_URL>/api/v1/auth/google/callback`) |
+| `ROUTEPASS_PORT` / `ROUTEPASS_PUBLIC_PORT` | `8000` / off | Private listener (UI) and optional public listener (API paths only, API token only) |
 | `ROUTEPASS_BASE_URL` | `http://localhost:8000` | URL users open; builds the Strava OAuth redirect |
 | `ROUTEPASS_STRAVA_CLIENT_ID` / `_SECRET` | | Strava API app (can also be entered in Settings) |
 | `ROUTEPASS_PUBLIC_URL` | | Internet-facing URL that exposes only the API paths (OAuth callback, Strava webhook, REST, MCP); used for the Strava redirect and webhook |
@@ -54,6 +58,11 @@ downloaded in the background within Strava's rate limits.
 | `ROUTEPASS_SECRET_KEY` | generated | Fernet key for stored credentials (else `/data/secret.key`) |
 | `ROUTEPASS_POLL_INTERVAL_MINUTES` | `30` | How often both platforms are polled |
 | `ROUTEPASS_DATA_DIR` | `/data` | SQLite database + key |
+
+## Sign-in
+
+The UI uses a session cookie. On devices in your tailnet you are signed in automatically (Tailscale identity),
+elsewhere with Google; the API token remains for scripts, MCP clients and as a fallback.
 
 ## MCP
 

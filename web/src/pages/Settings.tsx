@@ -3,7 +3,8 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { BrandIcon, IconApi, IconRefresh, IconTarget, IconImport, IconUser } from "../components/icons";
 import { Callout, Card, Skeleton, useToast } from "../components/ui";
-import { api, getToken, setToken } from "../lib/api";
+import { api, type Me } from "../lib/api";
+import { useQuery } from "@tanstack/react-query";
 import { ago, int } from "../lib/format";
 import { usePrefs, useSavePrefs, useStatus } from "../lib/hooks";
 
@@ -144,7 +145,7 @@ export default function Settings() {
   const [sp] = useSearchParams();
   const toast = useToast();
   const call = useCall();
-  const [token, setTok] = useState(getToken());
+  const { data: me } = useQuery<Me>({ queryKey: ["me"], queryFn: () => api("/auth/me") });
   useEffect(() => {
     if (sp.get("strava") === "connected") toast("Strava connected — first import is running");
     if (sp.get("strava") === "error") toast(`Strava connection failed (${sp.get("reason")})`, true);
@@ -158,6 +159,18 @@ export default function Settings() {
     <>
       <div className="page-head"><div><h1>Settings</h1><div className="sub">Connections, athlete profile, matching and API access</div></div></div>
       <div className="stack gap16">
+        {me?.authenticated && (
+          <Card title="Account" icon={IconUser}
+            actions={me.method !== "tailscale" && <button className="sm" onClick={async () => { await fetch("/api/v1/auth/logout", { method: "POST", credentials: "same-origin" }); window.location.replace("/login"); }}>Sign out</button>}>
+            <div className="row nowrap" style={{ gap: 12 }}>
+              {me.picture ? <img src={me.picture} alt="" width={40} height={40} style={{ borderRadius: "50%" }} referrerPolicy="no-referrer" /> : <span className="card-ico" style={{ width: 40, height: 40, borderRadius: 20 }}><IconUser size={20} /></span>}
+              <div className="grow">
+                <b>{me.name || me.email || "Signed in"}</b>
+                <div className="small muted">{me.email ? `${me.email} · ` : ""}{{ google: "signed in with Google", tailscale: "signed in automatically via Tailscale", token: "signed in with the access token", open: "no sign-in required" }[me.method ?? ""] ?? me.method}</div>
+              </div>
+            </div>
+          </Card>
+        )}
         <div className="grid g2"><Strava /><Komoot /></div>
 
         {!prefs ? <Skeleton h={200} /> : (
@@ -202,14 +215,11 @@ export default function Settings() {
               <dt>REST API</dt><dd><a href="/api/docs" target="_blank" rel="noreferrer" className="mono">{origin}/api/v1</a> · <a href="/api/docs" target="_blank" rel="noreferrer">interactive docs</a></dd>
               <dt>MCP</dt><dd className="mono">{origin}/mcp</dd>
               {st?.public_url && <><dt>Public (API only)</dt><dd className="mono">{st.public_url}/api/v1 · {st.public_url}/mcp</dd></>}
-              <dt>Auth</dt><dd>Header <span className="mono">Authorization: Bearer &lt;ROUTEPASS_API_TOKEN&gt;</span></dd>
+              <dt>Auth</dt><dd>Header <span className="mono">Authorization: Bearer &lt;ROUTEPASS_API_TOKEN&gt;</span> (the web UI uses your sign-in instead)</dd>
             </dl>
             <div className="section-label">MCP client config</div>
             <pre className="mono callout" style={{ margin: 0, overflowX: "auto" }}>{mcpConfig}</pre>
-            <div className="row" style={{ alignItems: "end" }}>
-              <label className="field" style={{ width: "100%", maxWidth: 360 }}>Token used by this browser<input type="password" value={token} onChange={(e) => setTok(e.target.value)} /></label>
-              <button onClick={() => { setToken(token); toast("Token saved"); }}>Save</button>
-            </div>
+
           </div>
         </Card>
 

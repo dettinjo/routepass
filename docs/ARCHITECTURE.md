@@ -81,6 +81,12 @@ motion. Two anonymised tracks are regression fixtures in `server/tests/fixtures`
 
 ## Security
 
+Two listeners in one process (`python -m routepass.serve`): the private port serves the UI and trusts the
+Tailscale identity headers that `tailscale serve` sets; the public port (behind the internet-facing proxy)
+serves only `/api/v1/*` and `/mcp`, accepts only the API token and never trusts those headers. UI sessions
+are HMAC-signed, HttpOnly cookies for the allowed e-mail(s), issued after Tailscale identity, Google sign-in
+(callback on the public URL, handed to the private host with a 2-minute one-time code) or the API token.
+
 Bearer token (`ROUTEPASS_API_TOKEN`) on API, MCP and UI; meant to run on a private network
 (the homelab deploys it on the tailnet only). Strava tokens and Komoot credentials are
 Fernet-encrypted at rest.
