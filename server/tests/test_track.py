@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+import numpy as np
+
+from routepass.analysis import track as trk
+from routepass.engine.rules import template_fields
+from routepass.providers.gpx import decode_polyline, encode_polyline, track_to_gpx
+from tests.conftest import T0
+
+
+def _ride(n: int = 3600) -> trk.NormalizedTrack:
+    t = np.arange(n, dtype=float)
+    lat = 47 + np.arange(n) * 0.00007
+    lon = np.full(n, 8.0)
+    ele = 400 + 400 * np.sin(np.linspace(0, np.pi, n))
+    return trk.NormalizedTrack(
+        time_s=t,
+        lat=lat,
+        lon=lon,
+        elevation_m=ele,
+        distance_m=trk.haversine_cumulative(lat, lon),
+        hr=np.full(n, 150.0),
+        power=np.full(n, 200.0),
+    )
+
+
+def test_compute_summary_and_efforts():
+    r = trk.compute(_ride(), family="ride", ftp=250, hr_max=190)
+    s = r.summary
+    assert 27_000 < s["distance_m"] < 29_000
+    assert 390 < s["elevation_gain_m"] < 410
+    assert s["load_method"] == "power" and 60 < s["load"] < 70  # 1 h at IF 0.8 = 64
+    assert r.detail["power_curve"][60] == 200
+    assert 5000 in r.detail["best_times"]
+    assert r.detail["climbs"] and r.detail["climbs"][0]["gain_m"] >= 390
+    assert len(r.points) <= trk.CHART_POINTS
+
+
+def test_pack_roundtrip_and_gpx():
+    tr = _ride(500)
+    back = trk.NormalizedTrack.unpack(tr.pack())
+    assert back.n == 500 and back.hr is not None
+    gpx = track_to_gpx(back, "A & B", "Ride", T0.replace(tzinfo=None))
+    parsed = trk.from_gpx(gpx)
+    assert parsed.n == 500 and parsed.hr is not None and b"A &amp; B" in gpx
+
+
+def test_load_fallbacks():
+    assert (
+        trk.compute_load(
+            family="run", moving_s=3600, np_power=None, avg_hr=None, ftp=None, hr_max=None, hr_rest=None
+        )[1]
+        == "estimate"
+    )
+    assert (
+        trk.compute_load(
+            family="run", moving_s=3600, np_power=None, avg_hr=150, ftp=None, hr_max=190, hr_rest=50
+        )[1]
+        == "heartrate"
+    )
+
+
+def test_polyline_roundtrip():
+    pts = [(47.1, 8.2), (47.10005, 8.20012), (46.9, 8.5)]
+    back = decode_polyline(encode_polyline(pts))
+    assert all(abs(a[0] - b[0]) < 1e-5 and abs(a[1] - b[1]) < 1e-5 for a, b in zip(pts, back, strict=True))
+
+
+def test_template_fields():
+    from routepass.models import Activity
+
+    act = Activity(
+        name="Loop",
+        sport="Ride",
+        family="ride",
+        start_time=T0.replace(tzinfo=None),
+        distance_m=42195,
+        moving_time_s=5400,
+        elevation_gain_m=321,
+    )
+    f = template_fields(act, "strava")
+    assert "{name} {distance_km:.1f} km {moving_time}".format_map(f) == "Loop 42.2 km 1:30"
+
+
+def test_pack_preserves_gaps_and_precision():
+    tr = _ride(300)
+    tr.hr[10:20] = np.nan
+    tr.hr[0] = np.nan
+    back = trk.NormalizedTrack.unpack(tr.pack())
+    assert np.isnan(back.hr[0]) and np.isnan(back.hr[15]) and back.hr[25] == 150
+    assert np.allclose(back.lat, tr.lat, atol=1e-6)
+    assert np.allclose(back.elevation_m, tr.elevation_m, atol=0.06)
+    pts = trk.compute(tr, family="ride").points
+    assert trk.unpack_points(trk.pack_points(pts)) == pts

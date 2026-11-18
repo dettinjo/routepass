@@ -1,0 +1,15 @@
+[project]
+name = "routepass"
+version = "2.0.0"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["B008", "B905", "E501", "SIM102", "SIM103", "SIM105"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

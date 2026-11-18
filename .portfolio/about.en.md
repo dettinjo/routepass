@@ -1,18 +1,27 @@
-## Routepass — Komoot to Strava Sync
+## RoutePass — Strava ⇄ Komoot sync and activity analysis
 
-A lightweight, self-hosted automation service that bridges two fitness platforms: Komoot (used for route planning and outdoor navigation) and Strava (used for activity tracking and social features). After completing a tour on Komoot, the service automatically pushes it to Strava — eliminating the need to upload GPX files manually.
+A self-hosted, single-user service that keeps Strava and Komoot in step and turns the combined
+history into one deduplicated training log.
 
-### How It Works
+### What it does
 
-1. **Polling**: A scheduled job polls the Komoot API for new completed tours since the last sync timestamp.
-2. **GPX Export**: For each new tour, the GPX track data is fetched from Komoot's tour export endpoint.
-3. **Strava Upload**: The GPX file is uploaded to Strava via the Strava API v3, which automatically creates a new activity with the route data.
-4. **State Management**: The last successfully synced tour ID is persisted to avoid duplicate uploads across service restarts.
+- **Rule-based sync in both directions.** Komoot tours can be copied to Strava and Strava
+  activities to Komoot. Ordered rules (sport, distance, elevation, duration, name, weekday,
+  indoor/commute, HR/power) decide what is copied and how: title and description templates,
+  sport mapping, Komoot visibility, Strava feed muting. A dry-run preview shows every decision
+  before anything is uploaded.
+- **No duplicates.** Every record from both platforms is matched into a single activity by start
+  time, distance and sport. Something already on the target is never uploaded again, and a
+  settle delay covers devices that upload to both platforms.
+- **Analysis.** Fitness/fatigue/form, records and best efforts, power curve, climbs, splits,
+  HR and power zones, aerobic decoupling, calendar heatmap, year-over-year progress, habits,
+  Eddington number and a map of every route.
+- **API and MCP.** Everything is available over a REST API and as MCP tools, so an AI assistant
+  can query training data or change sync rules.
 
-### Deployment
+### Architecture
 
-The service runs as a Docker container deployed on a personal Coolify instance. A simple `docker-compose.yml` with an environment-variable-based configuration makes it easy to self-host.
-
-### Why Not Use the Official Integration?
-
-Komoot's official Strava integration only works for manually started recordings on the Komoot app. It doesn't support syncing pre-planned routes navigated via GPS devices, which is the primary use case for this tool.
+One container: FastAPI serves the REST API, an MCP server (streamable HTTP) and the React UI,
+while a background thread polls both platforms. Data lives in a single SQLite file; recordings
+are stored delta-encoded and compressed (tens of KB per activity). Track metrics are computed
+with numpy; the UI uses uPlot and Leaflet and stays under 170 KB gzipped.

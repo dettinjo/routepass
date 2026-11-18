@@ -1,0 +1,209 @@
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { Card, Skeleton, useToast } from "../components/ui";
+import { api, getToken, setToken } from "../lib/api";
+import { ago, int } from "../lib/format";
+import { usePrefs, useSavePrefs, useStatus } from "../lib/hooks";
+
+function useCall() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  return useMutation({
+    mutationFn: ({ path, method = "POST", body }: { path: string; method?: string; body?: unknown }) => api(path, { method, body }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["status"] }),
+    onError: (e: Error) => toast(e.message, true),
+  });
+}
+
+function Strava() {
+  const { data: status } = useStatus();
+  const call = useCall();
+  const toast = useToast();
+  const [appId, setAppId] = useState("");
+  const [secret, setSecret] = useState("");
+  const [code, setCode] = useState("");
+  const [redirect, setRedirect] = useState<string | null>(null);
+  const s = status?.connections.strava;
+  const connect = async () => {
+    try {
+      const r = await api<{ url: string; redirect_uri: string }>("/connections/strava/authorize");
+      setRedirect(r.redirect_uri);
+      window.location.assign(r.url);
+    } catch (e: any) {
+      toast(e.message, true);
+    }
+  };
+  const rate = status?.strava_rate;
+  return (
+    <Card title={<span className="row"><span className="prov strava">S</span>Strava</span>}
+      actions={s?.connected ? <span className="badge good">connected</span> : <span className="badge">not connected</span>}>
+      <div className="stack">
+        {s?.connected && s.athlete && (
+          <div className="row between">
+            <span>{s.athlete.name || `Athlete ${s.athlete.id}`} <span className="small muted">· since {ago(s.athlete.connected_at)}</span></span>
+            <div className="row">
+              <button className="sm" onClick={() => call.mutate({ path: "/connections/strava/check", method: "GET" }, { onSuccess: () => toast("Strava token works") })}>Test</button>
+              <button className="sm danger" onClick={() => confirm("Disconnect Strava?") && call.mutate({ path: "/connections/strava", method: "DELETE" })}>Disconnect</button>
+            </div>
+          </div>
+        )}
+        <details open={!s?.connected}>
+          <summary className="small secondary" style={{ cursor: "pointer" }}>Strava API application</summary>
+          <div className="stack mt8">
+            <p className="small muted" style={{ margin: 0 }}>
+              Uses your own app from <a href="https://www.strava.com/settings/api" target="_blank" rel="noreferrer">strava.com/settings/api</a>. Set its
+              “Authorization Callback Domain” to this host. Leave empty to keep the values from the environment.
+            </p>
+            <div className="fields">
+              <label className="field">Client ID<input value={appId} onChange={(e) => setAppId(e.target.value)} /></label>
+              <label className="field">Client secret<input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} /></label>
+            </div>
+            <div><button className="sm" disabled={!appId || !secret} onClick={() => call.mutate({ path: "/connections/strava/app", method: "PUT", body: { client_id: appId, client_secret: secret } }, { onSuccess: () => toast("Saved Strava app") })}>Save app</button></div>
+          </div>
+        </details>
+        <div className="row">
+          <button className="primary" onClick={connect}>{s?.connected ? "Reconnect" : "Connect Strava"}</button>
+        </div>
+        <details>
+          <summary className="small secondary" style={{ cursor: "pointer" }}>Redirect can't reach this host? Paste the code</summary>
+          <div className="stack mt8">
+            <p className="small muted" style={{ margin: 0 }}>After approving on Strava, copy the <span className="mono">code=…</span> value from the address bar of the page Strava sent you to.{redirect && <> Redirect used: <span className="mono">{redirect}</span></>}</p>
+            <div className="row">
+              <input placeholder="code" value={code} onChange={(e) => setCode(e.target.value)} style={{ width: 320 }} />
+              <button className="sm" disabled={!code} onClick={() => call.mutate({ path: "/connections/strava/code", body: { code } }, { onSuccess: () => { setCode(""); toast("Strava connected"); } })}>Finish</button>
+            </div>
+          </div>
+        </details>
+        {rate?.observed_at && (
+          <div className="small muted">
+            API usage — 15 min: {rate.overall["15min"][0]}/{rate.overall["15min"][1]} (read {rate.read["15min"][0]}/{rate.read["15min"][1]}) ·
+            today: {rate.overall.day[0]}/{rate.overall.day[1]} (read {rate.read.day[0]}/{rate.read.day[1]})
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function Komoot() {
+  const { data: status } = useStatus();
+  const call = useCall();
+  const toast = useToast();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const k = status?.connections.komoot;
+  return (
+    <Card title={<span className="row"><span className="prov komoot">K</span>Komoot</span>}
+      actions={k?.connected ? <span className="badge good">connected</span> : <span className="badge">not connected</span>}>
+      <div className="stack">
+        {k?.connected && k.account && (
+          <div className="row between">
+            <span>{k.account.display_name || k.account.email} <span className="small muted">· user {k.account.user_id}</span></span>
+            <button className="sm danger" onClick={() => confirm("Disconnect Komoot?") && call.mutate({ path: "/connections/komoot", method: "DELETE" })}>Disconnect</button>
+          </div>
+        )}
+        <p className="small muted" style={{ margin: 0 }}>Komoot has no public API; RoutePass signs in with your email and password (stored encrypted on this server).</p>
+        <form className="fields" style={{ alignItems: "end" }} onSubmit={(e) => { e.preventDefault(); call.mutate({ path: "/connections/komoot", method: "PUT", body: { email, password } }, { onSuccess: () => { setPassword(""); toast("Komoot connected"); } }); }}>
+          <label className="field">Email<input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} /></label>
+          <label className="field">Password<input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} /></label>
+          <div><button className="primary" type="submit" disabled={!email || !password || call.isPending}>{k?.connected ? "Update login" : "Connect Komoot"}</button></div>
+        </form>
+      </div>
+    </Card>
+  );
+}
+
+function NumberField({ label, value, onSave, step }: { label: string; value: number | null; onSave: (v: number | null) => void; step?: number }) {
+  const [v, setV] = useState(value == null ? "" : String(value));
+  useEffect(() => setV(value == null ? "" : String(value)), [value]);
+  return (
+    <label className="field">{label}
+      <input type="number" step={step} value={v} onChange={(e) => setV(e.target.value)} onBlur={() => { const n = v === "" ? null : Number(v); if (n !== value) onSave(n); }} />
+    </label>
+  );
+}
+
+export default function Settings() {
+  const { data: prefs } = usePrefs();
+  const save = useSavePrefs();
+  const { data: status } = useStatus();
+  const [sp] = useSearchParams();
+  const toast = useToast();
+  const call = useCall();
+  const [token, setTok] = useState(getToken());
+  useEffect(() => {
+    if (sp.get("strava") === "connected") toast("Strava connected — first import is running");
+    if (sp.get("strava") === "error") toast(`Strava connection failed (${sp.get("reason")})`, true);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const origin = window.location.origin;
+  const mcpConfig = JSON.stringify({ mcpServers: { routepass: { type: "http", url: `${origin}/mcp`, headers: { Authorization: "Bearer <ROUTEPASS_API_TOKEN>" } } } }, null, 2);
+
+  return (
+    <>
+      <div className="page-head"><div><h1>Settings</h1><div className="sub">Connections, athlete profile, matching and API access</div></div></div>
+      <div className="stack gap16">
+        <div className="grid g2"><Strava /><Komoot /></div>
+
+        {!prefs ? <Skeleton h={200} /> : (
+          <>
+            <Card title="Athlete profile" hint="Drives zones and training load. Changing it recomputes every activity.">
+              <div className="fields">
+                <NumberField label="FTP (W)" value={prefs.profile.ftp} onSave={(v) => save.mutate({ profile: { ftp: v } })} />
+                <NumberField label="Max heart rate (bpm)" value={prefs.profile.hr_max} onSave={(v) => save.mutate({ profile: { hr_max: v } })} />
+                <NumberField label="Resting heart rate (bpm)" value={prefs.profile.hr_rest} onSave={(v) => save.mutate({ profile: { hr_rest: v } })} />
+                <NumberField label="Weight (kg)" value={prefs.profile.weight_kg} step={0.1} onSave={(v) => save.mutate({ profile: { weight_kg: v } })} />
+              </div>
+            </Card>
+            <div className="grid g2">
+              <Card title="Duplicate detection" hint="Records from both platforms are the same activity when these match">
+                <div className="fields">
+                  <NumberField label="Start time within (minutes)" value={prefs.matching.time_tolerance_min} onSave={(v) => save.mutate({ matching: { time_tolerance_min: v ?? 10 } })} />
+                  <NumberField label="Distance within (%)" value={prefs.matching.distance_tolerance_pct} onSave={(v) => save.mutate({ matching: { distance_tolerance_pct: v ?? 15 } })} />
+                </div>
+                <p className="small muted" style={{ marginBottom: 0 }}>Wrong match? Use “Not the same” or “Merge” on the activity page — manual decisions are kept.</p>
+              </Card>
+              <Card title="Import" hint="What is read from the platforms">
+                <div className="fields">
+                  <label className="field">History starts at
+                    <input type="date" value={prefs.import.history_start ?? ""} onChange={(e) => save.mutate({ import: { history_start: e.target.value || null } })} />
+                  </label>
+                  <NumberField label="Poll every (minutes)" value={prefs.poll_interval_minutes} onSave={(v) => save.mutate({ poll_interval_minutes: v })} />
+                </div>
+                {status && (
+                  <p className="small muted" style={{ marginBottom: 0 }}>
+                    {int(status.coverage.provider_records.strava ?? 0)} Strava + {int(status.coverage.provider_records.komoot ?? 0)} Komoot records → {int(status.activities)} activities.
+                    {status.tracks_pending > 0 && ` ${int(status.tracks_pending)} recordings still downloading (rate-limited in the background).`}
+                  </p>
+                )}
+              </Card>
+            </div>
+          </>
+        )}
+
+        <Card title="API & MCP" hint="Everything in this UI is available programmatically">
+          <div className="stack">
+            <dl className="kv">
+              <dt>REST API</dt><dd><a href="/api/docs" target="_blank" rel="noreferrer" className="mono">{origin}/api/v1</a> · <a href="/api/docs" target="_blank" rel="noreferrer">interactive docs</a></dd>
+              <dt>MCP</dt><dd className="mono">{origin}/mcp</dd>
+              <dt>Auth</dt><dd>Header <span className="mono">Authorization: Bearer &lt;ROUTEPASS_API_TOKEN&gt;</span></dd>
+            </dl>
+            <div className="section-label">MCP client config</div>
+            <pre className="mono callout" style={{ margin: 0, overflowX: "auto" }}>{mcpConfig}</pre>
+            <div className="row" style={{ alignItems: "end" }}>
+              <label className="field" style={{ width: 320 }}>Token used by this browser<input type="password" value={token} onChange={(e) => setTok(e.target.value)} /></label>
+              <button onClick={() => { setToken(token); toast("Token saved"); }}>Save</button>
+            </div>
+          </div>
+        </Card>
+
+        <Card title="Maintenance">
+          <div className="row">
+            <button onClick={() => call.mutate({ path: "/settings/recompute" }, { onSuccess: () => toast("Recomputing all tracks in the background") })}>Recompute analysis</button>
+            <button onClick={() => call.mutate({ path: "/sync/run", body: { full: true } }, { onSuccess: () => toast("Full rescan started") })}>Full rescan</button>
+          </div>
+        </Card>
+      </div>
+    </>
+  );
+}
