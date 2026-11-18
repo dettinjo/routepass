@@ -111,6 +111,11 @@ _STRAVA_KEEP = [
     "pr_count",
     "suffer_score",
     "workout_type",
+    "description",
+    "source",
+    "summary_polyline",
+    "device_name",
+    "calories",
 ]
 _KOMOOT_KEEP = [
     "id",
@@ -473,6 +478,10 @@ def _apply_track_summary(db: Session, act: Activity, track: Track) -> None:
         pts = [(p["lat"], p["lon"]) for p in trk.unpack_points(track.points) if p.get("lat") is not None]
         if pts:
             act.polyline = encode_polyline(simplify(pts, 400))
+    if act.polyline:
+        for src in act.sources:
+            if src.provider == "strava" and not src.deleted and not src.raw.get("summary_polyline"):
+                src.raw = {**src.raw, "summary_polyline": act.polyline}
     act.has_track = True
     act.track_provider = track.provider
 

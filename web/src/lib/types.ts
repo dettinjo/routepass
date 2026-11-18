@@ -68,7 +68,7 @@ export interface SyncRun { id: number; trigger: string; status: string; started_
 export interface Status {
   public_url: string | null;
   connections: {
-    strava: { connected: boolean; athlete: any; error: ProviderError | null };
+    strava: { connected: boolean; mode?: "oauth" | "web" | "oauth+web" | null; athlete: any; error: ProviderError | null };
     komoot: { connected: boolean; account: any; error: ProviderError | null };
   };
   running: boolean; last_run: SyncRun | null; jobs: Record<string, number>; activities: number; tracks_pending: number;

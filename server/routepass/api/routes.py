@@ -25,6 +25,7 @@ from routepass.engine.clients import (
     STRAVA_APP,
     STRAVA_ATHLETE,
     STRAVA_TOKENS,
+    STRAVA_WEB_SESSION,
     strava_app,
     strava_client,
 )
@@ -565,10 +566,59 @@ def strava_code(body: CodeBody, db: Session = Depends(get_session)) -> dict[str,
     return _finish_strava(db, body.code.strip())
 
 
+class StravaSessionBody(BaseModel):
+    cookie: str
+    remember_token: str = ""
+
+
+@router.put("/connections/strava/session", tags=["connections"])
+def strava_session_connect(body: StravaSessionBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    """Connect Strava using a browser session cookie (`_strava4_session` / `strava_remember_token`)."""
+    try:
+        cookies = strava.parse_web_cookies(body.cookie, body.remember_token)
+        with strava.StravaWebClient(cookies) as client:
+            athlete = client.athlete()
+            cookies = dict(client.cookies)
+    except strava.StravaAuthError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except strava.StravaError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    store.set_secret(db, STRAVA_WEB_SESSION, {"cookies": cookies})
+    existing = store.get_value(db, STRAVA_ATHLETE) or {}
+    store.set_value(
+        db,
+        STRAVA_ATHLETE,
+        {
+            **existing,
+            "id": athlete.get("id") or existing.get("id"),
+            "name": athlete.get("name")
+            or f"{athlete.get('firstname', '')} {athlete.get('lastname', '')}".strip(),
+            "connected_at": existing.get("connected_at") or utcnow().isoformat(),
+            "mode": "web",
+        },
+    )
+    store.delete_value(db, "strava.error")
+    runner.trigger_soon()
+    return {
+        "ok": True,
+        "athlete": {"id": athlete.get("id"), "name": athlete.get("name") or athlete.get("firstname")},
+    }
+
+
+@router.delete("/connections/strava/session", tags=["connections"])
+def strava_session_disconnect(db: Session = Depends(get_session)) -> dict[str, bool]:
+    store.delete_value(db, STRAVA_WEB_SESSION)
+    if store.get_value(db, STRAVA_TOKENS) is None:
+        store.delete_value(db, STRAVA_ATHLETE)
+    return {"ok": True}
+
+
 @router.delete("/connections/strava", tags=["connections"])
 def strava_disconnect(db: Session = Depends(get_session)) -> dict[str, bool]:
     store.delete_value(db, STRAVA_TOKENS)
+    store.delete_value(db, STRAVA_WEB_SESSION)
     store.delete_value(db, STRAVA_ATHLETE)
+    store.delete_value(db, "strava.error")
     return {"ok": True}
 
 

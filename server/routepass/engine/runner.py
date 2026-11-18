@@ -178,7 +178,9 @@ def backlog() -> int:
 
 
 def _strava_blocked(db) -> bool:
-    """Strava refuses API access for the whole application (e.g. no subscription on the owner)."""
+    """Strava refuses API access for the whole application (unless a web session is connected)."""
+    if store.get_value(db, "strava.web_session") is not None:
+        return False
     err = store.get_value(db, "strava.error") or {}
     return "Inactive" in (err.get("message") or "")
 
@@ -186,10 +188,11 @@ def _strava_blocked(db) -> bool:
 def _error_hint(provider: str, message: str) -> str:
     if provider == "strava" and "Inactive" in message:
         return (
-            "Strava has deactivated this API application. Reactivate it at strava.com/settings/api "
-            "(or create a new application and enter its client id/secret in Settings), then reconnect."
+            "Strava has deactivated this API application (since June 2026 the app owner needs a paid "
+            "subscription at strava.com/settings/api). To sync for free without a subscription, connect "
+            "a Strava web session cookie in Settings → Strava → Web session, or import your Strava data export."
         )
-    if "401" in message or "Authentication" in message or "rejected" in message:
+    if "401" in message or "Authentication" in message or "rejected" in message or "expired" in message:
         return f"{provider.title()} rejected the login — reconnect it in Settings."
     if "429" in message or "rate limit" in message.lower():
         return "Rate limit reached — RoutePass continues automatically later."

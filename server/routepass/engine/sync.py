@@ -49,7 +49,10 @@ def blocker(act: Activity, direction: str, prefs: dict, now: datetime) -> str | 
     if src.created_by_sync:
         return "is itself a RoutePass copy"
     if src_provider == "strava" and not src.raw.get("summary_polyline"):
-        return "no GPS track (indoor or manual activity)"
+        if src.raw.get("trainer") or src.raw.get("manual") or src.track_status == "none":
+            return "no GPS track (indoor or manual activity)"
+        if src.raw.get("source") != "web" and not act.polyline:
+            return "no GPS track (indoor or manual activity)"
     # soft blockers below can be overridden by a manual / all-time sync
     if act.sync_locked:
         return "sync locked"

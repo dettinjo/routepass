@@ -26,6 +26,8 @@ function Strava() {
   const [appId, setAppId] = useState("");
   const [secret, setSecret] = useState("");
   const [code, setCode] = useState("");
+  const [sessionCookie, setSessionCookie] = useState("");
+  const [rememberToken, setRememberToken] = useState("");
   const [redirect, setRedirect] = useState<string | null>(null);
   const s = status?.connections.strava;
   const connect = async () => {
@@ -38,22 +40,49 @@ function Strava() {
     }
   };
   const rate = status?.strava_rate;
+  const modeLabel = s?.mode === "web" ? "web session" : s?.mode === "oauth+web" ? "OAuth + web fallback" : null;
   return (
     <Card title={<span className="row nowrap"><BrandIcon provider="strava" size={22} />Strava</span>}
-      actions={s?.error ? <span className="badge bad">error</span> : s?.connected ? <span className="badge good">connected</span> : <span className="badge">not connected</span>}>
+      actions={s?.error ? <span className="badge bad">error</span> : s?.connected ? <span className="badge good">connected{modeLabel ? ` (${modeLabel})` : ""}</span> : <span className="badge">not connected</span>}>
       <div className="stack">
         {s?.error && <Callout kind="bad"><b>{s.error.hint}</b><div className="xs muted" style={{ marginTop: 4, wordBreak: "break-word" }}>{s.error.message}</div></Callout>}
         {s?.connected && s.athlete && (
           <div className="row between">
             <span>{s.athlete.name || `Athlete ${s.athlete.id}`} <span className="small muted">· since {ago(s.athlete.connected_at)}</span></span>
             <div className="row">
-              <button className="sm" onClick={() => call.mutate({ path: "/connections/strava/check", method: "GET" }, { onSuccess: () => toast("Strava token works") })}>Test</button>
+              <button className="sm" onClick={() => call.mutate({ path: "/connections/strava/check", method: "GET" }, { onSuccess: () => toast("Strava connection works") })}>Test</button>
               <button className="sm danger" onClick={() => confirm("Disconnect Strava?") && call.mutate({ path: "/connections/strava", method: "DELETE" })}>Disconnect</button>
             </div>
           </div>
         )}
-        <details open={!s?.connected}>
-          <summary className="small secondary" style={{ cursor: "pointer" }}>Strava API application</summary>
+        <details open={!s?.connected || Boolean(s?.error) || s?.mode === "web" || s?.mode === "oauth+web"}>
+          <summary className="small secondary" style={{ cursor: "pointer" }}>
+            <b>Web session (free · works with Email One-Time Code, Google, or Apple)</b>
+          </summary>
+          <div className="stack mt8">
+            <p className="small muted" style={{ margin: 0 }}>
+              Bypasses Strava’s paid API requirement by using your signed-in browser session on <a href="https://www.strava.com/login" target="_blank" rel="noreferrer">strava.com/login</a> (sign in with <b>Email One-Time Code</b>, <b>Google</b>, or <b>Apple</b> with “Remember me” checked). Then in DevTools either right-click any <span className="mono">strava.com</span> request in <b>Network → Copy → Copy as cURL</b> (or Copy Request Headers), or copy <span className="mono">_strava4_session</span> / <span className="mono">strava_remember_token</span> from <b>Application → Cookies</b>, and paste below.
+            </p>
+            <div className="fields">
+              <label className="field">Session cookie, <span className="mono">Cookie:</span> header, or <span className="mono">Copy as cURL</span>
+                <input type="password" placeholder="Paste _strava4_session, Cookie header, or Copy as cURL…" value={sessionCookie} onChange={(e) => setSessionCookie(e.target.value)} />
+              </label>
+              <label className="field">Remember token (<span className="mono">strava_remember_token</span>, optional if included above)
+                <input type="password" placeholder="optional long-lived token" value={rememberToken} onChange={(e) => setRememberToken(e.target.value)} />
+              </label>
+            </div>
+            <div className="row">
+              <button className="primary sm" disabled={!sessionCookie.trim() && !rememberToken.trim()} onClick={() => call.mutate({ path: "/connections/strava/session", method: "PUT", body: { cookie: sessionCookie, remember_token: rememberToken } }, { onSuccess: () => { setSessionCookie(""); setRememberToken(""); toast("Strava web session connected"); } })}>
+                {s?.mode === "web" || s?.mode === "oauth+web" ? "Update web session" : "Connect web session"}
+              </button>
+              {(s?.mode === "web" || s?.mode === "oauth+web") && (
+                <button className="sm ghost" onClick={() => call.mutate({ path: "/connections/strava/session", method: "DELETE" }, { onSuccess: () => toast("Strava web session removed") })}>Remove web session</button>
+              )}
+            </div>
+          </div>
+        </details>
+        <details>
+          <summary className="small secondary" style={{ cursor: "pointer" }}>Strava OAuth API application (requires paid Strava subscription)</summary>
           <div className="stack mt8">
             <p className="small muted" style={{ margin: 0 }}>
               Uses your own app from <a href="https://www.strava.com/settings/api" target="_blank" rel="noreferrer">strava.com/settings/api</a>. Set its
@@ -63,14 +92,14 @@ function Strava() {
               <label className="field">Client ID<input value={appId} onChange={(e) => setAppId(e.target.value)} /></label>
               <label className="field">Client secret<input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} /></label>
             </div>
-            <div><button className="sm" disabled={!appId || !secret} onClick={() => call.mutate({ path: "/connections/strava/app", method: "PUT", body: { client_id: appId, client_secret: secret } }, { onSuccess: () => toast("Saved Strava app") })}>Save app</button></div>
+            <div className="row">
+              <button className="sm" disabled={!appId || !secret} onClick={() => call.mutate({ path: "/connections/strava/app", method: "PUT", body: { client_id: appId, client_secret: secret } }, { onSuccess: () => toast("Saved Strava app") })}>Save app</button>
+              <button className="sm" onClick={connect}>{s?.connected ? "Reconnect OAuth" : "Connect OAuth"}</button>
+            </div>
           </div>
         </details>
-        <div className="row">
-          <button className="primary" onClick={connect}>{s?.connected ? "Reconnect" : "Connect Strava"}</button>
-        </div>
         <details>
-          <summary className="small secondary" style={{ cursor: "pointer" }}>Redirect can't reach this host? Paste the code</summary>
+          <summary className="small secondary" style={{ cursor: "pointer" }}>Redirect can't reach this host? Paste the OAuth code</summary>
           <div className="stack mt8">
             <p className="small muted" style={{ margin: 0 }}>After approving on Strava, copy the <span className="mono">code=…</span> value from the address bar of the page Strava sent you to.{redirect && <> Redirect used: <span className="mono">{redirect}</span></>}</p>
             <div className="row">

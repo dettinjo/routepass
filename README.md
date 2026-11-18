@@ -28,9 +28,10 @@ one SQLite file.
 
 ## Strava without the API
 
-Strava's API now needs a paid subscription on the app owner's account and restricts storing API data. RoutePass
-can instead import Strava's free personal data export (Settings → Strava → *Import your Strava data export*):
-the complete history with original FIT/GPX/TCX recordings, merged with Komoot like any other source.
+Strava's API now needs a paid subscription on the app owner's account (`403 Application Status: Inactive`) and restricts storing API data. RoutePass gives you two ways to sync without paying for the API:
+
+1. **Continuous Web Session sync (both directions, `Strava ⇄ Komoot`)** — sign in to `strava.com` in your browser (supports Email 6-digit One-Time Code, Google, Apple, or password) and paste your `_strava4_session` cookie, `Cookie:` header, or DevTools *Copy as cURL* under **Settings → Strava → Web session**. RoutePass uses `StravaWebClient` (`strava.com/athlete/training_activities`, `/activities/{id}/streams`, `/export_original`, `/upload/files`) to poll, download tracks, and upload Komoot GPX files to Strava automatically. If an OAuth API app is also connected and returns `403 Inactive`, RoutePass seamlessly falls back to the web session.
+2. **Bulk Strava archive import** — import Strava's free personal data export (**Settings → Strava → Import your Strava data export**): the complete history with original FIT/GPX/TCX recordings, merged with Komoot like any other source.
 
 ## Interface
 

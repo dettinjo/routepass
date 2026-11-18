@@ -95,11 +95,19 @@ Fernet-encrypted at rest.
 
 - Since 30 June 2026 a Strava API application in the Standard Tier only works while the account that owns it has
   a paid Strava subscription; otherwise every API call returns `403 {"resource":"Application","field":"Status",
-  "code":"Inactive"}` while OAuth keeps working. Fix: subscribe on the owning account, then reactivate the app at
-  strava.com/settings/api. RoutePass shows this as a provider error and stops planning Komoot → Strava copies.
+  "code":"Inactive"}` while OAuth keeps working.
+- **Option 1 — Web Session Client (`StravaWebClient`, `PUT /api/v1/connections/strava/session`)**: authenticates
+  with browser session cookies (`_strava4_session` and optional `strava_remember_token`, accepted as a raw cookie,
+  `Cookie:` header, DevTools *Copy as cURL*, *Copy Request Headers*, or cookie table rows — compatible with Strava's
+  Email 6-digit One-Time Code, Google, and Apple sign-in flows). Uses `strava.com/dashboard` (CSRF + athlete profile),
+  `/athlete/training_activities` (paginated JSON activity list), `/activities/{id}/streams` (with `/export_original`
+  and `/export_gpx` fallback), and `/upload/files` + `/upload/progress` + `PATCH /activities/{id}` so continuous
+  **Strava ⇄ Komoot** sync works in both directions without a paid Strava subscription. When both OAuth and a web
+  session are configured (`mode: "oauth+web"`), `StravaClient` automatically falls back to `StravaWebClient` if the
+  v3 API returns `403 Application Status: Inactive`, while persisting rotated session cookies encrypted at rest.
+- **Option 2 — Personal Data Export (`engine/strava_archive.py`)**: imports a user's bulk Strava `.zip` export
+  (`activities.csv` + FIT/GPX/TCX originals, protected under API Policy §6.6) as `strava` records keyed by Strava's
+  activity id, so historical analysis, deduplication and Strava → Komoot copies work offline without the API.
 - The Strava API Policy (effective 1 June 2026) limits API data heavily: cache at most 7 days (§6.2), no AI use incl.
   context windows (§5.3), no MCP server exposing Strava Data (§5.16), no persistent indexes (§5.5). These apply to
-  data obtained through the API ("Strava Data", API Agreement §2.3).
-- A user's own bulk export is protected separately (API Policy §6.6). `engine/strava_archive.py` imports that
-  archive (activities.csv + FIT/GPX/TCX originals) as `strava` records keyed by Strava's activity id, so analysis,
-  deduplication and Strava → Komoot copies work without the API. This is not legal advice.
+  data obtained through the API ("Strava Data", API Agreement §2.3). This is not legal advice.
