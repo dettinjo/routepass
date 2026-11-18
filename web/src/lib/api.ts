@@ -1,21 +1,3 @@
-const TOKEN_KEY = "routepass.token";
-
-export function getToken(): string {
-  try {
-    return localStorage.getItem(TOKEN_KEY) || "";
-  } catch {
-    return "";
-  }
-}
-
-export function setToken(token: string) {
-  try {
-    localStorage.setItem(TOKEN_KEY, token);
-  } catch {
-    /* storage unavailable */
-  }
-}
-
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -37,12 +19,12 @@ export function qs(params?: Params): string {
 }
 
 export async function api<T = any>(path: string, opts: { method?: string; body?: unknown; params?: Params } = {}): Promise<T> {
+  // The browser is signed in with a session cookie (Tailscale, Google or access-token login).
   const headers: Record<string, string> = {};
-  const token = getToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
   if (opts.body !== undefined) headers["Content-Type"] = "application/json";
   const res = await fetch(`/api/v1${path}${qs(opts.params)}`, {
     method: opts.method || "GET",
+    credentials: "same-origin",
     headers,
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
   });
@@ -63,6 +45,10 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
 }
 
 export function downloadUrl(path: string): string {
-  const token = getToken();
-  return `/api/v1${path}${token ? `?token=${encodeURIComponent(token)}` : ""}`;
+  return `/api/v1${path}`;
+}
+
+export interface Me {
+  authenticated: boolean; email: string | null; name: string | null; picture: string | null; method: string | null;
+  methods: { google: boolean; tailscale: boolean; token: boolean };
 }
