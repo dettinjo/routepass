@@ -157,7 +157,10 @@ def status(db: Session, running: bool) -> dict[str, Any]:
     last = db.scalar(select(SyncRun).order_by(SyncRun.id.desc()).limit(1))
     job_counts = dict(db.execute(select(SyncJob.status, func.count()).group_by(SyncJob.status)).all())
     pending_tracks = db.scalar(select(func.count()).where(Activity.has_track.is_(False)))
+    from routepass.config import get_settings
+
     return {
+        "public_url": get_settings().public_url or None,
         "connections": {
             "strava": {"connected": conn["strava"], "athlete": store.get_value(db, "strava.athlete")},
             "komoot": {"connected": conn["komoot"], "account": store.get_value(db, "komoot.account")},
@@ -345,3 +348,79 @@ def search_names(db: Session, text: str, limit: int = 20) -> list[dict[str, Any]
         .options(selectinload(Activity.sources))
     )
     return [serialize.activity_row(a) for a in rows]
+
+
+# ── Strava webhooks ──────────────────────────────────────────────────────────
+
+WEBHOOK_PATH = "/api/v1/webhooks/strava"
+
+
+def _webhook_config(db: Session) -> tuple[str, str, str, str]:
+    from routepass.config import get_settings
+    from routepass.engine.clients import strava_app
+
+    settings = get_settings()
+    client_id, client_secret = strava_app(db)
+    if not settings.public_url:
+        raise ValueError("ROUTEPASS_PUBLIC_URL is not set — Strava cannot reach this instance")
+    if not settings.strava_webhook_verify_token:
+        raise ValueError("ROUTEPASS_STRAVA_WEBHOOK_VERIFY_TOKEN is not set")
+    callback = settings.public_url.rstrip("/") + WEBHOOK_PATH
+    return client_id, client_secret, callback, settings.strava_webhook_verify_token
+
+
+def strava_webhook_status(db: Session) -> dict[str, Any]:
+    from routepass.providers import strava
+
+    client_id, client_secret, callback, _ = _webhook_config(db)
+    subs = strava.list_push_subscriptions(client_id, client_secret)
+    return {
+        "callback_url": callback,
+        "subscriptions": subs,
+        "active": any(s.get("callback_url") == callback for s in subs),
+        "last_event": store.get_value(db, "strava.last_webhook"),
+    }
+
+
+def strava_webhook_enable(db: Session) -> dict[str, Any]:
+    """Subscribe this instance to Strava push events (replacing a subscription to another URL)."""
+    from routepass.providers import strava
+
+    client_id, client_secret, callback, verify = _webhook_config(db)
+    for sub in strava.list_push_subscriptions(client_id, client_secret):
+        if sub.get("callback_url") == callback:
+            return {"active": True, "subscription": sub}
+        strava.delete_push_subscription(client_id, client_secret, sub["id"])
+    return {
+        "active": True,
+        "subscription": strava.create_push_subscription(client_id, client_secret, callback, verify),
+    }
+
+
+def strava_webhook_disable(db: Session) -> dict[str, Any]:
+    from routepass.providers import strava
+
+    client_id, client_secret, _, _ = _webhook_config(db)
+    subs = strava.list_push_subscriptions(client_id, client_secret)
+    for sub in subs:
+        strava.delete_push_subscription(client_id, client_secret, sub["id"])
+    return {"active": False, "removed": len(subs)}
+
+
+def handle_strava_event(db: Session, event: dict[str, Any]) -> dict[str, Any]:
+    """Strava push event → schedule a sync cycle (the cycle does the actual work)."""
+    from routepass.engine import runner
+    from routepass.engine.clients import STRAVA_ATHLETE, STRAVA_TOKENS
+
+    athlete = store.get_value(db, STRAVA_ATHLETE) or {}
+    if not athlete.get("id") or str(event.get("owner_id")) != str(athlete["id"]):
+        return {"accepted": False, "reason": "unknown athlete"}
+    store.set_value(db, "strava.last_webhook", {**event, "received_at": utcnow().isoformat()})
+    if event.get("object_type") == "athlete" and (event.get("updates") or {}).get("authorized") == "false":
+        store.delete_value(db, STRAVA_TOKENS)
+        return {"accepted": True, "action": "deauthorized"}
+    delay_min = store.get_preferences(db)["sync"].get("delay_minutes", 10)
+    runner.trigger_soon()  # import the change now
+    if event.get("aspect_type") == "create":
+        runner.trigger_soon((delay_min + 1) * 60)  # and sync it once the settle delay has passed
+    return {"accepted": True, "action": "sync scheduled"}

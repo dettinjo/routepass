@@ -124,8 +124,14 @@ def last_run() -> SyncRun | None:
         return db.scalar(select(SyncRun).order_by(SyncRun.id.desc()).limit(1))
 
 
-def trigger_soon() -> None:
-    _wake.set()
+def trigger_soon(delay_s: float = 0) -> None:
+    """Wake the scheduler now, or after delay_s (e.g. once a webhook's settle delay has passed)."""
+    if delay_s <= 0:
+        _wake.set()
+        return
+    timer = threading.Timer(delay_s, _wake.set)
+    timer.daemon = True
+    timer.start()
 
 
 def _interval_s() -> float:

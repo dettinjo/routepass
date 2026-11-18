@@ -10,15 +10,15 @@ from __future__ import annotations
 import json
 import xml.etree.ElementTree as ET
 import zlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 
 import numpy as np
 
 EARTH_RADIUS_M = 6_371_000.0
-ELE_SMOOTH = 5
-ELE_HYSTERESIS_M = 2.0
+ELE_SMOOTH_M = 30.0  # moving-average window along the track
+ELE_HYSTERESIS_M = 1.0
 MOVING_SPEED_MS = 0.5
 MAX_GAP_S = 60  # gaps longer than this count as paused
 CHART_POINTS = 1200
@@ -30,7 +30,13 @@ BEST_DISTANCES_M = {
     "walk": (1000, 5000, 10000, 21097, 42195),
     "ride": (5000, 10000, 20000, 40000, 50000, 100000, 160934),
 }
+# Fastest plausible average over a best-effort distance; faster spans are GPS jumps.
+MAX_EFFORT_SPEED_MS = {"run": 7.0, "walk": 3.5, "ride": 22.0}
 CLIMB_MIN_GAIN_M = 30.0
+CLIMB_MAX_GRADE_PCT = 45.0  # steeper "climbs" over these lengths are altitude glitches
+CLIMB_MAX_VAM = 3000.0  # m/h; faster than any human ascent
+DESPIKE_WINDOW = 9  # points in the rolling median
+DESPIKE_M = 40.0  # an altitude this far from its neighbourhood median is a glitch
 CLIMB_MAX_DIP_M = 15.0
 CLIMB_MIN_GRADE_PCT = 2.0
 # Fallback load per hour when neither power nor heart rate is available.
@@ -201,21 +207,53 @@ def _fill_nan(a: np.ndarray) -> np.ndarray:
     return np.interp(idx, idx[~mask], a[~mask])
 
 
-def elevation_gain_loss(elevation: np.ndarray) -> tuple[float, float]:
-    """Hysteresis accumulation: filters GPS noise without discarding steady grades."""
-    valid = elevation[~np.isnan(elevation)]
-    if valid.size < 2:
+def _smooth_by_distance(values: np.ndarray, distance: np.ndarray, window_m: float) -> np.ndarray:
+    if values.size < 3:
+        return values
+    d = np.maximum.accumulate(_fill_nan(distance))
+    csum = np.concatenate([[0.0], np.cumsum(values)])
+    lo = np.searchsorted(d, d - window_m / 2)
+    hi = np.searchsorted(d, d + window_m / 2, side="right")
+    return (csum[hi] - csum[lo]) / np.maximum(hi - lo, 1)
+
+
+def despike(values: np.ndarray, window: int = DESPIKE_WINDOW, limit: float = DESPIKE_M) -> np.ndarray:
+    """Replace isolated altitude glitches (barometer resets, DEM holes) by interpolation."""
+    a = _fill_nan(values.astype("float64"))
+    if a.size < window:
+        return a
+    pad = window // 2
+    padded = np.pad(a, pad, mode="edge")
+    windows = np.lib.stride_tricks.sliding_window_view(padded, window)
+    median = np.median(windows, axis=1)
+    bad = np.abs(a - median) > limit
+    if not bad.any():
+        return a
+    out = a.copy()
+    out[bad] = np.nan
+    return _fill_nan(out)
+
+
+def elevation_gain_loss(elevation: np.ndarray, distance: np.ndarray | None = None) -> tuple[float, float]:
+    """Distance-window smoothing + hysteresis: tolerant of 1 Hz GPS altitude noise without
+    flattening sparse, already-smoothed tracks (Komoot drops points on straight sections)."""
+    valid = ~np.isnan(elevation)
+    if valid.sum() < 2:
         return 0.0, 0.0
-    s = _smooth(valid, ELE_SMOOTH)
+    e = elevation[valid]
+    if distance is not None and distance.shape == elevation.shape:
+        s = _smooth_by_distance(e, distance[valid], ELE_SMOOTH_M)
+    else:
+        s = _smooth(e, 5)
     gain = loss = 0.0
     ref = s[0]
-    for e in s[1:]:
-        if e - ref >= ELE_HYSTERESIS_M:
-            gain += e - ref
-            ref = e
-        elif ref - e >= ELE_HYSTERESIS_M:
-            loss += ref - e
-            ref = e
+    for x in s[1:]:
+        if x - ref >= ELE_HYSTERESIS_M:
+            gain += x - ref
+            ref = x
+        elif ref - x >= ELE_HYSTERESIS_M:
+            loss += ref - x
+            ref = x
     return float(gain), float(loss)
 
 
@@ -377,9 +415,20 @@ def from_gpx(gpx: bytes) -> NormalizedTrack | None:
 # ── metrics ──────────────────────────────────────────────────────────────────
 
 
-def _dt(track: NormalizedTrack) -> np.ndarray:
+MOVING_VERTICAL_MS = 0.06  # ~220 m/h: slow uphill skinning/hiking still counts as moving
+MAX_MOVING_GAP_S = 1800  # longer gaps are pauses even if the positions are far apart
+
+
+def _segment_dt(track: NormalizedTrack) -> np.ndarray:
     dt = np.diff(track.time_s, prepend=track.time_s[0])
-    dt[(dt < 0) | (dt > MAX_GAP_S)] = 0
+    dt[dt < 0] = 0
+    return dt
+
+
+def _dt(track: NormalizedTrack) -> np.ndarray:
+    """Per-point time step for time-weighted stats (zones); long recording gaps excluded."""
+    dt = _segment_dt(track)
+    dt[dt > MAX_GAP_S] = 0
     return dt
 
 
@@ -396,11 +445,30 @@ def _speed(track: NormalizedTrack) -> np.ndarray | None:
 
 
 def _moving_mask(track: NormalizedTrack, speed: np.ndarray | None) -> np.ndarray:
+    """Whether the segment ending at each point was spent moving.
+
+    Uses the device's own flag when present (Strava). Otherwise a segment is moving when its
+    average horizontal or vertical speed is above walking-pace thresholds, computed over the
+    whole segment so tracks with points dropped on straight sections (Komoot) are not mistaken
+    for pauses."""
     if track.moving is not None and track.moving.shape[0] == track.n:
         return track.moving
-    if speed is None:
-        return np.ones(track.n, dtype=bool)
-    return np.nan_to_num(speed) > MOVING_SPEED_MS
+    dt = _segment_dt(track)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        if track.distance_m is not None:
+            dd = np.diff(_fill_nan(track.distance_m), prepend=_fill_nan(track.distance_m)[0])
+            horiz = np.where(dt > 0, dd / dt, 0.0)
+        elif speed is not None:
+            horiz = np.nan_to_num(speed)
+        else:
+            return np.ones(track.n, dtype=bool)
+        vert = np.zeros(track.n)
+        if track.elevation_m is not None:
+            ele = _fill_nan(track.elevation_m)
+            vert = np.where(dt > 0, np.abs(np.diff(ele, prepend=ele[0])) / dt, 0.0)
+    moving = ((horiz > MOVING_SPEED_MS) | (vert > MOVING_VERTICAL_MS)) & (dt <= MAX_MOVING_GAP_S)
+    moving[0] = False
+    return moving
 
 
 def _resample_1hz(track: NormalizedTrack, values: np.ndarray) -> np.ndarray:
@@ -442,7 +510,9 @@ def normalized_power(track: NormalizedTrack) -> float | None:
     return float(np.mean(rolled**4) ** 0.25)
 
 
-def best_times(track: NormalizedTrack, distances: tuple[int, ...]) -> dict[int, float]:
+def best_times(
+    track: NormalizedTrack, distances: tuple[int, ...], max_speed_ms: float | None = None
+) -> dict[int, float]:
     """Fastest elapsed time to cover each distance (two-pointer sweep)."""
     if track.distance_m is None:
         return {}
@@ -459,6 +529,8 @@ def best_times(track: NormalizedTrack, distances: tuple[int, ...]) -> dict[int, 
             continue
         spans = t[ok] - t[i[ok]]
         spans = spans[spans > 0]
+        if max_speed_ms:
+            spans = spans[target / spans <= max_speed_ms]
         if spans.size:
             out[target] = round(float(spans.min()), 1)
     return out
@@ -467,7 +539,7 @@ def best_times(track: NormalizedTrack, distances: tuple[int, ...]) -> dict[int, 
 def detect_climbs(track: NormalizedTrack) -> list[dict[str, Any]]:
     if track.elevation_m is None or track.distance_m is None or track.n < 10:
         return []
-    ele = _smooth(_fill_nan(track.elevation_m), 9)
+    ele = _smooth_by_distance(_fill_nan(track.elevation_m), track.distance_m, 60.0)
     d, t = track.distance_m, track.time_s
     climbs: list[dict[str, Any]] = []
     start = low = 0
@@ -482,7 +554,10 @@ def detect_climbs(track: NormalizedTrack) -> list[dict[str, Any]]:
         elif ele[peak] - ele[i] > CLIMB_MAX_DIP_M or i == ele.size - 1:
             gain = ele[peak] - ele[start]
             grade = gain / max(float(d[peak] - d[start]), 1.0) * 100
-            if gain >= CLIMB_MIN_GAIN_M and d[peak] > d[start] and grade >= CLIMB_MIN_GRADE_PCT:
+            dur = float(t[peak] - t[start])
+            vam = gain / (dur / 3600) if dur > 0 else 0
+            plausible = grade <= CLIMB_MAX_GRADE_PCT and vam <= CLIMB_MAX_VAM
+            if gain >= CLIMB_MIN_GAIN_M and d[peak] > d[start] and grade >= CLIMB_MIN_GRADE_PCT and plausible:
                 length = float(d[peak] - d[start])
                 dur = float(t[peak] - t[start])
                 climbs.append(
@@ -527,7 +602,9 @@ def _splits(track: NormalizedTrack, split_m: float) -> list[dict[str, Any]]:
             break
         gain, loss = (0.0, 0.0)
         if track.elevation_m is not None:
-            gain, loss = elevation_gain_loss(track.elevation_m[seg])
+            gain, loss = elevation_gain_loss(
+                track.elevation_m[seg], track.distance_m[seg] if track.distance_m is not None else None
+            )
         out.append(
             {
                 "index": len(out) + 1,
@@ -641,11 +718,14 @@ def compute(
     if track.n < 2:
         return TrackResult(summary, detail, [], efforts, [])
 
+    if track.elevation_m is not None:
+        # Work on a cleaned copy; the stored recording stays untouched.
+        track = replace(track, elevation_m=despike(track.elevation_m))
     speed = _speed(track)
     moving = _moving_mask(track, speed)
     dt = _dt(track)
     summary["elapsed_time_s"] = round(float(track.time_s[-1] - track.time_s[0]), 0)
-    summary["moving_time_s"] = round(float(np.sum(dt[moving])), 0)
+    summary["moving_time_s"] = round(float(np.sum(_segment_dt(track)[moving])), 0)
 
     if track.distance_m is not None:
         summary["distance_m"] = round(float(track.distance_m[-1] - track.distance_m[0]), 1)
@@ -655,7 +735,7 @@ def compute(
             summary["max_speed_ms"] = _stat(_smooth(_fill_nan(speed), 5), np.max)
 
     if track.elevation_m is not None:
-        gain, loss = elevation_gain_loss(track.elevation_m)
+        gain, loss = elevation_gain_loss(track.elevation_m, track.distance_m)
         summary["elevation_gain_m"] = round(gain, 0)
         summary["elevation_loss_m"] = round(loss, 0)
         summary["elevation_max_m"] = _stat(track.elevation_m, np.max)
@@ -720,7 +800,7 @@ def compute(
 
     distances = BEST_DISTANCES_M.get(family)
     if distances:
-        best = best_times(track, distances)
+        best = best_times(track, distances, MAX_EFFORT_SPEED_MS.get(family))
         detail["best_times"] = best
         efforts += [("time", k, v) for k, v in best.items()]
 

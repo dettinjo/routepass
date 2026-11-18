@@ -246,3 +246,36 @@ def test_mcp_lists_and_calls_tools(client, connected, mock_apis):
         headers=headers,
     )
     assert call.status_code == 200 and "error" not in call.json(), call.text
+
+
+def test_strava_webhook_verify_and_event(client, connected, monkeypatch):
+    from routepass.config import get_settings
+    from routepass.engine import runner
+    from routepass.engine.clients import STRAVA_ATHLETE
+
+    monkeypatch.setenv("ROUTEPASS_STRAVA_WEBHOOK_VERIFY_TOKEN", "vt")
+    get_settings.cache_clear()
+    ok = client.get(
+        "/api/v1/webhooks/strava",
+        params={"hub.mode": "subscribe", "hub.verify_token": "vt", "hub.challenge": "c1"},
+    )
+    assert ok.status_code == 200 and ok.json() == {"hub.challenge": "c1"}
+    assert client.get("/api/v1/webhooks/strava", params={"hub.verify_token": "no"}).status_code == 403
+
+    woken = []
+    monkeypatch.setattr(runner, "trigger_soon", lambda delay_s=0: woken.append(delay_s))
+    with session_scope() as db:
+        store.set_value(db, STRAVA_ATHLETE, {"id": 77})
+    event = {"object_type": "activity", "aspect_type": "create", "object_id": 5, "owner_id": 77}
+    assert client.post("/api/v1/webhooks/strava", json=event).json()["accepted"] is True
+    assert woken == [0, 660]
+    assert client.post("/api/v1/webhooks/strava", json={**event, "owner_id": 1}).json()["accepted"] is False
+    deauth = {
+        "object_type": "athlete",
+        "aspect_type": "update",
+        "owner_id": 77,
+        "updates": {"authorized": "false"},
+    }
+    client.post("/api/v1/webhooks/strava", json=deauth)
+    with session_scope() as db:
+        assert store.get_value(db, "strava.tokens") is None

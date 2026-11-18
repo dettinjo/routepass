@@ -344,3 +344,16 @@ def reevaluate_skipped() -> dict[str, int]:
     """Forget rule-skipped decisions and re-plan everything with the current rules."""
     with session_scope() as db:
         return services.reevaluate_skipped(db)
+
+
+@mcp.tool()
+def strava_webhook(action: Literal["status", "enable", "disable"] = "status") -> dict[str, Any]:
+    """Strava push events (instant sync on new/edited activities): show, create or remove the
+    subscription. Needs ROUTEPASS_PUBLIC_URL reachable from the internet."""
+    fn = {
+        "status": services.strava_webhook_status,
+        "enable": services.strava_webhook_enable,
+        "disable": services.strava_webhook_disable,
+    }[action]
+    with session_scope() as db:
+        return fn(db)

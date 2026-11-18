@@ -66,6 +66,7 @@ export interface DirectionPrefs { enabled: boolean; default_action: "sync" | "sk
 export interface SyncRun { id: number; trigger: string; status: string; started_at: string; finished_at: string | null; stats: Record<string, any>; log: string[] }
 
 export interface Status {
+  public_url: string | null;
   connections: { strava: { connected: boolean; athlete: any }; komoot: { connected: boolean; account: any } };
   running: boolean; last_run: SyncRun | null; jobs: Record<string, number>; activities: number; tracks_pending: number;
   coverage: { both: number; strava_only: number; komoot_only: number; activities: number; duplicates_hidden: number; provider_records: Record<string, number> };

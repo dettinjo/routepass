@@ -52,12 +52,10 @@
     "mountaineering": "Mountaineering",
     "yoga": "Yoga",
     "other": "Other",
-
     "cycling": "Cycling",
     "gymnastics": "Gymnastics",
     "inline_skating": "Inline Skating",
     "cross_country_skiing": "Cross-Country Skiing",
-
     "Ride": "Ride",
     "MountainBikeRide": "Mountain Bike Ride",
     "GravelRide": "Gravel Ride",
@@ -198,7 +196,7 @@
     "canoeing": "Canoeing",
     "rowing": "Rowing",
     "climbing": "RockClimbing",
-    "mountaineering": "RockClimbing",
+    "mountaineering": "Hike",
     "yoga": "Yoga",
     "_default": "Workout"
   },
