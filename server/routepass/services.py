@@ -424,3 +424,97 @@ def handle_strava_event(db: Session, event: dict[str, Any]) -> dict[str, Any]:
     if event.get("aspect_type") == "create":
         runner.trigger_soon((delay_min + 1) * 60)  # and sync it once the settle delay has passed
     return {"accepted": True, "action": "sync scheduled"}
+
+
+# ── multi-activity operations ────────────────────────────────────────────────
+
+
+def bulk_sync(db: Session, activity_ids: list[int], direction: str) -> dict[str, Any]:
+    """Queue and run copies for a hand-picked set (ignores start date and settle delay)."""
+    if direction not in rule_engine.DIRECTION_TARGET:
+        raise ValueError("unknown direction")
+    ids = sorted(set(activity_ids))[:200]
+    db.execute(
+        SyncJob.__table__.delete().where(
+            SyncJob.activity_id.in_(ids),
+            SyncJob.direction == direction,
+            SyncJob.status.in_(("skipped", "failed")),
+        )
+    )
+    max_id = db.scalar(select(func.max(SyncJob.id))) or 0
+    sync.plan(db, activity_ids=ids, force=True)
+    jobs = db.scalars(select(SyncJob).where(SyncJob.id > max_id, SyncJob.direction == direction)).all()
+    db.commit()
+    blocked = {}
+    prefs = store.get_preferences(db)
+    planned = {j.activity_id for j in jobs}
+    for aid in ids:
+        if aid not in planned and (act := db.get(Activity, aid)) is not None:
+            blocked[aid] = (
+                sync.blocker(act, direction, prefs, utcnow() + timedelta(days=365)) or "not eligible"
+            )
+    queued = [j.id for j in jobs if j.status == "queued"]
+    return {
+        "queued": len(queued),
+        "skipped_by_rules": sum(1 for j in jobs if j.status == "skipped"),
+        "not_eligible": blocked,
+        "job_ids": queued,
+    }
+
+
+def trip_analysis(db: Session, activity_ids: list[int]) -> dict[str, Any]:
+    """Combine several activities (e.g. the days of a multi-day tour) into one overview."""
+    acts = sorted(
+        (a for a in (db.get(Activity, i) for i in set(activity_ids)) if a is not None),
+        key=lambda a: a.start_time,
+    )
+    if len(acts) < 2:
+        raise ValueError("select at least two activities")
+    days: dict[str, dict[str, Any]] = {}
+    for a in acts:
+        d = (a.start_local or a.start_time).date().isoformat()
+        day = days.setdefault(
+            d,
+            {
+                "date": d,
+                "activities": 0,
+                "distance_m": 0.0,
+                "moving_time_s": 0.0,
+                "elevation_m": 0.0,
+                "load": 0.0,
+            },
+        )
+        day["activities"] += 1
+        day["distance_m"] += a.distance_m or 0
+        day["moving_time_s"] += a.moving_time_s or 0
+        day["elevation_m"] += a.elevation_gain_m or 0
+        day["load"] += a.load or 0
+    total = {
+        k: round(sum(d[k] for d in days.values()), 1)
+        for k in ("distance_m", "moving_time_s", "elevation_m", "load")
+    }
+    first, last = acts[0], acts[-1]
+    span_s = (last.start_time - first.start_time).total_seconds() + (
+        last.elapsed_time_s or last.moving_time_s or 0
+    )
+    longest = max(days.values(), key=lambda d: d["distance_m"])
+    hardest = max(days.values(), key=lambda d: d["elevation_m"])
+    return {
+        "activities": [serialize.activity_row(a) for a in acts],
+        "days": [
+            {**d, **{k: round(v, 1) for k, v in d.items() if isinstance(v, float)}} for d in days.values()
+        ],
+        "totals": {
+            **total,
+            "count": len(acts),
+            "days": len(days),
+            "span_days": round(span_s / 86400, 1),
+            "avg_per_day_m": round(total["distance_m"] / len(days), 1),
+            "avg_speed_ms": round(total["distance_m"] / total["moving_time_s"], 3)
+            if total["moving_time_s"]
+            else None,
+        },
+        "longest_day": longest["date"],
+        "most_climbing_day": hardest["date"],
+        "sports": sorted({a.sport for a in acts}),
+    }

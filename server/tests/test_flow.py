@@ -279,3 +279,32 @@ def test_strava_webhook_verify_and_event(client, connected, monkeypatch):
     client.post("/api/v1/webhooks/strava", json=deauth)
     with session_scope() as db:
         assert store.get_value(db, "strava.tokens") is None
+
+
+def test_bulk_sync_and_trip(client, connected, mock_apis):
+    _strava_list(mock_apis, [strava_activity(i, T0 + days(i), km=40 + i) for i in range(1, 5)])
+    _komoot_list(mock_apis, [komoot_tour(101, T0 + days(1), km=41)])
+    runner.run_cycle("test", tracks=False)
+    ids = [a["id"] for a in client.get("/api/v1/activities", headers=AUTH).json()["items"]]
+
+    mock_apis.get(re.compile(rf"{STRAVA}/activities/\d+/streams")).mock(
+        return_value=httpx.Response(200, json=streams())
+    )
+    upload = mock_apis.post(f"{KOMOOT}/tours/").mock(
+        side_effect=lambda r: httpx.Response(201, json={"id": 900 + upload.call_count})
+    )
+    mock_apis.patch(re.compile(rf"{KOMOOT}/tours/\d+")).mock(return_value=httpx.Response(200, json={}))
+    with session_scope() as db:
+        from routepass import services
+
+        r = services.bulk_sync(db, ids, "strava_to_komoot")
+    assert r["queued"] == 3 and len(r["not_eligible"]) == 1  # one is already on Komoot
+    assert "already on komoot" in next(iter(r["not_eligible"].values()))
+
+    trip = client.post("/api/v1/activities/trip", json={"activity_ids": ids}, headers=AUTH).json()
+    assert trip["totals"]["days"] == 4 and trip["totals"]["count"] == 4
+    assert trip["longest_day"] == (T0 + days(4)).date().isoformat()
+    assert (
+        client.post("/api/v1/activities/trip", json={"activity_ids": ids[:1]}, headers=AUTH).status_code
+        == 422
+    )

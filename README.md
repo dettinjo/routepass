@@ -17,6 +17,7 @@ one SQLite file.
   efforts, mean-maximal power curve, habits (weekday×hour), streaks, Eddington number, a map of
   every route, and per activity: map with linked stream charts, HR/power zones, splits,
   climbs, best efforts, peak power, aerobic decoupling and repeats of the same route.
+  Select several activities to copy them in bulk or to analyse them as one multi-day trip.
 - **API & MCP** — everything the UI does is in the REST API (`/api/docs`) and as MCP tools
   (`/mcp`, streamable HTTP) for AI assistants.
 

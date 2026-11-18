@@ -239,6 +239,29 @@ def list_activities(
     )
 
 
+class BulkSyncBody(BaseModel):
+    activity_ids: list[int] = Field(..., max_length=200)
+    direction: Direction
+
+
+@router.post("/activities/bulk-sync", tags=["activities"])
+def bulk_sync(body: BulkSyncBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    result = _call(services.bulk_sync, db, body.activity_ids, body.direction)
+    if result["job_ids"]:
+        threading.Thread(target=_run_jobs, args=(result["job_ids"],), daemon=True).start()
+    return result
+
+
+class TripBody(BaseModel):
+    activity_ids: list[int] = Field(..., min_length=2, max_length=100)
+
+
+@router.post("/activities/trip", tags=["activities"])
+def trip(body: TripBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    out = _call(services.trip_analysis, db, body.activity_ids)
+    return out
+
+
 @router.get("/activities/{activity_id}", tags=["activities"])
 def activity_detail(activity_id: int, db: Session = Depends(get_session)) -> dict[str, Any]:
     return _call(services.activity_detail, db, activity_id)

@@ -343,3 +343,11 @@ td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
   .span2 { grid-column: auto; }
   .map.tall { height: 420px; }
 }
+
+.bulk-bar {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 900;
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 12px;
+  background: var(--surface-1); border: 1px solid var(--border-strong); box-shadow: 0 8px 28px rgb(0 0 0 / 0.18);
+  max-width: calc(100vw - 32px); overflow-x: auto; white-space: nowrap;
+}
+.modal .map.tall { height: 360px; }
