@@ -8,7 +8,7 @@ import type { ActivityRow } from "../lib/types";
 import { StackedBars } from "./charts";
 import { RoutesMap } from "./maps";
 import { Modal, Skeleton, Stat } from "./ui";
-import { ActivityList } from "../pages/Dashboard";
+import { ActivityList } from "./shared";
 
 interface Trip {
   activities: ActivityRow[];

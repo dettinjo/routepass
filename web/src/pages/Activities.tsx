@@ -1,55 +1,42 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { RouteThumb } from "../components/charts";
-import { IconLeft, IconLock, IconRight } from "../components/icons";
-import { Card, Empty, ProviderBadges, Seg, Skeleton, SportDot, useToast } from "../components/ui";
+import { useSearchParams } from "react-router-dom";
 import { TripView } from "../components/TripView";
+import { BrandIcon, IconFilter, IconLeft, IconRight, IconSearch, IconSelect, IconSync, IconX, MetricIcon } from "../components/icons";
+import { ActivityItem, FamilyChips } from "../components/shared";
+import { Card, Empty, Modal, Seg, Skeleton, useToast } from "../components/ui";
 import { api } from "../lib/api";
-import { familyColor } from "../lib/colors";
-import { activityDate, duration, int, km, speed } from "../lib/format";
-import { decodePolyline } from "../lib/polyline";
+import { FAMILY_LABEL } from "../lib/colors";
+import { int } from "../lib/format";
 import type { ActivityRow } from "../lib/types";
-import { FamilyChips } from "./Dashboard";
 
-const COLUMNS: { key: string; label: string; sort?: string; right?: boolean }[] = [
-  { key: "name", label: "Activity", sort: "name" },
-  { key: "date", label: "Date", sort: "date" },
-  { key: "distance", label: "Distance", sort: "distance", right: true },
-  { key: "duration", label: "Time", sort: "duration", right: true },
-  { key: "elevation", label: "Elev.", sort: "elevation", right: true },
-  { key: "speed", label: "Speed / pace", sort: "speed", right: true },
-  { key: "hr", label: "HR", sort: "hr", right: true },
-  { key: "power", label: "Power", sort: "power", right: true },
-  { key: "load", label: "Load", sort: "load", right: true },
-  { key: "platforms", label: "Platforms" },
+const SORTS = [
+  { value: "date", label: "Newest" },
+  { value: "distance", label: "Longest" },
+  { value: "elevation", label: "Most climbing" },
+  { value: "duration", label: "Longest time" },
+  { value: "speed", label: "Fastest" },
+  { value: "load", label: "Hardest (load)" },
+  { value: "name", label: "Name" },
 ];
+const PRESENCE: Record<string, string> = {
+  both: "On both", strava_only: "Only on Strava", komoot_only: "Only on Komoot", synced: "Copied by RoutePass",
+};
 
 export default function Activities() {
   const [sp, setSp] = useSearchParams();
-  const nav = useNavigate();
   const get = (k: string) => sp.get(k) || "";
   const families = sp.getAll("family");
   const page = Number(sp.get("page") || 1);
   const sort = get("sort") || "date";
-  const order = get("order") || "desc";
+  const order = get("order") || (sort === "name" ? "asc" : "desc");
   const [q, setQ] = useState(get("q"));
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<number[]>([]);
   const [trip, setTrip] = useState(false);
   const toast = useToast();
   const qc = useQueryClient();
-  const toggle = (id: number) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
-  const bulk = useMutation({
-    mutationFn: (direction: string) => api("/activities/bulk-sync", { method: "POST", body: { activity_ids: selected, direction } }),
-    onSuccess: (r: any) => {
-      const skipped = Object.keys(r.not_eligible).length;
-      toast(`${r.queued} copies started${r.skipped_by_rules ? `, ${r.skipped_by_rules} skipped by rules` : ""}${skipped ? `, ${skipped} not eligible (already there / no GPS)` : ""}`);
-      setSelected([]);
-      qc.invalidateQueries({ queryKey: ["jobs"] });
-      window.setTimeout(() => qc.invalidateQueries({ queryKey: ["activities"] }), 8000);
-    },
-    onError: (e: Error) => toast(e.message, true),
-  });
 
   const update = (patch: Record<string, string | string[] | null>) => {
     const next = new URLSearchParams(sp);
@@ -69,7 +56,7 @@ export default function Activities() {
 
   const params = {
     q: get("q"), family: families, presence: get("presence"), start: get("start"), end: get("end"),
-    min_km: get("min_km"), max_km: get("max_km"), sort, order, page, per_page: 50,
+    min_km: get("min_km"), max_km: get("max_km"), sort, order, page, per_page: 40,
   };
   const { data, isLoading, isFetching } = useQuery<{ items: ActivityRow[]; total: number; per_page: number }>({
     queryKey: ["activities", params],
@@ -78,109 +65,131 @@ export default function Activities() {
   });
   const pages = data ? Math.max(1, Math.ceil(data.total / data.per_page)) : 1;
 
+  const toggle = (id: number) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+  const bulk = useMutation({
+    mutationFn: (direction: string) => api("/activities/bulk-sync", { method: "POST", body: { activity_ids: selected, direction } }),
+    onSuccess: (r: any) => {
+      const skipped = Object.keys(r.not_eligible).length;
+      toast(`${r.queued} copies started${r.skipped_by_rules ? `, ${r.skipped_by_rules} skipped by rules` : ""}${skipped ? `, ${skipped} already there or without GPS` : ""}`);
+      setSelected([]);
+      setSelecting(false);
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+      window.setTimeout(() => qc.invalidateQueries({ queryKey: ["activities"] }), 8000);
+    },
+    onError: (e: Error) => toast(e.message, true),
+  });
+
+  const active: { key: string; label: string; clear: Record<string, null> }[] = [];
+  if (get("start") || get("end")) active.push({ key: "date", label: `${get("start") || "…"} → ${get("end") || "…"}`, clear: { start: null, end: null } });
+  if (get("min_km") || get("max_km")) active.push({ key: "km", label: `${get("min_km") || 0}–${get("max_km") || "∞"} km`, clear: { min_km: null, max_km: null } });
+  if (get("presence")) active.push({ key: "presence", label: PRESENCE[get("presence")] ?? get("presence"), clear: { presence: null } });
+  families.forEach((f) => active.push({ key: f, label: FAMILY_LABEL[f], clear: {} }));
+  const filterCount = active.length;
+
   return (
     <>
       <div className="page-head">
         <div>
           <h1>Activities</h1>
-          <div className="sub">{data ? `${int(data.total)} activities` : " "} — every activity once, wherever it was recorded</div>
+          <div className="sub">{data ? `${int(data.total)} activities` : " "} · each listed once, wherever it was recorded</div>
         </div>
+        <button className={selecting ? "primary sm" : "sm"} onClick={() => { setSelecting(!selecting); setSelected([]); }}>
+          <IconSelect size={16} />{selecting ? "Done" : "Select"}
+        </button>
       </div>
 
-      <Card>
-        <div className="stack">
-          <div className="row" style={{ gap: 12 }}>
-            <input placeholder="Search names…" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 220 }} />
-            <label className="row small secondary" style={{ gap: 6 }}>From <input type="date" value={get("start")} onChange={(e) => update({ start: e.target.value })} /></label>
-            <label className="row small secondary" style={{ gap: 6 }}>To <input type="date" value={get("end")} onChange={(e) => update({ end: e.target.value })} /></label>
-            <label className="row small secondary" style={{ gap: 6 }}>km
-              <input type="number" placeholder="min" value={get("min_km")} onChange={(e) => update({ min_km: e.target.value })} style={{ width: 70 }} />
-              <input type="number" placeholder="max" value={get("max_km")} onChange={(e) => update({ max_km: e.target.value })} style={{ width: 70 }} />
-            </label>
-            <Seg
-              value={(get("presence") || "all") as string}
-              options={[
-                { value: "all", label: "All" }, { value: "both", label: "On both" }, { value: "strava_only", label: "Strava only" },
-                { value: "komoot_only", label: "Komoot only" }, { value: "synced", label: "Synced copies" },
-              ]}
-              onChange={(v) => update({ presence: v === "all" ? null : v })}
-            />
-          </div>
-          <FamilyChips value={families} onChange={(v) => update({ family: v })} />
+      <div className="stack" style={{ gap: 10, marginBottom: 12 }}>
+        <div className="row nowrap">
+          <div className="search grow"><IconSearch size={17} /><input placeholder="Search activities" value={q} onChange={(e) => setQ(e.target.value)} type="search" /></div>
+          <button className={filterCount ? "primary icon" : "icon"} onClick={() => setFiltersOpen(true)} aria-label="Filters" title="Filters">
+            <IconFilter size={19} />
+          </button>
+          <select value={`${sort}:${order}`} onChange={(e) => { const [s, o] = e.target.value.split(":"); update({ sort: s, order: o }); }}
+            style={{ width: 112, flex: "none", paddingRight: 4 }} aria-label="Sort">
+            {SORTS.map((s) => <option key={s.value} value={`${s.value}:${s.value === "name" ? "asc" : "desc"}`}>{s.label}</option>)}
+            {order !== (sort === "name" ? "asc" : "desc") && <option value={`${sort}:${order}`}>Custom</option>}
+          </select>
         </div>
-      </Card>
+        {filterCount > 0 && (
+          <div className="chips">
+            {active.map((f) => (
+              <button key={f.key} className="chip on removable"
+                onClick={() => update(FAMILY_LABEL[f.key] ? { family: families.filter((x) => x !== f.key) } : f.clear)}>
+                {f.label}<IconX size={14} />
+              </button>
+            ))}
+            <button className="chip" onClick={() => update({ start: null, end: null, min_km: null, max_km: null, presence: null, family: [] })}>Clear all</button>
+          </div>
+        )}
+      </div>
 
-      <Card flush className="mt16">
-        {isLoading ? <div style={{ padding: 16 }}><Skeleton h={400} /></div> : !data?.items.length ? (
-          <Empty title="No activities match">Adjust the filters, or connect providers in Settings.</Empty>
+      <Card flush>
+        {isLoading ? <div style={{ padding: 14 }}><Skeleton h={400} /></div> : !data?.items.length ? (
+          <Empty title="No activities match" icon={IconSearch}>Change the filters, or connect your accounts in Settings.</Empty>
         ) : (
-          <div className="table-wrap" style={{ opacity: isFetching ? 0.7 : 1 }}>
-            <table>
-              <thead>
-                <tr>
-                  <th style={{ width: 32 }}>
-                    <input type="checkbox" aria-label="Select page" checked={data.items.length > 0 && data.items.every((a) => selected.includes(a.id))}
-                      onChange={(e) => setSelected(e.target.checked ? [...new Set([...selected, ...data.items.map((a) => a.id)])] : selected.filter((id) => !data.items.some((a) => a.id === id)))} />
-                  </th>
-                  <th style={{ width: 52 }} />
-                  {COLUMNS.map((c) => (
-                    <th key={c.key} className={`${c.sort ? "sortable" : ""} ${c.right ? "r" : ""}`}
-                      onClick={() => c.sort && update({ sort: c.sort, order: sort === c.sort && order === "desc" ? "asc" : "desc" })}>
-                      {c.label}{sort === c.sort && (order === "desc" ? " ↓" : " ↑")}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {data.items.map((a) => (
-                  <tr key={a.id} className="click" onClick={() => nav(`/activities/${a.id}`)}>
-                    <td onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label={`Select ${a.name}`} checked={selected.includes(a.id)} onChange={() => toggle(a.id)} /></td>
-                    <td><RouteThumb points={a.polyline ? decodePolyline(a.polyline) : []} color={familyColor(a.family)} /></td>
-                    <td>
-                      <div className="name-cell"><span className="t">{a.name}</span>{a.sync_locked && <IconLock width={13} height={13} className="muted" />}</div>
-                      <div className="small muted row" style={{ gap: 6 }}>
-                        <SportDot family={a.family} />{a.sport_label}{a.trainer && " · indoor"}{a.commute && " · commute"}
-                      </div>
-                    </td>
-                    <td className="small secondary" style={{ whiteSpace: "nowrap" }}>{activityDate(a)}</td>
-                    <td className="r">{km(a.distance_m)}</td>
-                    <td className="r">{duration(a.moving_time_s)}</td>
-                    <td className="r">{int(a.elevation_gain_m)}</td>
-                    <td className="r" style={{ whiteSpace: "nowrap" }}>{speed(a.avg_speed_ms, a.family)}</td>
-                    <td className="r">{int(a.avg_hr)}</td>
-                    <td className="r">{int(a.avg_power)}</td>
-                    <td className="r">{int(a.load)}</td>
-                    <td><ProviderBadges providers={a.providers} copies={a.copies} all /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="list" style={{ opacity: isFetching ? 0.7 : 1 }}>
+            {selecting && (
+              <label className="item" style={{ cursor: "pointer" }}>
+                <input type="checkbox" checked={data.items.every((a) => selected.includes(a.id))}
+                  onChange={(e) => setSelected(e.target.checked ? [...new Set([...selected, ...data.items.map((a) => a.id)])] : selected.filter((id) => !data.items.some((a) => a.id === id)))} />
+                <span className="small secondary">Select all on this page</span>
+              </label>
+            )}
+            {data.items.map((a) => (
+              <ActivityItem key={a.id} a={a} selectable={selecting} selected={selected.includes(a.id)} onToggle={toggle} />
+            ))}
           </div>
         )}
         {data && pages > 1 && (
-          <div className="row between" style={{ padding: "10px 16px", borderTop: "1px solid var(--border)" }}>
-            <span className="small muted">Page {page} of {pages}</span>
-            <div className="row">
-              <button className="sm" disabled={page <= 1} onClick={() => update({ page: String(page - 1) })}><IconLeft />Prev</button>
-              <button className="sm" disabled={page >= pages} onClick={() => update({ page: String(page + 1) })}>Next<IconRight /></button>
-            </div>
+          <div className="row between" style={{ padding: "10px 14px", borderTop: "1px solid var(--border)" }}>
+            <button className="sm" disabled={page <= 1} onClick={() => { update({ page: String(page - 1) }); window.scrollTo(0, 0); }}><IconLeft size={16} />Newer</button>
+            <span className="small muted">{page} / {pages}</span>
+            <button className="sm" disabled={page >= pages} onClick={() => { update({ page: String(page + 1) }); window.scrollTo(0, 0); }}>Older<IconRight size={16} /></button>
           </div>
         )}
       </Card>
-      {selected.length > 0 && (
-        <div className="bulk-bar" role="toolbar">
-          <span style={{ fontWeight: 600 }}>{selected.length} selected</span>
-          <button className="sm" disabled={bulk.isPending} onClick={() => bulk.mutate("strava_to_komoot")}>Copy to Komoot</button>
-          <button className="sm" disabled={bulk.isPending} onClick={() => bulk.mutate("komoot_to_strava")}>Copy to Strava</button>
-          <button className="sm" disabled={selected.length < 2} onClick={() => setTrip(true)} title="Combine the selected activities, e.g. the stages of a multi-day tour">Analyse as trip</button>
-          <button className="sm ghost" onClick={() => setSelected([])}>Clear</button>
+
+      <p className="xs muted mt8 row" style={{ gap: 6 }}>
+        <BrandIcon provider="strava" size={13} /><BrandIcon provider="komoot" size={13} /> on that platform · faded = not there · blue dot = copy made by RoutePass
+      </p>
+
+      {selecting && selected.length > 0 && (
+        <div className="action-bar" role="toolbar">
+          <b className="small" style={{ flex: "none" }}>{selected.length}</b>
+          <button className="sm" disabled={bulk.isPending} onClick={() => bulk.mutate("strava_to_komoot")}><IconSync size={15} />To <BrandIcon provider="komoot" size={14} /></button>
+          <button className="sm" disabled={bulk.isPending} onClick={() => bulk.mutate("komoot_to_strava")}><IconSync size={15} />To <BrandIcon provider="strava" size={14} /></button>
+          <button className="sm" disabled={selected.length < 2} onClick={() => setTrip(true)}><MetricIcon.distance size={15} />Trip</button>
+          <button className="sm ghost icon" onClick={() => setSelected([])} aria-label="Clear selection"><IconX size={16} /></button>
         </div>
       )}
       {trip && <TripView ids={selected} onClose={() => setTrip(false)} />}
-      <p className="small muted mt8">
-        <span className="prov strava" style={{ width: 14, height: 14, fontSize: 9 }}>S</span> Strava ·{" "}
-        <span className="prov komoot" style={{ width: 14, height: 14, fontSize: 9 }}>K</span> Komoot · faded = copy created by RoutePass · grey = not on that platform
-      </p>
+
+      {filtersOpen && (
+        <Modal title="Filters" onClose={() => setFiltersOpen(false)}
+          footer={<><button onClick={() => update({ start: null, end: null, min_km: null, max_km: null, presence: null, family: [] })}>Reset</button><button className="primary" onClick={() => setFiltersOpen(false)}>Show {data ? int(data.total) : ""} activities</button></>}>
+          <div className="stack">
+            <div className="section-label">Sport</div>
+            <FamilyChips value={families} onChange={(v) => update({ family: v })} />
+          </div>
+          <div className="stack">
+            <div className="section-label">Platform</div>
+            <Seg block value={get("presence") || "all"} onChange={(v) => update({ presence: v === "all" ? null : v })}
+              options={[
+                { value: "all", label: "All" },
+                { value: "both", label: "Both" },
+                { value: "strava_only", label: <BrandIcon provider="strava" size={16} title="Only on Strava" /> },
+                { value: "komoot_only", label: <BrandIcon provider="komoot" size={16} title="Only on Komoot" /> },
+                { value: "synced", label: "Copies" },
+              ]} />
+          </div>
+          <div className="fields">
+            <label className="field">From<input type="date" value={get("start")} onChange={(e) => update({ start: e.target.value })} /></label>
+            <label className="field">To<input type="date" value={get("end")} onChange={(e) => update({ end: e.target.value })} /></label>
+            <label className="field">Min km<input type="number" inputMode="decimal" value={get("min_km")} onChange={(e) => update({ min_km: e.target.value })} /></label>
+            <label className="field">Max km<input type="number" inputMode="decimal" value={get("max_km")} onChange={(e) => update({ max_km: e.target.value })} /></label>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }

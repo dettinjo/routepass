@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -47,6 +48,9 @@ def blocker(act: Activity, direction: str, prefs: dict, now: datetime) -> str | 
         return f"already on {target}"
     if src.created_by_sync:
         return "is itself a RoutePass copy"
+    if src_provider == "strava" and not src.raw.get("summary_polyline"):
+        return "no GPS track (indoor or manual activity)"
+    # soft blockers below can be overridden by a manual / all-time sync
     if act.sync_locked:
         return "sync locked"
     if start := prefs["sync"].get("start_date"):
@@ -55,15 +59,22 @@ def blocker(act: Activity, direction: str, prefs: dict, now: datetime) -> str | 
     delay = timedelta(minutes=prefs["sync"].get("delay_minutes", 10))
     if src.first_seen > now - delay:
         return "waiting for settle delay"
-    if src_provider == "strava" and not src.raw.get("summary_polyline"):
-        return "no GPS track (indoor or manual activity)"
     return None
 
 
-def plan(db: Session, *, activity_ids: list[int] | None = None, force: bool = False) -> dict[str, int]:
+def plan(
+    db: Session,
+    *,
+    activity_ids: list[int] | None = None,
+    force: bool = False,
+    prefs_override: dict | None = None,
+    directions: list[str] | None = None,
+    ignore_rules: bool = False,
+    honour_lock: bool = False,
+) -> dict[str, int]:
     """Create queued jobs for eligible activities. force=True ignores start date, delay and lock."""
-    prefs = store.get_preferences(db)
-    rules = db.scalars(select(SyncRule)).all()
+    prefs = prefs_override or store.get_preferences(db)
+    rules = [] if ignore_rules else db.scalars(select(SyncRule)).all()
     now = utcnow()
     created = skipped = 0
     q = select(Activity)
@@ -71,7 +82,7 @@ def plan(db: Session, *, activity_ids: list[int] | None = None, force: bool = Fa
         q = q.where(Activity.id.in_(activity_ids))
     elif start := prefs["sync"].get("start_date"):
         q = q.where(Activity.start_time >= datetime.fromisoformat(start))
-    for direction in rule_engine.DIRECTION_TARGET:
+    for direction in directions or rule_engine.DIRECTION_TARGET:
         dprefs = prefs["sync"][direction]
         if not dprefs.get("enabled") and not force:
             continue
@@ -88,7 +99,10 @@ def plan(db: Session, *, activity_ids: list[int] | None = None, force: bool = Fa
             if act.id in existing:
                 continue
             reason = blocker(act, direction, prefs, now)
-            if reason and force and reason in ("sync locked", "waiting for settle delay"):
+            overridable = (
+                ("waiting for settle delay",) if honour_lock else ("sync locked", "waiting for settle delay")
+            )
+            if reason and force and reason in overridable:
                 reason = None
             if reason and force and reason.startswith("before sync start date"):
                 reason = None
@@ -256,6 +270,7 @@ def run_jobs(db: Session, limit: int = 25, job_ids: list[int] | None = None) -> 
                     target_id = _komoot_to_strava(db, job, komoot, strava)
                 else:
                     target_id = _strava_to_komoot(db, job, strava, komoot)
+                    time.sleep(1.0)  # Komoot has no published limits; stay polite on long backlogs
                 job.target_id = target_id
                 job.status = "done"
                 job.error = None

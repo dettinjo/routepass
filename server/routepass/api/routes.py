@@ -652,3 +652,47 @@ def _provider(fn):
             raise HTTPException(502, str(exc)) from exc
 
     return wrapped
+
+
+# ── all-time sync ────────────────────────────────────────────────────────────
+
+
+class FullSyncBody(BaseModel):
+    directions: list[Direction] = ["komoot_to_strava", "strava_to_komoot"]
+    apply_rules: bool = Field(True, description="Rules still decide; False copies everything that is missing")
+
+
+@router.get("/sync/full-history", tags=["sync"])
+def full_history_state(db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass.engine import fullsync
+
+    return fullsync.state(db)
+
+
+@router.post("/sync/full-history/analyse", tags=["sync"])
+def full_history_analyse(body: FullSyncBody = FullSyncBody()) -> dict[str, str]:
+    """Import the complete history of both platforms, merge duplicates and preview what would be copied."""
+    from routepass.engine import fullsync
+
+    threading.Thread(
+        target=fullsync.analyse, args=(list(body.directions), body.apply_rules), daemon=True
+    ).start()
+    return {"phase": "importing"}
+
+
+@router.post("/sync/full-history/start", tags=["sync"])
+def full_history_start(db: Session = Depends(get_session)) -> dict[str, Any]:
+    """Queue every missing copy found by the analysis; the scheduler works the queue off."""
+    from routepass.engine import fullsync
+
+    result = _call(fullsync.start, db)
+    db.commit()
+    runner.trigger_soon()
+    return result
+
+
+@router.post("/sync/full-history/cancel", tags=["sync"])
+def full_history_cancel(db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass.engine import fullsync
+
+    return fullsync.cancel(db)

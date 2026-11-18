@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { cssVar, SEQ } from "../lib/colors";
@@ -128,7 +128,7 @@ export function Legend({ items, line = false }: { items: Series[]; line?: boolea
   return (
     <div className="legend">
       {items.map((s) => (
-        <span className="item" key={s.key}><i className={line ? "ln" : "sw"} style={{ background: s.color }} />{s.label}</span>
+        <span className="item-l" key={s.key}><i className={line ? "ln" : "sw"} style={{ background: s.color }} />{s.label}</span>
       ))}
     </div>
   );
@@ -168,7 +168,7 @@ export function CalendarHeatmap({ year, days, metric, format, onDay }: {
   const offset = (start.getUTCDay() + 6) % 7;
   const total = (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 366 : 365;
   const weeks = Math.ceil((total + offset) / 7);
-  const cell = Math.max(Math.min(Math.floor((width - 30) / weeks) - 2, 18), 6);
+  const cell = Math.max(Math.min(Math.floor((width - 30) / weeks) - 2, 18), 9);
   const step = cell + 2;
   const vals = Object.values(days);
   const max = vals.length ? [...vals].sort((a, b) => a - b)[Math.floor(vals.length * 0.95)] || Math.max(...vals) : 1;
@@ -191,9 +191,9 @@ export function CalendarHeatmap({ year, days, metric, format, onDay }: {
     );
   }
   return (
-    <div className="chart" ref={ref} onMouseLeave={() => setTip(null)}>
+    <div className="chart" ref={ref} onMouseLeave={() => setTip(null)} style={{ overflowX: "auto" }}>
       {width > 0 && (
-        <svg width={width} height={16 + 7 * step + 4}>
+        <svg width={Math.max(width, 30 + weeks * step)} height={16 + 7 * step + 4}>
           {months.map((m, i) => {
             const doy = Math.floor((Date.UTC(year, i, 1) - start.getTime()) / 86400000);
             return <text key={m} x={30 + Math.floor((doy + offset) / 7) * step} y={10}>{m}</text>;
@@ -239,9 +239,12 @@ export function GridHeatmap({ grid }: { grid: number[][] }) {
   );
 }
 
-/** Thin wrapper around uPlot: crosshair + tooltip; colors resolved from CSS tokens. */
+/** uPlot wrapper. The plot is created once per configuration and only receives new data
+ *  afterwards, so hovering (which re-renders parents) never rebuilds it. Cursor works anywhere
+ *  over the plot area, with mouse or touch. */
 export function LineChart({
   x, series, height = 240, xTime = false, xFormat, yFormat, onCursor, syncKey, logX = false, fill = false, yRange,
+  invertY = false, showXAxis = true, tooltip = true, yAxisFormat,
 }: {
   x: number[];
   series: { label: string; color: string; values: (number | null)[]; dash?: boolean; fill?: boolean; width?: number }[];
@@ -254,64 +257,72 @@ export function LineChart({
   logX?: boolean;
   fill?: boolean;
   yRange?: [number | null, number | null];
+  invertY?: boolean;
+  showXAxis?: boolean;
+  tooltip?: boolean;
+  yAxisFormat?: (v: number) => string;
 }) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const plotRef = useRef<uPlot | null>(null);
   const [tip, setTip] = useState<TipState | null>(null);
-  const cursorCb = useRef(onCursor);
-  cursorCb.current = onCursor;
+  const latest = useRef({ xFormat, yFormat, onCursor, series, xTime, tooltip, yAxisFormat });
+  latest.current = { xFormat, yFormat, onCursor, series, xTime, tooltip, yAxisFormat };
 
-  const data = useMemo(() => [x, ...series.map((s) => s.values)] as uPlot.AlignedData, [x, series]);
+  const configKey = [width, height, xTime, logX, syncKey, invertY, showXAxis, fill, yRange?.join(":"),
+    series.map((s) => `${s.label}|${s.color}|${s.dash}|${s.fill}|${s.width}`).join(",")].join("/");
 
   useEffect(() => {
     if (!ref.current || width === 0) return;
     const muted = cssVar("--text-muted");
     const grid = cssVar("--grid");
+    const fmtY = (v: number) => (latest.current.yFormat ? latest.current.yFormat(v) : String(Math.round(v * 10) / 10));
     const opts: uPlot.Options = {
       width,
       height,
-      padding: [8, 8, 0, 0],
+      padding: [8, 10, showXAxis ? 0 : 4, 0],
       cursor: {
         drag: { x: false, y: false },
-        points: { size: 8, width: 2, stroke: cssVar("--surface-1") },
+        points: { size: 9, width: 2, stroke: cssVar("--surface-1") },
         sync: syncKey ? { key: syncKey } : undefined,
       },
       legend: { show: false },
       scales: {
         x: { time: xTime, distr: logX ? 3 : 1 },
-        y: yRange ? { range: (_u, min, max) => [yRange[0] ?? min, yRange[1] ?? max] } : {},
+        y: { dir: invertY ? -1 : 1, ...(yRange ? { range: (_u: uPlot, min: number, max: number) => [yRange[0] ?? min, yRange[1] ?? max] as [number, number] } : {}) },
       },
       axes: [
-        { stroke: muted, grid: { show: false }, ticks: { stroke: grid }, font: "11px system-ui", values: xFormat ? (_u, vals) => vals.map((v) => xFormat(v)) : undefined },
-        { stroke: muted, grid: { stroke: grid, width: 1 }, ticks: { show: false }, font: "11px system-ui", size: 62, values: yFormat ? (_u, vals) => vals.map((v) => yFormat(v)) : undefined },
+        {
+          show: showXAxis, stroke: muted, grid: { show: false }, ticks: { stroke: grid }, font: "11px system-ui",
+          values: latest.current.xFormat ? (_u, vals) => vals.map((v) => latest.current.xFormat!(v)) : undefined,
+        },
+        { stroke: muted, grid: { stroke: grid, width: 1 }, ticks: { show: false }, font: "11px system-ui", size: 56, values: (_u, vals) => vals.map((v) => (latest.current.yAxisFormat ? latest.current.yAxisFormat(v) : fmtY(v))) },
       ],
       series: [
         {},
         ...series.map((s) => {
           const c = cssVar(s.color);
-          return {
-            label: s.label, stroke: c, width: s.width ?? 2, dash: s.dash ? [4, 4] : undefined,
-            fill: s.fill || fill ? c + "26" : undefined, points: { show: false }, spanGaps: false,
-          };
+          return { label: s.label, stroke: c, width: s.width ?? 2, dash: s.dash ? [4, 4] : undefined, fill: s.fill || fill ? c + "26" : undefined, points: { show: false }, spanGaps: false };
         }),
       ],
       hooks: {
         setCursor: [
           (u) => {
             const idx = u.cursor.idx;
-            cursorCb.current?.(idx ?? null);
+            const L = latest.current;
+            L.onCursor?.(idx ?? null);
+            if (!L.tooltip) return;
             if (idx == null || u.cursor.left == null || u.cursor.left < 0) { setTip(null); return; }
             const xv = u.data[0][idx];
             setTip({
-              x: u.cursor.left + 62,
-              y: (u.cursor.top ?? 0),
+              x: u.cursor.left + 56,
+              y: u.cursor.top ?? 0,
               content: (
                 <>
-                  <div className="tt-title">{xFormat ? xFormat(xv) : xTime ? new Date(xv * 1000).toLocaleDateString() : xv}</div>
-                  {series.map((s, i) => {
+                  <div className="tt-title">{L.xFormat ? L.xFormat(xv) : L.xTime ? new Date(xv * 1000).toLocaleDateString() : xv}</div>
+                  {L.series.map((s, i) => {
                     const v = u.data[i + 1][idx];
                     return v == null ? null : (
-                      <div className="tt-row" key={s.label}><span><i className="sw" style={{ background: s.color }} />{s.label}</span><span>{yFormat ? yFormat(v as number) : (v as number).toFixed(1)}</span></div>
+                      <div className="tt-row" key={s.label}><span><i className="sw" style={{ background: s.color }} />{s.label}</span><span>{fmtY(v as number)}</span></div>
                     );
                   })}
                 </>
@@ -321,14 +332,34 @@ export function LineChart({
         ],
       },
     };
-    plotRef.current?.destroy();
-    plotRef.current = new uPlot(opts, data, ref.current);
-    return () => { plotRef.current?.destroy(); plotRef.current = null; };
-  }, [width, height, data, xTime, logX, syncKey]); // eslint-disable-line react-hooks/exhaustive-deps
+    const data = [x, ...series.map((s) => s.values)] as uPlot.AlignedData;
+    const u = new uPlot(opts, data, ref.current);
+    plotRef.current = u;
+    // Touch: drag a finger anywhere over the plot to move the cursor.
+    const over = u.over;
+    const onTouch = (e: TouchEvent) => {
+      const t = e.touches[0];
+      if (!t) return;
+      const r = over.getBoundingClientRect();
+      u.setCursor({ left: Math.max(0, Math.min(r.width, t.clientX - r.left)), top: Math.max(0, Math.min(r.height, t.clientY - r.top)) });
+    };
+    over.addEventListener("touchstart", onTouch, { passive: true });
+    over.addEventListener("touchmove", onTouch, { passive: true });
+    return () => {
+      over.removeEventListener("touchstart", onTouch);
+      over.removeEventListener("touchmove", onTouch);
+      u.destroy();
+      plotRef.current = null;
+    };
+  }, [configKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    plotRef.current?.setData([x, ...series.map((s) => s.values)] as uPlot.AlignedData);
+  }, [x, ...series.map((s) => s.values)]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className="chart" ref={ref} style={{ minHeight: height }} onMouseLeave={() => { setTip(null); cursorCb.current?.(null); }}>
-      <Tooltip tip={tip} width={width} />
+    <div className="chart" ref={ref} style={{ minHeight: height }} onMouseLeave={() => { setTip(null); latest.current.onCursor?.(null); }}>
+      {tooltip && <Tooltip tip={tip} width={width} />}
     </div>
   );
 }

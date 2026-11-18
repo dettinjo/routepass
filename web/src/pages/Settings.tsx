@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { BrandIcon, IconApi, IconRefresh, IconTarget, IconImport, IconUser } from "../components/icons";
 import { Card, Skeleton, useToast } from "../components/ui";
 import { api, getToken, setToken } from "../lib/api";
 import { ago, int } from "../lib/format";
@@ -36,7 +37,7 @@ function Strava() {
   };
   const rate = status?.strava_rate;
   return (
-    <Card title={<span className="row"><span className="prov strava">S</span>Strava</span>}
+    <Card title={<span className="row nowrap"><BrandIcon provider="strava" size={22} />Strava</span>}
       actions={s?.connected ? <span className="badge good">connected</span> : <span className="badge">not connected</span>}>
       <div className="stack">
         {s?.connected && s.athlete && (
@@ -70,7 +71,7 @@ function Strava() {
           <div className="stack mt8">
             <p className="small muted" style={{ margin: 0 }}>After approving on Strava, copy the <span className="mono">code=…</span> value from the address bar of the page Strava sent you to.{redirect && <> Redirect used: <span className="mono">{redirect}</span></>}</p>
             <div className="row">
-              <input placeholder="code" value={code} onChange={(e) => setCode(e.target.value)} style={{ width: 320 }} />
+              <input placeholder="code" value={code} onChange={(e) => setCode(e.target.value)} />
               <button className="sm" disabled={!code} onClick={() => call.mutate({ path: "/connections/strava/code", body: { code } }, { onSuccess: () => { setCode(""); toast("Strava connected"); } })}>Finish</button>
             </div>
           </div>
@@ -104,7 +105,7 @@ function Komoot() {
   const [password, setPassword] = useState("");
   const k = status?.connections.komoot;
   return (
-    <Card title={<span className="row"><span className="prov komoot">K</span>Komoot</span>}
+    <Card title={<span className="row nowrap"><BrandIcon provider="komoot" size={22} />Komoot</span>}
       actions={k?.connected ? <span className="badge good">connected</span> : <span className="badge">not connected</span>}>
       <div className="stack">
         {k?.connected && k.account && (
@@ -159,7 +160,7 @@ export default function Settings() {
 
         {!prefs ? <Skeleton h={200} /> : (
           <>
-            <Card title="Athlete profile" hint="Drives zones and training load. Changing it recomputes every activity.">
+            <Card title="Athlete profile" icon={IconUser} hint="Drives zones and training load. Changing it recomputes every activity.">
               <div className="fields">
                 <NumberField label="FTP (W)" value={prefs.profile.ftp} onSave={(v) => save.mutate({ profile: { ftp: v } })} />
                 <NumberField label="Max heart rate (bpm)" value={prefs.profile.hr_max} onSave={(v) => save.mutate({ profile: { hr_max: v } })} />
@@ -168,14 +169,14 @@ export default function Settings() {
               </div>
             </Card>
             <div className="grid g2">
-              <Card title="Duplicate detection" hint="Records from both platforms are the same activity when these match">
+              <Card title="Duplicate detection" icon={IconTarget} hint="Records from both platforms are the same activity when these match">
                 <div className="fields">
                   <NumberField label="Start time within (minutes)" value={prefs.matching.time_tolerance_min} onSave={(v) => save.mutate({ matching: { time_tolerance_min: v ?? 10 } })} />
                   <NumberField label="Distance within (%)" value={prefs.matching.distance_tolerance_pct} onSave={(v) => save.mutate({ matching: { distance_tolerance_pct: v ?? 15 } })} />
                 </div>
                 <p className="small muted" style={{ marginBottom: 0 }}>Wrong match? Use “Not the same” or “Merge” on the activity page — manual decisions are kept.</p>
               </Card>
-              <Card title="Import" hint="What is read from the platforms">
+              <Card title="Import" icon={IconImport} hint="What is read from the platforms">
                 <div className="fields">
                   <label className="field">History starts at
                     <input type="date" value={prefs.import.history_start ?? ""} onChange={(e) => save.mutate({ import: { history_start: e.target.value || null } })} />
@@ -193,7 +194,7 @@ export default function Settings() {
           </>
         )}
 
-        <Card title="API & MCP" hint="Everything in this UI is available programmatically">
+        <Card title="API & MCP" icon={IconApi} hint="Everything in this UI is available programmatically">
           <div className="stack">
             <dl className="kv">
               <dt>REST API</dt><dd><a href="/api/docs" target="_blank" rel="noreferrer" className="mono">{origin}/api/v1</a> · <a href="/api/docs" target="_blank" rel="noreferrer">interactive docs</a></dd>
@@ -204,13 +205,13 @@ export default function Settings() {
             <div className="section-label">MCP client config</div>
             <pre className="mono callout" style={{ margin: 0, overflowX: "auto" }}>{mcpConfig}</pre>
             <div className="row" style={{ alignItems: "end" }}>
-              <label className="field" style={{ width: 320 }}>Token used by this browser<input type="password" value={token} onChange={(e) => setTok(e.target.value)} /></label>
+              <label className="field" style={{ width: "100%", maxWidth: 360 }}>Token used by this browser<input type="password" value={token} onChange={(e) => setTok(e.target.value)} /></label>
               <button onClick={() => { setToken(token); toast("Token saved"); }}>Save</button>
             </div>
           </div>
         </Card>
 
-        <Card title="Maintenance">
+        <Card title="Maintenance" icon={IconRefresh}>
           <div className="row">
             <button onClick={() => call.mutate({ path: "/settings/recompute" }, { onSuccess: () => toast("Recomputing all tracks in the background") })}>Recompute analysis</button>
             <button onClick={() => call.mutate({ path: "/sync/run", body: { full: true } }, { onSuccess: () => toast("Full rescan started") })}>Full rescan</button>

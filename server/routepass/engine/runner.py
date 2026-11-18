@@ -4,21 +4,24 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
+from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from routepass import store
 from routepass.config import get_settings
 from routepass.db import session_scope
 from routepass.engine import ingest, sync
 from routepass.engine.clients import NotConnected, connected, komoot_client, strava_client
-from routepass.models import SyncRun
+from routepass.models import SyncJob, SyncRun
 from routepass.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
+BACKLOG_INTERVAL_S = 120
 _wake = threading.Event()
 _stop = threading.Event()
 _thread: threading.Thread | None = None
@@ -88,13 +91,12 @@ def _cycle(trigger: str, full: bool, tracks: bool) -> dict[str, Any]:
                     note(
                         f"planned: {stats['planned']['queued']} to sync, {stats['planned']['skipped']} skipped by rules"
                     )
-            with session_scope() as db:
-                stats["jobs"] = sync.run_jobs(db)
-                if any(stats["jobs"].values()):
-                    note(
-                        f"sync: {stats['jobs']['done']} done, {stats['jobs']['failed']} failed, "
-                        f"{stats['jobs']['deferred']} deferred"
-                    )
+            stats["jobs"] = _drain_jobs()
+            if any(stats["jobs"].values()):
+                note(
+                    f"sync: {stats['jobs']['done']} done, {stats['jobs']['failed']} failed, "
+                    f"{stats['jobs']['deferred']} deferred"
+                )
         except Exception as exc:  # noqa: BLE001
             status = "partial"
             note(f"sync failed: {exc}")
@@ -117,6 +119,35 @@ def _cycle(trigger: str, full: bool, tracks: bool) -> dict[str, Any]:
         run.stats = stats
         run.log = log
     return {"status": status, "run_id": run_id, "stats": stats, "log": log}
+
+
+JOB_BUDGET_S = 600  # per cycle; a large backlog (all-time sync) continues in the next cycle
+
+
+def _drain_jobs() -> dict[str, int]:
+    """Work off due jobs in batches until none are left, a rate limit hits, or the budget is used."""
+    started = time.monotonic()
+    total = {"done": 0, "failed": 0, "deferred": 0}
+    while time.monotonic() - started < JOB_BUDGET_S:
+        with session_scope() as db:
+            batch = sync.run_jobs(db, limit=20)
+        for k in total:
+            total[k] += batch[k]
+        if batch["deferred"] or not (batch["done"] + batch["failed"]):
+            break
+    return total
+
+
+def backlog() -> int:
+    with session_scope() as db:
+        return (
+            db.scalar(
+                select(func.count())
+                .select_from(SyncJob)
+                .where(SyncJob.status == "queued", SyncJob.next_attempt_at <= utcnow() + timedelta(minutes=5))
+            )
+            or 0
+        )
 
 
 def last_run() -> SyncRun | None:
@@ -147,7 +178,8 @@ def _loop() -> None:
             run_cycle("schedule")
         except Exception:  # noqa: BLE001
             logger.exception("scheduled cycle crashed")
-        _wake.wait(_interval_s())
+        # A backlog (e.g. an all-time sync) keeps the loop busy instead of waiting a full interval.
+        _wake.wait(BACKLOG_INTERVAL_S if backlog() else _interval_s())
         _wake.clear()
 
 

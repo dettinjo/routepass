@@ -142,7 +142,7 @@ def test_rules_skip_and_rename(connected, mock_apis):
 
     assert upload.call_count == 1
     assert upload.calls[0].request.url.params["name"] == "Strava 1 · 40 km"
-    assert upload.calls[0].request.url.params["sport"] == "touringbike"
+    assert upload.calls[0].request.url.params["sport"] == "touringbicycle"
     assert b'"status":"friends"' in patch.calls[0].request.content.replace(b" ", b"")
     with session_scope() as db:
         statuses = sorted(j.status for j in db.scalars(select(SyncJob)))
@@ -308,3 +308,39 @@ def test_bulk_sync_and_trip(client, connected, mock_apis):
         client.post("/api/v1/activities/trip", json={"activity_ids": ids[:1]}, headers=AUTH).status_code
         == 422
     )
+
+
+def test_full_history_sync(client, connected, mock_apis):
+    from routepass.engine import fullsync
+
+    # Strava: one shared ride, one Strava-only run, one indoor ride; Komoot: shared + Komoot-only hike (2019)
+    _strava_list(
+        mock_apis,
+        [
+            strava_activity(1, T0),
+            strava_activity(2, T0 + days(1), km=10, sport_type="Run"),
+            strava_activity(3, T0 + days(2), km=20, trainer=True, map={"summary_polyline": ""}),
+        ],
+    )
+    old = T0.replace(year=2019)
+    _komoot_list(
+        mock_apis, [komoot_tour(100, T0 + timedelta(minutes=1)), komoot_tour(101, old, sport="hike")]
+    )
+    with session_scope() as db:
+        store.update_preferences(
+            db, {"import": {"history_start": "2025-01-01"}, "sync": {"start_date": "2026-11-01"}}
+        )
+
+    fullsync.analyse(["komoot_to_strava", "strava_to_komoot"], True)
+    st = client.get("/api/v1/sync/full-history", headers=AUTH).json()
+    assert st["phase"] == "ready", st
+    assert st["counts"]["activities"] == 4  # 2019 hike imported despite history_start
+    assert st["preview"]["komoot_to_strava"]["to_copy"] == 1  # the 2019 hike, despite start_date
+    assert st["preview"]["strava_to_komoot"]["to_copy"] == 1  # the run; indoor ride cannot be copied
+    assert sum(st["preview"]["strava_to_komoot"]["cannot_copy"].values()) == 1
+
+    started = client.post("/api/v1/sync/full-history/start", headers=AUTH).json()
+    assert started["phase"] == "running" and started["planned"]["queued"] == 2
+    with session_scope() as db:
+        assert db.scalar(select(func.count()).select_from(SyncJob).where(SyncJob.status == "queued")) == 2
+    assert client.post("/api/v1/sync/full-history/cancel", headers=AUTH).json()["cancelled_jobs"] == 2

@@ -178,12 +178,14 @@ def _history_start(db: Session) -> datetime | None:
     return datetime.fromisoformat(raw) if raw else None
 
 
-def import_strava(db: Session, client: StravaClient, *, full: bool = False) -> ImportStats:
+def import_strava(
+    db: Session, client: StravaClient, *, full: bool = False, all_time: bool = False
+) -> ImportStats:
     stats = ImportStats()
     state = store.get_value(db, "strava.import", {}) or {}
     last_full = parse_iso(state.get("last_full"))
-    full = full or last_full is None or utcnow() - last_full > FULL_RESCAN_EVERY
-    history_start = _history_start(db)
+    full = full or all_time or last_full is None or utcnow() - last_full > FULL_RESCAN_EVERY
+    history_start = None if all_time else _history_start(db)
     after: int | None = int(history_start.timestamp()) if history_start else None
     if not full and state.get("watermark"):
         # Re-read the last few days so renames and late edits are picked up.
@@ -213,12 +215,14 @@ def import_strava(db: Session, client: StravaClient, *, full: bool = False) -> I
     return stats
 
 
-def import_komoot(db: Session, client: KomootClient, *, full: bool = False) -> ImportStats:
+def import_komoot(
+    db: Session, client: KomootClient, *, full: bool = False, all_time: bool = False
+) -> ImportStats:
     stats = ImportStats()
     state = store.get_value(db, "komoot.import", {}) or {}
     last_full = parse_iso(state.get("last_full"))
-    full = full or last_full is None or utcnow() - last_full > FULL_RESCAN_EVERY
-    history_start = _history_start(db)
+    full = full or all_time or last_full is None or utcnow() - last_full > FULL_RESCAN_EVERY
+    history_start = None if all_time else _history_start(db)
     stop_before = history_start
     if not full and state.get("watermark"):
         cutoff = datetime.fromtimestamp(int(state["watermark"])) - timedelta(days=3)
@@ -579,3 +583,17 @@ def fetch_tracks(db: Session, budget_s: float = 240.0, limit: int = 200) -> dict
 
 def polyline_points(act: Activity) -> list[tuple[float, float]]:
     return decode_polyline(act.polyline) if act.polyline else []
+
+
+SPORTS_VERSION = 2  # bump when providers/sports.py changes how sports map
+
+
+def remap_sports_if_needed(db: Session) -> int:
+    """Re-derive canonical sports after a mapping change (one-time, at startup)."""
+    if (store.get_value(db, "sports.version") or 1) >= SPORTS_VERSION:
+        return 0
+    ids = [a for (a,) in db.execute(select(Activity.id))]
+    for act_id in ids:
+        refresh_activity(db, act_id)
+    store.set_value(db, "sports.version", SPORTS_VERSION)
+    return len(ids)
