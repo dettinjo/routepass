@@ -1,0 +1,585 @@
+from __future__ import annotations
+
+import secrets
+import threading
+from datetime import date
+from typing import Any, Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import RedirectResponse, Response
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from routepass import services, store
+from routepass.analysis import insights
+from routepass.analysis import track as trk
+from routepass.api import serialize
+from routepass.config import get_settings
+from routepass.db import get_session
+from routepass.engine import ingest, runner, sync
+from routepass.engine.clients import (
+    KOMOOT_ACCOUNT,
+    KOMOOT_CREDENTIALS,
+    STRAVA_APP,
+    STRAVA_ATHLETE,
+    STRAVA_TOKENS,
+    strava_app,
+    strava_client,
+)
+from routepass.engine.rules import RuleError
+from routepass.models import SyncRun, Track
+from routepass.providers import komoot, sports, strava
+from routepass.providers.gpx import track_to_gpx
+from routepass.security import token_ok
+from routepass.timeutil import utcnow
+
+Direction = Literal["strava_to_komoot", "komoot_to_strava"]
+
+
+def require_token(request: Request) -> None:
+    header = request.headers.get("authorization", "")
+    presented = header[7:] if header.lower().startswith("bearer ") else request.query_params.get("token")
+    if not token_ok(presented):
+        raise HTTPException(401, "Missing or invalid API token", headers={"WWW-Authenticate": "Bearer"})
+
+
+router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_token)])
+public = APIRouter(prefix="/api/v1")
+
+
+def _call(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except services.NotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except (ValueError, RuleError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+def _filters(
+    start: date | None = None,
+    end: date | None = None,
+    family: list[str] | None = Query(None),
+    sport: list[str] | None = Query(None),
+) -> insights.Filters:
+    return insights.Filters(start=start, end=end, families=family or None, sports=sport or None)
+
+
+# ── system ───────────────────────────────────────────────────────────────────
+
+
+@public.get("/health", tags=["system"])
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@router.get("/status", tags=["system"])
+def get_status(db: Session = Depends(get_session)) -> dict[str, Any]:
+    return services.status(db, runner.is_running())
+
+
+class RunRequest(BaseModel):
+    full: bool = Field(False, description="Re-scan complete provider history (detects deletions)")
+    wait: bool = Field(False, description="Block until the cycle finishes")
+
+
+@router.post("/sync/run", tags=["sync"])
+def run_sync(body: RunRequest = RunRequest()) -> dict[str, Any]:
+    if runner.is_running():
+        return {"status": "busy"}
+    if body.wait:
+        return runner.run_cycle("api", full=body.full)
+    threading.Thread(target=runner.run_cycle, args=("api",), kwargs={"full": body.full}, daemon=True).start()
+    return {"status": "started"}
+
+
+@router.get("/sync/runs", tags=["sync"])
+def list_runs(limit: int = 20, db: Session = Depends(get_session)) -> list[dict[str, Any]]:
+    return [serialize.run(r) for r in db.scalars(select(SyncRun).order_by(SyncRun.id.desc()).limit(limit))]
+
+
+@router.get("/sync/jobs", tags=["sync"])
+def list_jobs(
+    status: str | None = None, limit: int = 100, offset: int = 0, db: Session = Depends(get_session)
+) -> dict[str, Any]:
+    return services.list_jobs(db, status, limit, offset)
+
+
+@router.post("/sync/jobs/{job_id}/retry", tags=["sync"])
+def retry_job(job_id: int, db: Session = Depends(get_session)) -> dict[str, Any]:
+    job = sync.retry(db, job_id)
+    db.commit()
+    if job is not None and job.status == "queued":
+        threading.Thread(target=_run_jobs, args=([job.id],), daemon=True).start()
+    return {"ok": True}
+
+
+def _run_jobs(ids: list[int]) -> None:
+    from routepass.db import session_scope
+
+    with session_scope() as db:
+        sync.run_jobs(db, job_ids=ids)
+
+
+@router.delete("/sync/jobs/{job_id}", tags=["sync"])
+def delete_job(job_id: int, db: Session = Depends(get_session)) -> dict[str, bool]:
+    from routepass.models import SyncJob
+
+    job = db.get(SyncJob, job_id)
+    if job is None:
+        raise HTTPException(404, "job not found")
+    if job.status == "done":
+        raise HTTPException(422, "completed jobs are history and cannot be removed")
+    db.delete(job)
+    return {"ok": True}
+
+
+@router.post("/sync/reevaluate", tags=["sync"])
+def reevaluate(db: Session = Depends(get_session)) -> dict[str, int]:
+    return services.reevaluate_skipped(db)
+
+
+@router.get("/sync/preview", tags=["sync"])
+def preview(
+    direction: Direction, limit: int = 100, db: Session = Depends(get_session)
+) -> list[dict[str, Any]]:
+    return sync.preview(db, direction, limit)
+
+
+# ── rules ────────────────────────────────────────────────────────────────────
+
+
+class RuleBody(BaseModel):
+    name: str | None = None
+    direction: Direction | None = None
+    enabled: bool | None = None
+    priority: int | None = None
+    conditions: dict[str, Any] | None = None
+    actions: dict[str, Any] | None = None
+
+
+@router.get("/rules", tags=["rules"])
+def list_rules(
+    direction: Direction | None = None, db: Session = Depends(get_session)
+) -> list[dict[str, Any]]:
+    return services.list_rules(db, direction)
+
+
+@router.post("/rules", tags=["rules"], status_code=201)
+def create_rule(body: RuleBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    return _call(services.save_rule, db, body.model_dump(exclude_none=True))
+
+
+@router.put("/rules/{rule_id}", tags=["rules"])
+def update_rule(rule_id: int, body: RuleBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    return _call(services.save_rule, db, body.model_dump(exclude_none=True), rule_id)
+
+
+@router.delete("/rules/{rule_id}", tags=["rules"])
+def delete_rule(rule_id: int, db: Session = Depends(get_session)) -> dict[str, bool]:
+    _call(services.delete_rule, db, rule_id)
+    return {"ok": True}
+
+
+class ReorderBody(BaseModel):
+    ids: list[int]
+
+
+@router.post("/rules/reorder", tags=["rules"])
+def reorder_rules(body: ReorderBody, db: Session = Depends(get_session)) -> list[dict[str, Any]]:
+    return services.reorder_rules(db, body.ids)
+
+
+@router.get("/meta/sports", tags=["rules"])
+def sport_meta() -> dict[str, Any]:
+    return {
+        "strava": [
+            {"key": s, "label": sports.label(s), "family": sports.family(s)}
+            for s in sports.all_strava_sports()
+        ],
+        "komoot": [{"key": s, "label": sports.label(s)} for s in sports.all_komoot_sports()],
+        "families": ["ride", "run", "walk", "winter", "water", "other"],
+    }
+
+
+# ── activities ───────────────────────────────────────────────────────────────
+
+
+@router.get("/activities", tags=["activities"])
+def list_activities(
+    q: str | None = None,
+    sport: list[str] | None = Query(None),
+    family: list[str] | None = Query(None),
+    start: date | None = None,
+    end: date | None = None,
+    presence: Literal["both", "strava_only", "komoot_only", "synced"] | None = None,
+    min_km: float | None = None,
+    max_km: float | None = None,
+    sort: str = "date",
+    order: Literal["asc", "desc"] = "desc",
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=500),
+    db: Session = Depends(get_session),
+) -> dict[str, Any]:
+    return services.list_activities(
+        db,
+        q=q,
+        sport=sport,
+        family=family,
+        start=start,
+        end=end,
+        presence=presence,
+        min_km=min_km,
+        max_km=max_km,
+        sort=sort,
+        order=order,
+        page=page,
+        per_page=per_page,
+    )
+
+
+@router.get("/activities/{activity_id}", tags=["activities"])
+def activity_detail(activity_id: int, db: Session = Depends(get_session)) -> dict[str, Any]:
+    return _call(services.activity_detail, db, activity_id)
+
+
+@router.get("/activities/{activity_id}/track", tags=["activities"])
+def activity_track(activity_id: int, db: Session = Depends(get_session)) -> dict[str, Any]:
+    return _call(services.activity_track, db, activity_id)
+
+
+@router.get("/activities/{activity_id}/similar", tags=["activities"])
+def similar(activity_id: int, db: Session = Depends(get_session)) -> list[dict[str, Any]]:
+    return _call(services.similar_activities, db, activity_id)
+
+
+@router.get("/activities/{activity_id}/gpx", tags=["activities"])
+def activity_gpx(activity_id: int, db: Session = Depends(get_session)) -> Response:
+    act = _call(services.get_activity, db, activity_id)
+    track = db.get(Track, act.id)
+    if track is None:
+        raise HTTPException(404, "no track stored for this activity")
+    gpx = track_to_gpx(trk.NormalizedTrack.unpack(track.data), act.name, act.sport, act.start_time)
+    filename = f"{act.start_time:%Y-%m-%d}-{act.id}.gpx"
+    return Response(
+        gpx,
+        media_type="application/gpx+xml",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+class ActivityPatch(BaseModel):
+    sync_locked: bool
+
+
+@router.patch("/activities/{activity_id}", tags=["activities"])
+def patch_activity(
+    activity_id: int, body: ActivityPatch, db: Session = Depends(get_session)
+) -> dict[str, Any]:
+    return _call(services.set_sync_lock, db, activity_id, body.sync_locked)
+
+
+class SyncBody(BaseModel):
+    direction: Direction
+
+
+@router.post("/activities/{activity_id}/sync", tags=["activities"])
+def sync_activity(activity_id: int, body: SyncBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    return _call(services.sync_activity, db, activity_id, body.direction)
+
+
+class UnlinkBody(BaseModel):
+    source_id: int
+
+
+@router.post("/activities/{activity_id}/unlink", tags=["activities"])
+def unlink(activity_id: int, body: UnlinkBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    return _call(services.unlink_source, db, activity_id, body.source_id)
+
+
+class MergeBody(BaseModel):
+    other_id: int
+
+
+@router.post("/activities/{activity_id}/merge", tags=["activities"])
+def merge(activity_id: int, body: MergeBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    return _call(services.merge_activities, db, activity_id, body.other_id)
+
+
+@router.post("/activities/{activity_id}/refetch-track", tags=["activities"])
+def refetch(activity_id: int, db: Session = Depends(get_session)) -> dict[str, Any]:
+    result = _call(services.refetch_track, db, activity_id)
+    db.commit()
+    with_session_fetch = threading.Thread(target=_fetch_tracks, daemon=True)
+    with_session_fetch.start()
+    return result
+
+
+def _fetch_tracks() -> None:
+    from routepass.db import session_scope
+
+    with session_scope() as db:
+        ingest.fetch_tracks(db, budget_s=60, limit=20)
+
+
+# ── insights ─────────────────────────────────────────────────────────────────
+
+
+@router.get("/insights/dashboard", tags=["insights"])
+def dashboard(family: list[str] | None = Query(None), db: Session = Depends(get_session)) -> dict[str, Any]:
+    today = date.today()
+    fam = family or None
+    return {
+        "periods": insights.period_comparison(db, today, fam),
+        "load": insights.training_load(db, today, days=90, families=fam),
+        "weekly": insights.timeseries(
+            db, insights.Filters(start=date(today.year - 1, today.month, 1), end=today, families=fam), "week"
+        ),
+        "streaks": insights.habits(db, insights.Filters(families=fam))["streaks"],
+        "recent": services.list_activities(db, family=fam, per_page=8)["items"],
+        "coverage": insights.coverage(db),
+    }
+
+
+@router.get("/insights/totals", tags=["insights"])
+def totals(f: insights.Filters = Depends(_filters), db: Session = Depends(get_session)) -> dict[str, Any]:
+    return insights.totals(db, f)
+
+
+@router.get("/insights/timeseries", tags=["insights"])
+def timeseries(
+    grain: Literal["day", "week", "month", "year"] = "week",
+    group: Literal["family", "sport", "all"] = "family",
+    f: insights.Filters = Depends(_filters),
+    db: Session = Depends(get_session),
+) -> dict[str, Any]:
+    return insights.timeseries(db, f, grain, group)
+
+
+@router.get("/insights/calendar", tags=["insights"])
+def calendar(
+    f: insights.Filters = Depends(_filters), db: Session = Depends(get_session)
+) -> list[dict[str, Any]]:
+    return insights.calendar(db, f)
+
+
+@router.get("/insights/cumulative", tags=["insights"])
+def cumulative(
+    metric: Literal["distance_m", "moving_time_s", "elevation_m", "count"] = "distance_m",
+    f: insights.Filters = Depends(_filters),
+    db: Session = Depends(get_session),
+) -> dict[str, list]:
+    return insights.cumulative_by_year(db, f, metric)
+
+
+@router.get("/insights/load", tags=["insights"])
+def load(
+    days: int = Query(365, ge=14, le=3650),
+    end: date | None = None,
+    family: list[str] | None = Query(None),
+    db: Session = Depends(get_session),
+) -> dict[str, Any]:
+    return insights.training_load(db, end or date.today(), days, family or None)
+
+
+@router.get("/insights/records", tags=["insights"])
+def records(f: insights.Filters = Depends(_filters), db: Session = Depends(get_session)) -> dict[str, Any]:
+    return insights.records(db, f)
+
+
+@router.get("/insights/power-curve", tags=["insights"])
+def power_curve(
+    f: insights.Filters = Depends(_filters), db: Session = Depends(get_session)
+) -> list[dict[str, Any]]:
+    return insights.power_curve(db, f)
+
+
+@router.get("/insights/habits", tags=["insights"])
+def habits(f: insights.Filters = Depends(_filters), db: Session = Depends(get_session)) -> dict[str, Any]:
+    return insights.habits(db, f)
+
+
+@router.get("/insights/eddington", tags=["insights"])
+def eddington(
+    unit: Literal["km", "mi"] = "km",
+    f: insights.Filters = Depends(_filters),
+    db: Session = Depends(get_session),
+) -> dict[str, Any]:
+    return insights.eddington(db, f, 1.0 if unit == "km" else 1.609344)
+
+
+@router.get("/insights/heatmap", tags=["insights"])
+def heatmap(
+    f: insights.Filters = Depends(_filters), db: Session = Depends(get_session)
+) -> list[dict[str, Any]]:
+    return insights.heatmap(db, f)
+
+
+@router.get("/insights/coverage", tags=["insights"])
+def coverage(db: Session = Depends(get_session)) -> dict[str, Any]:
+    return insights.coverage(db)
+
+
+# ── settings ─────────────────────────────────────────────────────────────────
+
+
+@router.get("/settings", tags=["settings"])
+def get_preferences(db: Session = Depends(get_session)) -> dict[str, Any]:
+    return store.get_preferences(db)
+
+
+@router.patch("/settings", tags=["settings"])
+def patch_preferences(patch: dict[str, Any], db: Session = Depends(get_session)) -> dict[str, Any]:
+    before = store.get_preferences(db)
+    prefs = store.update_preferences(db, patch)
+    if prefs["profile"] != before["profile"]:
+        db.commit()
+        threading.Thread(target=_recompute, daemon=True).start()
+    if prefs["matching"] != before["matching"]:
+        ingest.match_unlinked(db)
+    return prefs
+
+
+def _recompute() -> None:
+    from routepass.db import session_scope
+
+    with session_scope() as db:
+        ingest.recompute_tracks(db)
+
+
+@router.post("/settings/recompute", tags=["settings"])
+def recompute() -> dict[str, str]:
+    threading.Thread(target=_recompute, daemon=True).start()
+    return {"status": "started"}
+
+
+# ── connections ──────────────────────────────────────────────────────────────
+
+
+class StravaAppBody(BaseModel):
+    client_id: str
+    client_secret: str
+
+
+@router.put("/connections/strava/app", tags=["connections"])
+def set_strava_app(body: StravaAppBody, db: Session = Depends(get_session)) -> dict[str, bool]:
+    store.set_secret(db, STRAVA_APP, body.model_dump())
+    return {"ok": True}
+
+
+def _redirect_uri() -> str:
+    settings = get_settings()
+    return (
+        settings.strava_redirect_uri or settings.base_url.rstrip("/") + "/api/v1/connections/strava/callback"
+    )
+
+
+@router.get("/connections/strava/authorize", tags=["connections"])
+def strava_authorize(db: Session = Depends(get_session)) -> dict[str, str]:
+    client_id, client_secret = strava_app(db)
+    if not client_id or not client_secret:
+        raise HTTPException(422, "Set the Strava API application (client id + secret) first")
+    state = secrets.token_urlsafe(16)
+    store.set_value(db, "strava.oauth_state", state)
+    return {"url": strava.authorize_url(client_id, _redirect_uri(), state), "redirect_uri": _redirect_uri()}
+
+
+def _finish_strava(db: Session, code: str) -> dict[str, Any]:
+    client_id, client_secret = strava_app(db)
+    try:
+        data = strava.exchange_code(client_id, client_secret, code)
+    except strava.StravaAuthError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    store.set_secret(
+        db,
+        STRAVA_TOKENS,
+        {
+            "access_token": data["access_token"],
+            "refresh_token": data["refresh_token"],
+            "expires_at": data["expires_at"],
+            "scope": data.get("scope"),
+        },
+    )
+    athlete = data.get("athlete") or {}
+    store.set_value(
+        db,
+        STRAVA_ATHLETE,
+        {
+            "id": athlete.get("id"),
+            "name": f"{athlete.get('firstname', '')} {athlete.get('lastname', '')}".strip(),
+            "profile": athlete.get("profile_medium"),
+            "connected_at": utcnow().isoformat(),
+        },
+    )
+    runner.trigger_soon()
+    return {"ok": True}
+
+
+@public.get("/connections/strava/callback", tags=["connections"], include_in_schema=False)
+def strava_callback(
+    state: str = "", code: str = "", error: str = "", db: Session = Depends(get_session)
+) -> RedirectResponse:
+    expected = store.get_value(db, "strava.oauth_state")
+    if error or not code or not expected or not secrets.compare_digest(state, expected):
+        return RedirectResponse(f"/settings?strava=error&reason={error or 'state'}")
+    store.delete_value(db, "strava.oauth_state")
+    _finish_strava(db, code)
+    return RedirectResponse("/settings?strava=connected")
+
+
+class CodeBody(BaseModel):
+    code: str
+
+
+@router.post("/connections/strava/code", tags=["connections"])
+def strava_code(body: CodeBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    """Finish OAuth by pasting the `code` from the redirect URL (when the redirect can't reach this host)."""
+    return _finish_strava(db, body.code.strip())
+
+
+@router.delete("/connections/strava", tags=["connections"])
+def strava_disconnect(db: Session = Depends(get_session)) -> dict[str, bool]:
+    store.delete_value(db, STRAVA_TOKENS)
+    store.delete_value(db, STRAVA_ATHLETE)
+    return {"ok": True}
+
+
+@router.get("/connections/strava/check", tags=["connections"])
+def strava_check(db: Session = Depends(get_session)) -> dict[str, Any]:
+    try:
+        with strava_client(db) as client:
+            athlete = client.athlete()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, str(exc)) from exc
+    return {"ok": True, "athlete": {"id": athlete.get("id"), "name": athlete.get("firstname")}}
+
+
+class KomootBody(BaseModel):
+    email: str
+    password: str
+
+
+@router.put("/connections/komoot", tags=["connections"])
+def komoot_connect(body: KomootBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    try:
+        account = komoot.login(body.email.strip(), body.password)
+    except komoot.KomootAuthError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except komoot.KomootError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    store.set_secret(
+        db, KOMOOT_CREDENTIALS, {"email": body.email.strip(), "password": body.password, **account}
+    )
+    store.set_value(
+        db, KOMOOT_ACCOUNT, {**account, "email": body.email.strip(), "connected_at": utcnow().isoformat()}
+    )
+    runner.trigger_soon()
+    return {"ok": True, "account": account}
+
+
+@router.delete("/connections/komoot", tags=["connections"])
+def komoot_disconnect(db: Session = Depends(get_session)) -> dict[str, bool]:
+    store.delete_value(db, KOMOOT_CREDENTIALS)
+    store.delete_value(db, KOMOOT_ACCOUNT)
+    return {"ok": True}

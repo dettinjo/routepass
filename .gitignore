@@ -1,53 +1,21 @@
-# Environments
 .env
 .env.*
-!.env.template
-!.env.saas.template
-!.env.selfhosted.template
-
-# Legacy
-legacy/data/
-legacy/.env
-
-# Python
+!.env.example
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
 .pytest_cache/
-.coverage
-htmlcov/
-.venv
-env/
+.ruff_cache/
+.venv/
 venv/
-build/
-dist/
-*.egg-info/
-
-# Node (Future Frontend)
 node_modules/
-dist/
-.next/
-out/
-.npm
-.cache
-
-# Logs
+web/dist/
+server/routepass/static/
+data/
+*.db
+*.db-*
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# OS / IDE
 .DS_Store
 .vscode/
 .idea/
-*.swp
-*.swo
-
-# Build artifacts
-docs/.astro/
-frontend/tsconfig.tsbuildinfo
-
-# Claude Code local session state
 .claude/
+*.tsbuildinfo

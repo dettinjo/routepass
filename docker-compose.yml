@@ -1,70 +1,17 @@
-name: routepass
-
+# Local run: `docker compose up --build`, then open http://localhost:8000
 services:
-  api:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
+  routepass:
+    build: .
+    container_name: routepass
     restart: unless-stopped
-    ports: ["8000:8000"]
-    env_file: .env.saas
-    depends_on:
-      db: {condition: service_healthy}
-      redis: {condition: service_healthy}
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
-  worker:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    command: python -m arq app.jobs.worker.WorkerSettings
-    restart: unless-stopped
-    env_file: .env.saas
-    depends_on:
-      db: {condition: service_healthy}
-      redis: {condition: service_healthy}
-
-  frontend:
-    build:
-      context: ./frontend
-      args:
-        # Baked into the Next.js standalone bundle at build time so the
-        # rewrite rules forward /api/* to the FastAPI container.
-        INTERNAL_API_URL: http://api:8000
-    restart: unless-stopped
-    ports: ["3000:3000"]
-    env_file: .env.saas
-    depends_on:
-      - api
-
-  db:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    env_file: .env.saas
-    volumes: [postgres_data:/var/lib/postgresql/data]
-    # No environment override here - use vars from env_file directly
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U app -d routepass"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    env_file: .env.saas
-    volumes: [redis_data:/data]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      ROUTEPASS_BASE_URL: http://localhost:8000
+      ROUTEPASS_API_TOKEN: ${ROUTEPASS_API_TOKEN:-}
+      ROUTEPASS_STRAVA_CLIENT_ID: ${ROUTEPASS_STRAVA_CLIENT_ID:-}
+      ROUTEPASS_STRAVA_CLIENT_SECRET: ${ROUTEPASS_STRAVA_CLIENT_SECRET:-}
+    volumes:
+      - routepass-data:/data
 volumes:
-  postgres_data:
-  redis_data:
+  routepass-data:

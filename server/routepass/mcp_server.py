@@ -1,0 +1,346 @@
+"""MCP server: the same operations as the REST API, as tools for AI assistants."""
+
+from __future__ import annotations
+
+from datetime import date
+from typing import Any, Literal
+
+from mcp.server.mcpserver import MCPServer
+
+from routepass import services, store
+from routepass.analysis import insights
+from routepass.db import session_scope
+from routepass.engine import runner, sync
+
+Direction = Literal["strava_to_komoot", "komoot_to_strava"]
+Family = Literal["ride", "run", "walk", "winter", "water", "other"]
+
+mcp = MCPServer(
+    name="RoutePass",
+    instructions=(
+        "RoutePass keeps one deduplicated activity history built from Strava and Komoot and copies "
+        "activities between them according to sync rules. Every activity appears once even if it exists "
+        "on both platforms (see `providers`). Distances are metres, durations seconds, speeds m/s, "
+        "dates ISO 8601. Sports use Strava sport_type names (Ride, Run, Hike, EBikeRide…); families group "
+        "them (ride, run, walk, winter, water, other). Training load is on the TSS scale."
+    ),
+)
+
+
+def _f(start: str | None, end: str | None, families: list[Family] | None, sports: list[str] | None):
+    return insights.Filters(
+        start=date.fromisoformat(start) if start else None,
+        end=date.fromisoformat(end) if end else None,
+        families=list(families) if families else None,
+        sports=sports or None,
+    )
+
+
+# ── overview ─────────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def get_status() -> dict[str, Any]:
+    """Connection state, last sync run, job counts, dedup coverage and Strava rate-limit usage."""
+    with session_scope() as db:
+        return services.status(db, runner.is_running())
+
+
+@mcp.tool()
+def run_sync(full: bool = False) -> dict[str, Any]:
+    """Run a sync cycle now (import both providers, dedupe, apply rules, upload, fetch tracks) and wait
+    for it. full=True re-reads the complete history and detects deleted activities."""
+    return runner.run_cycle("mcp", full=full)
+
+
+# ── activities ───────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def list_activities(
+    query: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    families: list[Family] | None = None,
+    sports: list[str] | None = None,
+    presence: Literal["both", "strava_only", "komoot_only", "synced"] | None = None,
+    min_km: float | None = None,
+    max_km: float | None = None,
+    sort: Literal[
+        "date", "distance", "duration", "elevation", "speed", "load", "hr", "power", "name"
+    ] = "date",
+    order: Literal["asc", "desc"] = "desc",
+    page: int = 1,
+    per_page: int = 25,
+) -> dict[str, Any]:
+    """Search the deduplicated activity list. start/end are YYYY-MM-DD (end inclusive).
+    presence filters by which platforms hold the activity."""
+    with session_scope() as db:
+        result = services.list_activities(
+            db,
+            q=query,
+            start=date.fromisoformat(start) if start else None,
+            end=date.fromisoformat(end) if end else None,
+            family=list(families) if families else None,
+            sport=sports,
+            presence=presence,
+            min_km=min_km,
+            max_km=max_km,
+            sort=sort,
+            order=order,
+            page=page,
+            per_page=min(per_page, 100),
+        )
+    for item in result["items"]:
+        item.pop("polyline", None)
+    return result
+
+
+@mcp.tool()
+def get_activity(activity_id: int) -> dict[str, Any]:
+    """Full detail of one activity: metrics, provider records (Strava/Komoot links), sync history,
+    and track analysis (HR/power zones, splits, climbs, best efforts, decoupling)."""
+    with session_scope() as db:
+        out = services.activity_detail(db, activity_id)
+    out.pop("polyline", None)
+    return out
+
+
+@mcp.tool()
+def get_activity_streams(activity_id: int, max_points: int = 200) -> dict[str, Any]:
+    """Downsampled recording: per point t (s), d (m), ele, hr, pw (W), cad, v (m/s), temp, lat, lon."""
+    with session_scope() as db:
+        data = services.activity_track(db, activity_id)
+    pts = data["points"]
+    if len(pts) > max_points:
+        step = len(pts) / max_points
+        pts = [pts[int(i * step)] for i in range(max_points)]
+    return {**data, "points": pts}
+
+
+@mcp.tool()
+def find_similar_activities(activity_id: int) -> list[dict[str, Any]]:
+    """Other activities of the same family with similar distance starting nearby (repeats of a route)."""
+    with session_scope() as db:
+        rows = services.similar_activities(db, activity_id)
+    for r in rows:
+        r.pop("polyline", None)
+    return rows
+
+
+@mcp.tool()
+def sync_activity(activity_id: int, direction: Direction) -> dict[str, Any]:
+    """Copy one activity to the other platform now (applies matching rules, ignores start date)."""
+    with session_scope() as db:
+        return services.sync_activity(db, activity_id, direction)
+
+
+@mcp.tool()
+def set_activity_sync_lock(activity_id: int, locked: bool) -> dict[str, Any]:
+    """Lock an activity so automatic sync never copies it (or unlock it)."""
+    with session_scope() as db:
+        return services.set_sync_lock(db, activity_id, locked)
+
+
+@mcp.tool()
+def merge_activities(activity_id: int, duplicate_id: int) -> dict[str, Any]:
+    """Merge duplicate_id into activity_id when auto-matching missed that they are the same activity."""
+    with session_scope() as db:
+        return services.merge_activities(db, activity_id, duplicate_id)
+
+
+@mcp.tool()
+def unlink_activity_source(activity_id: int, source_id: int) -> dict[str, Any]:
+    """Split a wrongly matched provider record (source id from get_activity) into its own activity."""
+    with session_scope() as db:
+        return services.unlink_source(db, activity_id, source_id)
+
+
+# ── insights ─────────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def get_totals(
+    start: str | None = None,
+    end: str | None = None,
+    families: list[Family] | None = None,
+    sports: list[str] | None = None,
+) -> dict[str, Any]:
+    """Totals (count, distance, moving time, elevation, load, active days) overall, per family and per sport."""
+    with session_scope() as db:
+        return insights.totals(db, _f(start, end, families, sports))
+
+
+@mcp.tool()
+def compare_periods(families: list[Family] | None = None) -> dict[str, Any]:
+    """This week, month and year to date compared with the same span of the previous period."""
+    with session_scope() as db:
+        return insights.period_comparison(db, date.today(), list(families) if families else None)
+
+
+@mcp.tool()
+def get_timeseries(
+    grain: Literal["day", "week", "month", "year"] = "month",
+    group: Literal["family", "sport", "all"] = "family",
+    start: str | None = None,
+    end: str | None = None,
+    families: list[Family] | None = None,
+    sports: list[str] | None = None,
+) -> dict[str, Any]:
+    """Volume per day/week/month/year, split by family or sport."""
+    with session_scope() as db:
+        return insights.timeseries(db, _f(start, end, families, sports), grain, group)
+
+
+@mcp.tool()
+def get_training_load(days: int = 90, families: list[Family] | None = None) -> dict[str, Any]:
+    """Daily fitness (CTL, 42-day), fatigue (ATL, 7-day), form (TSB) and load for the last `days` days."""
+    with session_scope() as db:
+        return insights.training_load(db, date.today(), days, list(families) if families else None)
+
+
+@mcp.tool()
+def get_records(
+    start: str | None = None,
+    end: str | None = None,
+    families: list[Family] | None = None,
+) -> dict[str, Any]:
+    """Personal records per family: longest, most climbing, fastest, best times per distance, biggest climb."""
+    with session_scope() as db:
+        return insights.records(db, _f(start, end, families, None))
+
+
+@mcp.tool()
+def get_power_curve(start: str | None = None, end: str | None = None) -> list[dict[str, Any]]:
+    """Best mean power for 5 s … 2 h across all activities in the range."""
+    with session_scope() as db:
+        return insights.power_curve(db, _f(start, end, None, None))
+
+
+@mcp.tool()
+def get_habits(
+    start: str | None = None, end: str | None = None, families: list[Family] | None = None
+) -> dict[str, Any]:
+    """When and how you train: weekday×hour grid, per-weekday totals, distance histogram, streaks."""
+    with session_scope() as db:
+        return insights.habits(db, _f(start, end, families, None))
+
+
+@mcp.tool()
+def get_eddington(families: list[Family] | None = None, unit: Literal["km", "mi"] = "km") -> dict[str, Any]:
+    """Eddington number: the largest E with E days of at least E km (or miles)."""
+    with session_scope() as db:
+        return insights.eddington(db, _f(None, None, families, None), 1.0 if unit == "km" else 1.609344)
+
+
+@mcp.tool()
+def get_year_over_year(
+    metric: Literal["distance_m", "moving_time_s", "elevation_m", "count"] = "distance_m",
+    families: list[Family] | None = None,
+) -> dict[str, Any]:
+    """Cumulative metric per year, sampled at month ends (for year-over-year comparison)."""
+    with session_scope() as db:
+        data = insights.cumulative_by_year(db, _f(None, None, families, None), metric)
+    month_end_doy = [31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365]
+    return {
+        year: [series[min(d, len(series)) - 1] for d in month_end_doy if d <= len(series)]
+        for year, series in data.items()
+    }
+
+
+# ── sync configuration ───────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def get_settings() -> dict[str, Any]:
+    """Sync directions (enabled, default action, defaults), start date, delay, matching tolerances,
+    athlete profile (ftp, hr_max, hr_rest, weight_kg) and import window."""
+    with session_scope() as db:
+        return store.get_preferences(db)
+
+
+@mcp.tool()
+def update_settings(patch: dict[str, Any]) -> dict[str, Any]:
+    """Deep-merge a partial settings object, e.g. {"sync": {"komoot_to_strava": {"enabled": true}}}
+    or {"profile": {"ftp": 260}}. Returns the full settings."""
+    with session_scope() as db:
+        return store.update_preferences(db, patch)
+
+
+@mcp.tool()
+def list_rules(direction: Direction | None = None) -> list[dict[str, Any]]:
+    """Sync rules, ordered by priority (first match wins)."""
+    with session_scope() as db:
+        return services.list_rules(db, direction)
+
+
+@mcp.tool()
+def save_rule(
+    name: str,
+    direction: Direction,
+    conditions: dict[str, Any],
+    actions: dict[str, Any],
+    enabled: bool = True,
+    priority: int = 100,
+    rule_id: int | None = None,
+) -> dict[str, Any]:
+    """Create (rule_id omitted) or update a sync rule.
+
+    conditions (AND): sports, exclude_sports, families (lists); distance_km, elevation_m, duration_min
+    ({"min","max"}); name_contains; name_regex; weekdays (0=Mon); date {"from","to"}; commute, trainer,
+    has_heartrate, has_power (bool).
+    actions: skip (bool); name / description (templates with {name} {sport} {sport_label}
+    {distance_km} {elevation_m} {duration_min} {moving_time} {date} {time} {weekday} {source});
+    append_description; sport (target platform sport key); strava {hide_from_home, commute, trainer,
+    gear_id}; komoot {visibility: private|friends|public}."""
+    data = {
+        "name": name,
+        "direction": direction,
+        "conditions": conditions,
+        "actions": actions,
+        "enabled": enabled,
+        "priority": priority,
+    }
+    with session_scope() as db:
+        return services.save_rule(db, data, rule_id)
+
+
+@mcp.tool()
+def delete_rule(rule_id: int) -> dict[str, bool]:
+    """Delete a sync rule."""
+    with session_scope() as db:
+        services.delete_rule(db, rule_id)
+    return {"ok": True}
+
+
+@mcp.tool()
+def preview_rules(direction: Direction, limit: int = 50) -> list[dict[str, Any]]:
+    """Dry run over recent activities: would each be synced, which rule decides, the resulting
+    name/sport, or what blocks it (already on target, before start date, no GPS…)."""
+    with session_scope() as db:
+        return sync.preview(db, direction, limit)
+
+
+@mcp.tool()
+def list_sync_jobs(
+    status: Literal["queued", "running", "done", "failed", "skipped"] | None = None, limit: int = 50
+) -> dict[str, Any]:
+    """Sync job history and queue."""
+    with session_scope() as db:
+        return services.list_jobs(db, status, limit)
+
+
+@mcp.tool()
+def retry_sync_job(job_id: int) -> dict[str, Any]:
+    """Retry a failed job, or re-plan a skipped one with the current rules."""
+    with session_scope() as db:
+        sync.retry(db, job_id)
+        db.commit()
+        return sync.run_jobs(db, job_ids=[job_id])
+
+
+@mcp.tool()
+def reevaluate_skipped() -> dict[str, int]:
+    """Forget rule-skipped decisions and re-plan everything with the current rules."""
+    with session_scope() as db:
+        return services.reevaluate_skipped(db)
