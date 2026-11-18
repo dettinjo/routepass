@@ -71,6 +71,8 @@ def _cycle(trigger: str, full: bool, tracks: bool) -> dict[str, Any]:
                     with komoot_client(db) as client:
                         result = ingest.import_komoot(db, client, full=full)
             stats[f"import_{provider}"] = result.as_dict()
+            with session_scope() as db:
+                store.delete_value(db, f"{provider}.error")
             note(f"{provider}: {result.new} new, {result.updated} updated, {result.deleted} removed")
         except NotConnected:
             pass
@@ -78,6 +80,16 @@ def _cycle(trigger: str, full: bool, tracks: bool) -> dict[str, Any]:
             status = "partial"
             note(f"{provider} import failed: {exc}")
             logger.exception("%s import failed", provider)
+            with session_scope() as db:
+                store.set_value(
+                    db,
+                    f"{provider}.error",
+                    {
+                        "message": str(exc)[:400],
+                        "at": utcnow().isoformat() + "Z",
+                        "hint": _error_hint(provider, str(exc)),
+                    },
+                )
 
     with session_scope() as db:
         stats["linked"] = ingest.match_unlinked(db)
@@ -148,6 +160,19 @@ def backlog() -> int:
             )
             or 0
         )
+
+
+def _error_hint(provider: str, message: str) -> str:
+    if provider == "strava" and "Inactive" in message:
+        return (
+            "Strava has deactivated this API application. Reactivate it at strava.com/settings/api "
+            "(or create a new application and enter its client id/secret in Settings), then reconnect."
+        )
+    if "401" in message or "Authentication" in message or "rejected" in message:
+        return f"{provider.title()} rejected the login — reconnect it in Settings."
+    if "429" in message or "rate limit" in message.lower():
+        return "Rate limit reached — RoutePass continues automatically later."
+    return f"{provider.title()} could not be reached; RoutePass retries on the next sync."
 
 
 def last_run() -> SyncRun | None:

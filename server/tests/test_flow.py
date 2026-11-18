@@ -344,3 +344,22 @@ def test_full_history_sync(client, connected, mock_apis):
     with session_scope() as db:
         assert db.scalar(select(func.count()).select_from(SyncJob).where(SyncJob.status == "queued")) == 2
     assert client.post("/api/v1/sync/full-history/cancel", headers=AUTH).json()["cancelled_jobs"] == 2
+
+
+def test_provider_error_is_reported_with_hint(client, connected, mock_apis):
+    mock_apis.get(f"{STRAVA}/athlete/activities").mock(
+        return_value=httpx.Response(
+            403,
+            json={
+                "message": "Forbidden",
+                "errors": [{"resource": "Application", "field": "Status", "code": "Inactive"}],
+            },
+        )
+    )
+    _komoot_list(mock_apis, [])
+    assert runner.run_cycle("test", tracks=False)["status"] == "partial"
+    err = client.get("/api/v1/status", headers=AUTH).json()["connections"]["strava"]["error"]
+    assert "Inactive" in err["message"] and "strava.com/settings/api" in err["hint"]
+    _strava_list(mock_apis, [])
+    runner.run_cycle("test", tracks=False)
+    assert client.get("/api/v1/status", headers=AUTH).json()["connections"]["strava"]["error"] is None
