@@ -15,7 +15,7 @@ from routepass.config import get_settings
 from routepass.db import session_scope
 from routepass.engine import ingest, sync
 from routepass.engine.clients import NotConnected, connected, komoot_client, strava_client
-from routepass.models import SyncJob, SyncRun
+from routepass.models import ProviderActivity, SyncJob, SyncRun
 from routepass.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
@@ -95,11 +95,26 @@ def _cycle(trigger: str, full: bool, tracks: bool) -> dict[str, Any]:
         stats["linked"] = ingest.match_unlinked(db)
         note(f"matching: {stats['linked']} records merged into existing activities")
 
-    if conn["strava"] and conn["komoot"]:
+    with session_scope() as db:
+        has_strava_records = (
+            db.scalar(
+                select(func.count())
+                .select_from(ProviderActivity)
+                .where(ProviderActivity.provider == "strava")
+            )
+            or 0
+        )
+        strava_api_ok = conn["strava"] and not _strava_blocked(db)
+    directions = [
+        d
+        for d, ok in (("strava_to_komoot", bool(has_strava_records)), ("komoot_to_strava", strava_api_ok))
+        if ok
+    ]
+    if conn["komoot"] and directions:
         try:
             with session_scope() as db:
                 if prefs["sync"]["auto"]:
-                    stats["planned"] = sync.plan(db)
+                    stats["planned"] = sync.plan(db, directions=directions)
                     note(
                         f"planned: {stats['planned']['queued']} to sync, {stats['planned']['skipped']} skipped by rules"
                     )
@@ -160,6 +175,12 @@ def backlog() -> int:
             )
             or 0
         )
+
+
+def _strava_blocked(db) -> bool:
+    """Strava refuses API access for the whole application (e.g. no subscription on the owner)."""
+    err = store.get_value(db, "strava.error") or {}
+    return "Inactive" in (err.get("message") or "")
 
 
 def _error_hint(provider: str, message: str) -> str:

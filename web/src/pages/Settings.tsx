@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { BrandIcon, IconApi, IconRefresh, IconTarget, IconImport, IconUser } from "../components/icons";
 import { Callout, Card, Skeleton, useToast } from "../components/ui";
+import { StravaArchive } from "../components/StravaArchive";
 import { api, type Me } from "../lib/api";
 import { useQuery } from "@tanstack/react-query";
 import { ago, int } from "../lib/format";
@@ -88,6 +89,7 @@ function Strava() {
             </div>
           </div>
         )}
+        <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}><StravaArchive /></div>
         {rate?.observed_at && (
           <div className="small muted">
             API usage — 15 min: {rate.overall["15min"][0]}/{rate.overall["15min"][1]} (read {rate.read["15min"][0]}/{rate.read["15min"][1]}) ·

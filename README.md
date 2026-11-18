@@ -26,6 +26,12 @@ one SQLite file.
 - **API & MCP** — everything the UI does is in the REST API (`/api/docs`) and as MCP tools
   (`/mcp`, streamable HTTP) for AI assistants.
 
+## Strava without the API
+
+Strava's API now needs a paid subscription on the app owner's account and restricts storing API data. RoutePass
+can instead import Strava's free personal data export (Settings → Strava → *Import your Strava data export*):
+the complete history with original FIT/GPX/TCX recordings, merged with Komoot like any other source.
+
 ## Interface
 
 Mobile first: bottom tab bar and card lists on phones, sidebar on desktop; light and dark mode.

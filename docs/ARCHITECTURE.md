@@ -90,3 +90,16 @@ are HMAC-signed, HttpOnly cookies for the allowed e-mail(s), issued after Tailsc
 Bearer token (`ROUTEPASS_API_TOKEN`) on API, MCP and UI; meant to run on a private network
 (the homelab deploys it on the tailnet only). Strava tokens and Komoot credentials are
 Fernet-encrypted at rest.
+
+## Strava access (status November 2026)
+
+- Since 30 June 2026 a Strava API application in the Standard Tier only works while the account that owns it has
+  a paid Strava subscription; otherwise every API call returns `403 {"resource":"Application","field":"Status",
+  "code":"Inactive"}` while OAuth keeps working. Fix: subscribe on the owning account, then reactivate the app at
+  strava.com/settings/api. RoutePass shows this as a provider error and stops planning Komoot → Strava copies.
+- The Strava API Policy (effective 1 June 2026) limits API data heavily: cache at most 7 days (§6.2), no AI use incl.
+  context windows (§5.3), no MCP server exposing Strava Data (§5.16), no persistent indexes (§5.5). These apply to
+  data obtained through the API ("Strava Data", API Agreement §2.3).
+- A user's own bulk export is protected separately (API Policy §6.6). `engine/strava_archive.py` imports that
+  archive (activities.csv + FIT/GPX/TCX originals) as `strava` records keyed by Strava's activity id, so analysis,
+  deduplication and Strava → Komoot copies work without the API. This is not legal advice.

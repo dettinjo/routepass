@@ -408,3 +408,26 @@ def full_history_sync(
         if action == "cancel":
             return fullsync.cancel(db)
         return fullsync.state(db)
+
+
+@mcp.tool()
+def strava_archive_import(file: str | None = None) -> dict[str, Any]:
+    """Import Strava's own data export ("Download your account" zip). Without `file`: show progress and the
+    zips available in the server's imports/ folder. With `file`: start importing that zip in the background.
+    This is the way to get Strava history when the Strava API is unavailable."""
+    from pathlib import Path
+
+    from routepass.engine import strava_archive
+
+    with session_scope() as db:
+        st = strava_archive.state(db)
+    if file:
+        path = strava_archive.archive_dir() / Path(file).name
+        if not path.is_file():
+            return {
+                "error": f"{path.name} not found",
+                "available": sorted(p.name for p in strava_archive.archive_dir().glob("*.zip")),
+            }
+        strava_archive.start(path)
+        return {"phase": "queued", "file": path.name}
+    return {**st, "available": sorted(p.name for p in strava_archive.archive_dir().glob("*.zip"))}

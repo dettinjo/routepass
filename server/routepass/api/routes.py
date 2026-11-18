@@ -3,6 +3,7 @@ from __future__ import annotations
 import secrets
 import threading
 from datetime import date
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -778,3 +779,53 @@ def logout() -> Response:
     resp = Response('{"ok":true}', media_type="application/json")
     resp.delete_cookie(auth.SESSION_COOKIE, path="/")
     return resp
+
+
+# ── Strava data export (archive) ─────────────────────────────────────────────
+
+
+@router.get("/import/strava-archive", tags=["import"])
+def strava_archive_state(db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass.engine import strava_archive
+
+    return {
+        **strava_archive.state(db),
+        "available": sorted(p.name for p in strava_archive.archive_dir().glob("*.zip")),
+    }
+
+
+@router.post("/import/strava-archive", tags=["import"])
+async def strava_archive_upload(request: Request) -> dict[str, Any]:
+    """Upload Strava's 'Download your account' zip as the raw request body (streamed to disk), then import."""
+    from routepass.engine import strava_archive
+
+    target = strava_archive.archive_dir() / f"strava-export-{utcnow():%Y%m%d-%H%M%S}.zip"
+    size = 0
+    with target.open("wb") as fh:
+        async for chunk in request.stream():
+            size += len(chunk)
+            fh.write(chunk)
+    import zipfile
+
+    if size == 0 or not zipfile.is_zipfile(target):
+        target.unlink(missing_ok=True)
+        raise HTTPException(
+            422, "That is not a zip file — upload the archive Strava e-mailed you, unchanged."
+        )
+    strava_archive.start(target)
+    return {"phase": "queued", "file": target.name, "bytes": size}
+
+
+class ArchiveFile(BaseModel):
+    file: str = Field(..., description="Name of a zip in the data directory's imports/ folder")
+
+
+@router.post("/import/strava-archive/file", tags=["import"])
+def strava_archive_from_file(body: ArchiveFile) -> dict[str, Any]:
+    from routepass.engine import strava_archive
+
+    path = strava_archive.archive_dir() / Path(body.file).name
+    if not path.is_file():
+        raise HTTPException(404, f"{path.name} not found in imports/")
+    strava_archive.start(path)
+    return {"phase": "queued", "file": path.name}

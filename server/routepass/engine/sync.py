@@ -190,13 +190,14 @@ def _komoot_to_strava(db: Session, job: SyncJob, komoot: KomootClient, strava: S
     return activity_id
 
 
-def _strava_to_komoot(db: Session, job: SyncJob, strava: StravaClient, komoot: KomootClient) -> str:
+def _strava_to_komoot(db: Session, job: SyncJob, strava_getter, komoot: KomootClient) -> str:
     act = db.get(Activity, job.activity_id)
     stored = db.get(Track, act.id)
     if stored is not None and stored.provider == "strava":
+        # Recording already stored (Strava API earlier, or the user's own Strava archive).
         normalized = trk.NormalizedTrack.unpack(stored.data)
     else:
-        normalized = trk.from_strava_streams(strava.streams(job.source_id))
+        normalized = trk.from_strava_streams(strava_getter().streams(job.source_id))
         if normalized is not None:
             store_track(db, act, "strava", normalized)
     if normalized is None or not normalized.has_gps:
@@ -264,12 +265,17 @@ def run_jobs(db: Session, limit: int = 25, job_ids: list[int] | None = None) -> 
             job.attempts += 1
             db.commit()
             try:
-                strava = strava or strava_client(db)
                 komoot = komoot or komoot_client(db)
+
+                def get_strava() -> StravaClient:
+                    nonlocal strava
+                    strava = strava or strava_client(db)
+                    return strava
+
                 if job.direction == "komoot_to_strava":
-                    target_id = _komoot_to_strava(db, job, komoot, strava)
+                    target_id = _komoot_to_strava(db, job, komoot, get_strava())
                 else:
-                    target_id = _strava_to_komoot(db, job, strava, komoot)
+                    target_id = _strava_to_komoot(db, job, get_strava, komoot)
                     time.sleep(1.0)  # Komoot has no published limits; stay polite on long backlogs
                 job.target_id = target_id
                 job.status = "done"
