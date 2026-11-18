@@ -2,9 +2,11 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { BrandIcon, IconApi, IconRefresh, IconTarget, IconImport, IconUser } from "../components/icons";
-import { Callout, Card, Skeleton, useToast } from "../components/ui";
+import { Callout, Card, Seg, Skeleton, useToast } from "../components/ui";
 import { StravaArchive } from "../components/StravaArchive";
+import { AppearanceCard, GoalsCard, PlacesCard } from "../components/SettingsExtras";
 import { api, type Me } from "../lib/api";
+import { clearOfflineData } from "../lib/pwa";
 import { useQuery } from "@tanstack/react-query";
 import { ago, int } from "../lib/format";
 import { usePrefs, useSavePrefs, useStatus } from "../lib/hooks";
@@ -192,7 +194,7 @@ export default function Settings() {
       <div className="stack gap16">
         {me?.authenticated && (
           <Card title="Account" icon={IconUser}
-            actions={me.method !== "tailscale" && <button className="sm" onClick={async () => { await fetch("/api/v1/auth/logout", { method: "POST", credentials: "same-origin" }); window.location.replace("/login"); }}>Sign out</button>}>
+            actions={me.method !== "tailscale" && <button className="sm" onClick={async () => { await fetch("/api/v1/auth/logout", { method: "POST", credentials: "same-origin" }); await clearOfflineData(); window.location.replace("/login"); }}>Sign out</button>}>
             <div className="row nowrap" style={{ gap: 12 }}>
               {me.picture ? <img src={me.picture} alt="" width={40} height={40} style={{ borderRadius: "50%" }} referrerPolicy="no-referrer" /> : <span className="card-ico" style={{ width: 40, height: 40, borderRadius: 20 }}><IconUser size={20} /></span>}
               <div className="grow">
@@ -227,20 +229,12 @@ export default function Settings() {
                   <label className="field">History starts at
                     <input type="date" value={prefs.import.history_start ?? ""} onChange={(e) => save.mutate({ import: { history_start: e.target.value || null } })} />
                   </label>
-                  <NumberField label="Poll every (minutes, min 1)" min={1} placeholder="30" value={prefs.poll_interval_minutes} onSave={(v) => save.mutate({ poll_interval_minutes: v != null ? Math.max(1, v) : null })} />
                 </div>
-                <div className="row" style={{ gap: 6 }}>
-                  <span className="xs muted">Quick presets:</span>
-                  <button type="button" className={`chip ${(prefs.poll_interval_minutes === 1 && prefs.sync.delay_minutes === 0) ? "on" : ""}`}
-                    onClick={() => save.mutate({ poll_interval_minutes: 1, sync: { delay_minutes: 0 } }, { onSuccess: () => toast("Instant sync enabled (1 min poll, 0 min delay)") })}>
-                    1 min + 0 delay (instant)
-                  </button>
-                  <button type="button" className={`chip ${prefs.poll_interval_minutes === 2 ? "on" : ""}`}
-                    onClick={() => save.mutate({ poll_interval_minutes: 2 })}>2 min</button>
-                  <button type="button" className={`chip ${prefs.poll_interval_minutes === 5 ? "on" : ""}`}
-                    onClick={() => save.mutate({ poll_interval_minutes: 5 })}>5 min</button>
-                  <button type="button" className={`chip ${(prefs.poll_interval_minutes === 30 || prefs.poll_interval_minutes == null) ? "on" : ""}`}
-                    onClick={() => save.mutate({ poll_interval_minutes: 30 })}>30 min</button>
+                <div className="stack" style={{ gap: 6 }}>
+                  <span className="small secondary">Sync automatically</span>
+                  <Seg block value={String(prefs.poll_interval_minutes ?? 30)} onChange={(v) => save.mutate({ poll_interval_minutes: Number(v) })}
+                    options={[{ value: "0", label: "Manual" }, { value: "30", label: "30 min" }, { value: "60", label: "1 h" }, { value: "120", label: "2 h" }, { value: "360", label: "6 h" }]} />
+                  <span className="xs muted">{(prefs.poll_interval_minutes ?? 30) === 0 ? "Only when you press Sync now (queued copies still finish in the background)." : "Plus Sync now any time, and instantly via the Strava webhook when it is enabled."}</span>
                 </div>
                 {status && (
                   <p className="small muted" style={{ marginBottom: 0 }}>
@@ -250,8 +244,11 @@ export default function Settings() {
                 )}
               </Card>
             </div>
+            <GoalsCard prefs={prefs} onSave={(goals) => save.mutate({ goals })} />
+            <PlacesCard places={prefs.places ?? []} onSave={(places) => save.mutate({ places })} />
           </>
         )}
+        <AppearanceCard />
 
         <Card title="API & MCP" icon={IconApi} hint="Everything in this UI is available programmatically">
           <div className="stack">

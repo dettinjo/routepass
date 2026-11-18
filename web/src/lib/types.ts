@@ -28,6 +28,7 @@ export interface ActivityDetail extends ActivityRow {
   load_method: string | null; intensity: number | null; device: string | null; gear: string | null;
   track_provider: string | null; sources: Source[]; sync_jobs: SyncJob[];
   sync_status: Record<string, string | null>; prev_id: number | null; next_id: number | null;
+  tiles?: { tiles_visited: number; new_tiles: number };
   analysis: null | {
     channels: string[];
     hr_zones?: { bounds: number[]; seconds: number[]; basis: string };
@@ -60,6 +61,9 @@ export interface Preferences {
   profile: { ftp: number | null; hr_max: number | null; hr_rest: number | null; weight_kg: number | null };
   import: { history_start: string | null };
   poll_interval_minutes: number | null;
+  goals: Record<string, number | null>;
+  gear_targets: Record<string, { label?: string; service_km?: number | null }>;
+  places: Place[];
 }
 export interface DirectionPrefs { enabled: boolean; default_action: "sync" | "skip"; defaults: Record<string, any> }
 
@@ -78,3 +82,5 @@ export interface Status {
 }
 
 export interface ProviderError { message: string; at: string; hint: string }
+
+export interface Place { name: string; lat: number; lng: number; radius_km: number }

@@ -39,10 +39,22 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
         "hr_rest": None,
         "weight_kg": None,
     },
+    # Targets for the Goals view (empty = not tracked)
+    "goals": {
+        "weekly_distance_km": None,
+        "weekly_time_hours": None,
+        "monthly_distance_km": None,
+        "yearly_distance_km": None,
+        "yearly_elevation_m": None,
+    },
+    # Per gear (Strava gear id or name): {"label": "Road bike", "service_km": 3000}
+    "gear_targets": {},
+    # Named places for geofence rules: [{"name": "Home", "lat": .., "lng": .., "radius_km": 0.5}]
+    "places": [],
     "import": {
         "history_start": None,  # ISO date; older provider records are not imported
     },
-    "poll_interval_minutes": None,  # overrides ROUTEPASS_POLL_INTERVAL_MINUTES
+    "poll_interval_minutes": None,  # 0 = manual only, else 30/60/120/360; None = ROUTEPASS_POLL_INTERVAL_MINUTES
 }
 
 _PREFS_KEY = "preferences"

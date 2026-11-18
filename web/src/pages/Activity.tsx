@@ -299,6 +299,7 @@ export default function ActivityPage() {
               {a.avg_cadence != null && <Stat icon="count" label="Cadence" value={int(a.avg_cadence)} />}
               {a.avg_temp != null && <Stat icon="temp" label="Temperature" value={num(a.avg_temp)} unit="°C" />}
               {a.work_kj != null && <Stat icon="power" label="Work" value={int(a.work_kj)} unit="kJ" />}
+              {a.tiles && a.tiles.tiles_visited > 0 && <Stat icon="days" label="Explorer tiles" value={int(a.tiles.tiles_visited)} unit={a.tiles.new_tiles ? `· ${int(a.tiles.new_tiles)} new` : undefined} title="Zoom-14 map squares this activity passed through, and how many were visited for the first time" />}
               {an?.decoupling && <Stat icon="hr" label="HR drift" value={`${an.decoupling.pct > 0 ? "+" : ""}${an.decoupling.pct}%`} title="Aerobic decoupling, first vs second half. Under 5% = steady" />}
             </div>
           </Card>

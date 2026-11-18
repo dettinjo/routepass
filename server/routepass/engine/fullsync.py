@@ -69,7 +69,7 @@ def _preview(db: Session, directions: list[str], apply_rules: bool) -> dict[str,
                     if not apply_rules
                     else prefs["sync"][direction]
                 )
-                if not rule_engine.decide(act, direction, rules, dprefs).sync:
+                if not rule_engine.decide(act, direction, rules, dprefs, places=prefs.get("places")).sync:
                     skipped += 1
             elif not reason.startswith("not on") and not reason.startswith("already on"):
                 blocked[reason] += 1

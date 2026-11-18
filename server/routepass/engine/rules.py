@@ -13,6 +13,7 @@ conditions (all optional, AND-combined):
   weekdays                  list of 0=Mon … 6=Sun
   date                      {"from": "YYYY-MM-DD", "to": "YYYY-MM-DD"}
   commute, trainer, has_heartrate, has_power   booleans (Strava data)
+  start_near, end_near      {"place": "Home"} (a saved place) or {"lat", "lng"}, optional "radius_km" (default 1)
 
 actions:
   skip                      true → never sync matching activities
@@ -29,6 +30,7 @@ moving_time, date, time, weekday, source.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import date
@@ -54,6 +56,8 @@ CONDITION_KEYS = {
     "trainer",
     "has_heartrate",
     "has_power",
+    "start_near",
+    "end_near",
 }
 ACTION_KEYS = {"skip", "name", "description", "append_description", "sport", "strava", "komoot"}
 
@@ -78,6 +82,18 @@ def validate(direction: str, conditions: dict, actions: dict) -> None:
         rng = conditions.get(key)
         if rng is not None and (not isinstance(rng, dict) or set(rng) - {"min", "max"}):
             raise RuleError(f"{key} must be an object with min/max")
+    for key in ("start_near", "end_near"):
+        geo = conditions.get(key)
+        if geo is None:
+            continue
+        if not isinstance(geo, dict) or not ({"lat", "lng"} <= set(geo) or "place" in geo):
+            raise RuleError(f"{key} needs a saved place name or lat/lng (and optional radius_km)")
+        try:
+            for k in ("lat", "lng", "radius_km"):
+                if geo.get(k) is not None:
+                    float(geo[k])
+        except (TypeError, ValueError) as exc:
+            raise RuleError(f"{key} coordinates must be numbers") from exc
     vis = (actions.get("komoot") or {}).get("visibility")
     if vis is not None and vis not in ("private", "friends", "public"):
         raise RuleError("komoot.visibility must be private, friends or public")
@@ -101,8 +117,37 @@ def _in_range(value: float | None, rng: dict | None) -> bool:
     return True
 
 
-def matches(conditions: dict, act: Activity) -> bool:
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    a = (
+        math.sin((p2 - p1) / 2) ** 2
+        + math.cos(p1) * math.cos(p2) * math.sin(math.radians(lon2 - lon1) / 2) ** 2
+    )
+    return 2 * 6371.0 * math.asin(min(1.0, math.sqrt(a)))
+
+
+def _near(lat: float | None, lng: float | None, geo: dict | None, places: list[dict] | None) -> bool:
+    if not geo:
+        return True
+    if "place" in geo:
+        place = next(
+            (p for p in places or [] if p.get("name", "").lower() == str(geo["place"]).lower()), None
+        )
+        if place is None:
+            return False  # unknown place never matches (safer than matching everything)
+        geo = {**place, **{k: v for k, v in geo.items() if k == "radius_km"}}
+    if lat is None or lng is None:
+        return False
+    radius = float(geo.get("radius_km") or 1.0)
+    return _haversine_km(lat, lng, float(geo["lat"]), float(geo["lng"])) <= radius
+
+
+def matches(conditions: dict, act: Activity, places: list[dict] | None = None) -> bool:
     c = conditions
+    if not _near(act.start_lat, act.start_lng, c.get("start_near"), places):
+        return False
+    if not _near(act.end_lat, act.end_lng, c.get("end_near"), places):
+        return False
     if c.get("sports") and act.sport not in c["sports"]:
         return False
     if c.get("exclude_sports") and act.sport in c["exclude_sports"]:
@@ -204,13 +249,14 @@ def decide(
     rules: list[SyncRule],
     direction_prefs: dict,
     description: str = "",
+    places: list[dict] | None = None,
 ) -> Decision:
     """Pick the rule for this activity and build the upload plan."""
     rule = next(
         (
             r
             for r in sorted(rules, key=lambda r: (r.priority, r.id or 0))
-            if r.enabled and r.direction == direction and matches(r.conditions or {}, act)
+            if r.enabled and r.direction == direction and matches(r.conditions or {}, act, places)
         ),
         None,
     )

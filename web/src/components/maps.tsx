@@ -82,3 +82,25 @@ export function RoutesMap({ routes, onSelect, opacity = 0.35, weight = 2 }: {
   }, [routes, onSelect, opacity, weight]);
   return <div className="map tall" ref={el} />;
 }
+
+/** Explorer tiles: every visited zoom-14 square, the largest cluster highlighted, max square outlined. */
+export function TilesMap({ tiles, square }: { tiles: { bounds: [[number, number], [number, number]]; cluster: boolean }[]; square: [[number, number], [number, number]] | null }) {
+  const el = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!el.current) return;
+    const m = baseMap(el.current);
+    const renderer = L.canvas({ padding: 0.5 });
+    const group = L.featureGroup();
+    const accent = cssVar("--accent");
+    const cluster = cssVar("--series-2");
+    for (const t of tiles) {
+      group.addLayer(L.rectangle(t.bounds, { renderer, weight: 0.5, color: t.cluster ? cluster : accent, fillColor: t.cluster ? cluster : accent, fillOpacity: t.cluster ? 0.5 : 0.3 }));
+    }
+    group.addTo(m);
+    if (square) L.rectangle(square, { color: cssVar("--text-primary"), weight: 2.5, fill: false, dashArray: "6 4" }).addTo(m).bindTooltip("Max square");
+    if (group.getLayers().length) m.fitBounds(group.getBounds(), { padding: [20, 20] });
+    else m.setView([47, 8], 5);
+    return () => { m.remove(); };
+  }, [tiles, square]);
+  return <div className="map tall" ref={el} />;
+}

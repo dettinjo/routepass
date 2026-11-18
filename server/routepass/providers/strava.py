@@ -652,12 +652,22 @@ class StravaWebClient:
         self.on_refresh = on_refresh
         self._csrf_token: str | None = None
         self._pending_uploads: dict[str, dict[str, Any]] = {}
+        self._last_request = 0.0
         self._http = httpx.Client(
             cookies=self.cookies,
             headers={"User-Agent": WEB_UA, "Accept-Language": "en-US,en;q=0.9"},
             timeout=httpx.Timeout(45.0),
+            event_hooks={"request": [self._pace]},
             follow_redirects=False,
         )
+
+    WEB_MIN_INTERVAL_S = 1.5  # never hit strava.com faster than a person clicking through pages
+
+    def _pace(self, _request: httpx.Request) -> None:
+        wait = self._last_request + self.WEB_MIN_INTERVAL_S - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        self._last_request = time.monotonic()
 
     def close(self) -> None:
         self._http.close()

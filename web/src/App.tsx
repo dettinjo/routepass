@@ -3,6 +3,7 @@ import { Link, NavLink, Route, Routes } from "react-router-dom";
 import { Logo } from "./components/Logo";
 import { IconChart, IconHome, IconList, IconRefresh, IconSettings, IconSync } from "./components/icons";
 import { useRunSync, useStatus } from "./lib/hooks";
+import { useOnlineStatus } from "./lib/pwa";
 import { ago } from "./lib/format";
 import { useQuery } from "@tanstack/react-query";
 import { api, type Me } from "./lib/api";
@@ -47,6 +48,12 @@ function SyncButton({ compact = false }: { compact?: boolean }) {
   );
 }
 
+function OfflineBanner() {
+  const online = useOnlineStatus();
+  if (online) return null;
+  return <div className="callout warn" style={{ marginBottom: 12 }}>You are offline — showing the last data this device loaded.</div>;
+}
+
 export default function App() {
   const [locked, setLocked] = useState(false);
   const me = useQuery<Me>({ queryKey: ["me"], queryFn: () => api("/auth/me"), staleTime: 5 * 60_000 });
@@ -76,6 +83,7 @@ export default function App() {
         <SyncButton compact />
       </header>
       <main className="main">
+        <OfflineBanner />
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/activities" element={<Activities />} />
