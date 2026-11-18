@@ -14,8 +14,12 @@ class Settings(BaseSettings):
     api_token: str = ""
     # Fernet key used to encrypt provider credentials at rest. Generated into data_dir when empty.
     secret_key: str = ""
-    # Public URL of this instance, used to build the Strava OAuth redirect.
+    # URL where you open the UI (redirect target after Strava OAuth).
     base_url: str = "http://localhost:8000"
+    # Optional internet-facing URL that only exposes the API paths (OAuth callback, Strava
+    # webhook, REST, MCP). Used for the Strava redirect and webhook callback when set.
+    public_url: str = ""
+    strava_webhook_verify_token: str = ""
 
     # Override the OAuth redirect (e.g. a domain already registered on the Strava app); the
     # code can then be pasted into Settings when that page cannot reach this instance.

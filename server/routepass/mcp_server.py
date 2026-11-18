@@ -344,3 +344,38 @@ def reevaluate_skipped() -> dict[str, int]:
     """Forget rule-skipped decisions and re-plan everything with the current rules."""
     with session_scope() as db:
         return services.reevaluate_skipped(db)
+
+
+@mcp.tool()
+def strava_webhook(action: Literal["status", "enable", "disable"] = "status") -> dict[str, Any]:
+    """Strava push events (instant sync on new/edited activities): show, create or remove the
+    subscription. Needs ROUTEPASS_PUBLIC_URL reachable from the internet."""
+    fn = {
+        "status": services.strava_webhook_status,
+        "enable": services.strava_webhook_enable,
+        "disable": services.strava_webhook_disable,
+    }[action]
+    with session_scope() as db:
+        return fn(db)
+
+
+@mcp.tool()
+def bulk_sync_activities(activity_ids: list[int], direction: Direction) -> dict[str, Any]:
+    """Copy a hand-picked set of activities (max 200) to the other platform now. Rules still apply;
+    the sync start date and settle delay are ignored. Reports which ones are not eligible and why."""
+    with session_scope() as db:
+        result = services.bulk_sync(db, activity_ids, direction)
+        if result["job_ids"]:
+            result["run"] = sync.run_jobs(db, limit=len(result["job_ids"]), job_ids=result["job_ids"])
+        return result
+
+
+@mcp.tool()
+def analyse_trip(activity_ids: list[int]) -> dict[str, Any]:
+    """Combine several activities (e.g. the stages of a multi-day tour) into one overview:
+    totals, per-day breakdown, longest and hilliest day."""
+    with session_scope() as db:
+        out = services.trip_analysis(db, activity_ids)
+    for a in out["activities"]:
+        a.pop("polyline", None)
+    return out

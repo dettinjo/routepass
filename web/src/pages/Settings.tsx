@@ -75,6 +75,16 @@ function Strava() {
             </div>
           </div>
         </details>
+        {s?.connected && status?.public_url && (
+          <div className="row between">
+            <span className="secondary">Instant sync via Strava webhook</span>
+            <div className="row">
+              <button className="sm" onClick={() => call.mutate({ path: "/connections/strava/webhook", method: "GET" }, { onSuccess: (r: any) => toast(r.active ? `Webhook active${r.last_event ? ", last event " + ago(r.last_event.received_at) : ""}` : "Webhook not active") })}>Status</button>
+              <button className="sm" onClick={() => call.mutate({ path: "/connections/strava/webhook", method: "PUT" }, { onSuccess: () => toast("Strava webhook enabled") })}>Enable</button>
+              <button className="sm ghost" onClick={() => call.mutate({ path: "/connections/strava/webhook", method: "DELETE" }, { onSuccess: () => toast("Strava webhook removed") })}>Disable</button>
+            </div>
+          </div>
+        )}
         {rate?.observed_at && (
           <div className="small muted">
             API usage — 15 min: {rate.overall["15min"][0]}/{rate.overall["15min"][1]} (read {rate.read["15min"][0]}/{rate.read["15min"][1]}) ·
@@ -136,8 +146,10 @@ export default function Settings() {
     if (sp.get("strava") === "connected") toast("Strava connected — first import is running");
     if (sp.get("strava") === "error") toast(`Strava connection failed (${sp.get("reason")})`, true);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const { data: st } = useStatus();
   const origin = window.location.origin;
-  const mcpConfig = JSON.stringify({ mcpServers: { routepass: { type: "http", url: `${origin}/mcp`, headers: { Authorization: "Bearer <ROUTEPASS_API_TOKEN>" } } } }, null, 2);
+  const apiBase = st?.public_url || origin;
+  const mcpConfig = JSON.stringify({ mcpServers: { routepass: { type: "http", url: `${apiBase}/mcp`, headers: { Authorization: "Bearer <ROUTEPASS_API_TOKEN>" } } } }, null, 2);
 
   return (
     <>
@@ -186,6 +198,7 @@ export default function Settings() {
             <dl className="kv">
               <dt>REST API</dt><dd><a href="/api/docs" target="_blank" rel="noreferrer" className="mono">{origin}/api/v1</a> · <a href="/api/docs" target="_blank" rel="noreferrer">interactive docs</a></dd>
               <dt>MCP</dt><dd className="mono">{origin}/mcp</dd>
+              {st?.public_url && <><dt>Public (API only)</dt><dd className="mono">{st.public_url}/api/v1 · {st.public_url}/mcp</dd></>}
               <dt>Auth</dt><dd>Header <span className="mono">Authorization: Bearer &lt;ROUTEPASS_API_TOKEN&gt;</span></dd>
             </dl>
             <div className="section-label">MCP client config</div>

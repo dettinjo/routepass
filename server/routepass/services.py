@@ -157,7 +157,10 @@ def status(db: Session, running: bool) -> dict[str, Any]:
     last = db.scalar(select(SyncRun).order_by(SyncRun.id.desc()).limit(1))
     job_counts = dict(db.execute(select(SyncJob.status, func.count()).group_by(SyncJob.status)).all())
     pending_tracks = db.scalar(select(func.count()).where(Activity.has_track.is_(False)))
+    from routepass.config import get_settings
+
     return {
+        "public_url": get_settings().public_url or None,
         "connections": {
             "strava": {"connected": conn["strava"], "athlete": store.get_value(db, "strava.athlete")},
             "komoot": {"connected": conn["komoot"], "account": store.get_value(db, "komoot.account")},
@@ -345,3 +348,173 @@ def search_names(db: Session, text: str, limit: int = 20) -> list[dict[str, Any]
         .options(selectinload(Activity.sources))
     )
     return [serialize.activity_row(a) for a in rows]
+
+
+# ── Strava webhooks ──────────────────────────────────────────────────────────
+
+WEBHOOK_PATH = "/api/v1/webhooks/strava"
+
+
+def _webhook_config(db: Session) -> tuple[str, str, str, str]:
+    from routepass.config import get_settings
+    from routepass.engine.clients import strava_app
+
+    settings = get_settings()
+    client_id, client_secret = strava_app(db)
+    if not settings.public_url:
+        raise ValueError("ROUTEPASS_PUBLIC_URL is not set — Strava cannot reach this instance")
+    if not settings.strava_webhook_verify_token:
+        raise ValueError("ROUTEPASS_STRAVA_WEBHOOK_VERIFY_TOKEN is not set")
+    callback = settings.public_url.rstrip("/") + WEBHOOK_PATH
+    return client_id, client_secret, callback, settings.strava_webhook_verify_token
+
+
+def strava_webhook_status(db: Session) -> dict[str, Any]:
+    from routepass.providers import strava
+
+    client_id, client_secret, callback, _ = _webhook_config(db)
+    subs = strava.list_push_subscriptions(client_id, client_secret)
+    return {
+        "callback_url": callback,
+        "subscriptions": subs,
+        "active": any(s.get("callback_url") == callback for s in subs),
+        "last_event": store.get_value(db, "strava.last_webhook"),
+    }
+
+
+def strava_webhook_enable(db: Session) -> dict[str, Any]:
+    """Subscribe this instance to Strava push events (replacing a subscription to another URL)."""
+    from routepass.providers import strava
+
+    client_id, client_secret, callback, verify = _webhook_config(db)
+    for sub in strava.list_push_subscriptions(client_id, client_secret):
+        if sub.get("callback_url") == callback:
+            return {"active": True, "subscription": sub}
+        strava.delete_push_subscription(client_id, client_secret, sub["id"])
+    return {
+        "active": True,
+        "subscription": strava.create_push_subscription(client_id, client_secret, callback, verify),
+    }
+
+
+def strava_webhook_disable(db: Session) -> dict[str, Any]:
+    from routepass.providers import strava
+
+    client_id, client_secret, _, _ = _webhook_config(db)
+    subs = strava.list_push_subscriptions(client_id, client_secret)
+    for sub in subs:
+        strava.delete_push_subscription(client_id, client_secret, sub["id"])
+    return {"active": False, "removed": len(subs)}
+
+
+def handle_strava_event(db: Session, event: dict[str, Any]) -> dict[str, Any]:
+    """Strava push event → schedule a sync cycle (the cycle does the actual work)."""
+    from routepass.engine import runner
+    from routepass.engine.clients import STRAVA_ATHLETE, STRAVA_TOKENS
+
+    athlete = store.get_value(db, STRAVA_ATHLETE) or {}
+    if not athlete.get("id") or str(event.get("owner_id")) != str(athlete["id"]):
+        return {"accepted": False, "reason": "unknown athlete"}
+    store.set_value(db, "strava.last_webhook", {**event, "received_at": utcnow().isoformat()})
+    if event.get("object_type") == "athlete" and (event.get("updates") or {}).get("authorized") == "false":
+        store.delete_value(db, STRAVA_TOKENS)
+        return {"accepted": True, "action": "deauthorized"}
+    delay_min = store.get_preferences(db)["sync"].get("delay_minutes", 10)
+    runner.trigger_soon()  # import the change now
+    if event.get("aspect_type") == "create":
+        runner.trigger_soon((delay_min + 1) * 60)  # and sync it once the settle delay has passed
+    return {"accepted": True, "action": "sync scheduled"}
+
+
+# ── multi-activity operations ────────────────────────────────────────────────
+
+
+def bulk_sync(db: Session, activity_ids: list[int], direction: str) -> dict[str, Any]:
+    """Queue and run copies for a hand-picked set (ignores start date and settle delay)."""
+    if direction not in rule_engine.DIRECTION_TARGET:
+        raise ValueError("unknown direction")
+    ids = sorted(set(activity_ids))[:200]
+    db.execute(
+        SyncJob.__table__.delete().where(
+            SyncJob.activity_id.in_(ids),
+            SyncJob.direction == direction,
+            SyncJob.status.in_(("skipped", "failed")),
+        )
+    )
+    max_id = db.scalar(select(func.max(SyncJob.id))) or 0
+    sync.plan(db, activity_ids=ids, force=True)
+    jobs = db.scalars(select(SyncJob).where(SyncJob.id > max_id, SyncJob.direction == direction)).all()
+    db.commit()
+    blocked = {}
+    prefs = store.get_preferences(db)
+    planned = {j.activity_id for j in jobs}
+    for aid in ids:
+        if aid not in planned and (act := db.get(Activity, aid)) is not None:
+            blocked[aid] = (
+                sync.blocker(act, direction, prefs, utcnow() + timedelta(days=365)) or "not eligible"
+            )
+    queued = [j.id for j in jobs if j.status == "queued"]
+    return {
+        "queued": len(queued),
+        "skipped_by_rules": sum(1 for j in jobs if j.status == "skipped"),
+        "not_eligible": blocked,
+        "job_ids": queued,
+    }
+
+
+def trip_analysis(db: Session, activity_ids: list[int]) -> dict[str, Any]:
+    """Combine several activities (e.g. the days of a multi-day tour) into one overview."""
+    acts = sorted(
+        (a for a in (db.get(Activity, i) for i in set(activity_ids)) if a is not None),
+        key=lambda a: a.start_time,
+    )
+    if len(acts) < 2:
+        raise ValueError("select at least two activities")
+    days: dict[str, dict[str, Any]] = {}
+    for a in acts:
+        d = (a.start_local or a.start_time).date().isoformat()
+        day = days.setdefault(
+            d,
+            {
+                "date": d,
+                "activities": 0,
+                "distance_m": 0.0,
+                "moving_time_s": 0.0,
+                "elevation_m": 0.0,
+                "load": 0.0,
+            },
+        )
+        day["activities"] += 1
+        day["distance_m"] += a.distance_m or 0
+        day["moving_time_s"] += a.moving_time_s or 0
+        day["elevation_m"] += a.elevation_gain_m or 0
+        day["load"] += a.load or 0
+    total = {
+        k: round(sum(d[k] for d in days.values()), 1)
+        for k in ("distance_m", "moving_time_s", "elevation_m", "load")
+    }
+    first, last = acts[0], acts[-1]
+    span_s = (last.start_time - first.start_time).total_seconds() + (
+        last.elapsed_time_s or last.moving_time_s or 0
+    )
+    longest = max(days.values(), key=lambda d: d["distance_m"])
+    hardest = max(days.values(), key=lambda d: d["elevation_m"])
+    return {
+        "activities": [serialize.activity_row(a) for a in acts],
+        "days": [
+            {**d, **{k: round(v, 1) for k, v in d.items() if isinstance(v, float)}} for d in days.values()
+        ],
+        "totals": {
+            **total,
+            "count": len(acts),
+            "days": len(days),
+            "span_days": round(span_s / 86400, 1),
+            "avg_per_day_m": round(total["distance_m"] / len(days), 1),
+            "avg_speed_ms": round(total["distance_m"] / total["moving_time_s"], 3)
+            if total["moving_time_s"]
+            else None,
+        },
+        "longest_day": longest["date"],
+        "most_climbing_day": hardest["date"],
+        "sports": sorted({a.sport for a in acts}),
+    }

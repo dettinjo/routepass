@@ -92,3 +92,55 @@ def test_pack_preserves_gaps_and_precision():
     assert np.allclose(back.elevation_m, tr.elevation_m, atol=0.06)
     pts = trk.compute(tr, family="ride").points
     assert trk.unpack_points(trk.pack_points(pts)) == pts
+
+
+def _fixture(name: str) -> dict:
+    import gzip
+    import json
+    from pathlib import Path
+
+    with gzip.open(Path(__file__).parent / "fixtures" / f"{name}.json.gz", "rt") as f:
+        return json.load(f)
+
+
+def _close(actual: float, expected: float, pct: float) -> bool:
+    return abs(actual - expected) <= expected * pct / 100
+
+
+def test_real_trail_half_marathon_matches_komoot():
+    """Recorded Komoot tour (coordinates anonymised by a longitude shift)."""
+    fx = _fixture("trail_half_marathon")
+    k = fx["komoot"]
+    r = trk.compute(trk.from_komoot_coordinates(fx["items"]), family="run")
+    s = r.summary
+    assert _close(s["distance_m"], k["distance"], 2)
+    assert _close(s["elevation_gain_m"], k["elevation_up"], 6)
+    assert _close(s["moving_time_s"], k["time_in_motion"], 5)
+    assert abs(s["elapsed_time_s"] - k["duration"]) <= 2
+    # best efforts stay physically plausible (no GPS-jump records)
+    assert all(d / t <= trk.MAX_EFFORT_SPEED_MS["run"] for d, t in r.detail["best_times"].items())
+    assert r.detail["climbs"]
+
+
+def test_real_ski_tour_counts_slow_climbing_as_moving():
+    fx = _fixture("ski_tour")
+    k = fx["komoot"]
+    r = trk.compute(trk.from_komoot_coordinates(fx["items"]), family="winter")
+    s = r.summary
+    assert _close(s["elevation_gain_m"], k["elevation_up"], 3)
+    assert _close(s["elevation_loss_m"], k["elevation_down"], 3)
+    assert _close(s["moving_time_s"], k["time_in_motion"], 12)
+    assert r.detail["climbs"][0]["gain_m"] > 450
+
+
+def test_komoot_sport_mapping():
+    from routepass.providers import sports
+
+    assert sports.komoot_to_strava("mountaineering") == "Hike"
+    assert sports.komoot_to_strava("skitour") == "BackcountrySki"
+    assert sports.komoot_to_strava("racebike") == "Ride"
+    assert sports.family(sports.komoot_to_strava("jogging")) == "run"
+
+
+def test_malformed_polyline_does_not_raise():
+    assert decode_polyline("abc") == []

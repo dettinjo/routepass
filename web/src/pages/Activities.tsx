@@ -1,9 +1,10 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { RouteThumb } from "../components/charts";
 import { IconLeft, IconLock, IconRight } from "../components/icons";
-import { Card, Empty, ProviderBadges, Seg, Skeleton, SportDot } from "../components/ui";
+import { Card, Empty, ProviderBadges, Seg, Skeleton, SportDot, useToast } from "../components/ui";
+import { TripView } from "../components/TripView";
 import { api } from "../lib/api";
 import { familyColor } from "../lib/colors";
 import { activityDate, duration, int, km, speed } from "../lib/format";
@@ -33,6 +34,22 @@ export default function Activities() {
   const sort = get("sort") || "date";
   const order = get("order") || "desc";
   const [q, setQ] = useState(get("q"));
+  const [selected, setSelected] = useState<number[]>([]);
+  const [trip, setTrip] = useState(false);
+  const toast = useToast();
+  const qc = useQueryClient();
+  const toggle = (id: number) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+  const bulk = useMutation({
+    mutationFn: (direction: string) => api("/activities/bulk-sync", { method: "POST", body: { activity_ids: selected, direction } }),
+    onSuccess: (r: any) => {
+      const skipped = Object.keys(r.not_eligible).length;
+      toast(`${r.queued} copies started${r.skipped_by_rules ? `, ${r.skipped_by_rules} skipped by rules` : ""}${skipped ? `, ${skipped} not eligible (already there / no GPS)` : ""}`);
+      setSelected([]);
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+      window.setTimeout(() => qc.invalidateQueries({ queryKey: ["activities"] }), 8000);
+    },
+    onError: (e: Error) => toast(e.message, true),
+  });
 
   const update = (patch: Record<string, string | string[] | null>) => {
     const next = new URLSearchParams(sp);
@@ -101,6 +118,10 @@ export default function Activities() {
             <table>
               <thead>
                 <tr>
+                  <th style={{ width: 32 }}>
+                    <input type="checkbox" aria-label="Select page" checked={data.items.length > 0 && data.items.every((a) => selected.includes(a.id))}
+                      onChange={(e) => setSelected(e.target.checked ? [...new Set([...selected, ...data.items.map((a) => a.id)])] : selected.filter((id) => !data.items.some((a) => a.id === id)))} />
+                  </th>
                   <th style={{ width: 52 }} />
                   {COLUMNS.map((c) => (
                     <th key={c.key} className={`${c.sort ? "sortable" : ""} ${c.right ? "r" : ""}`}
@@ -113,6 +134,7 @@ export default function Activities() {
               <tbody>
                 {data.items.map((a) => (
                   <tr key={a.id} className="click" onClick={() => nav(`/activities/${a.id}`)}>
+                    <td onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label={`Select ${a.name}`} checked={selected.includes(a.id)} onChange={() => toggle(a.id)} /></td>
                     <td><RouteThumb points={a.polyline ? decodePolyline(a.polyline) : []} color={familyColor(a.family)} /></td>
                     <td>
                       <div className="name-cell"><span className="t">{a.name}</span>{a.sync_locked && <IconLock width={13} height={13} className="muted" />}</div>
@@ -145,6 +167,16 @@ export default function Activities() {
           </div>
         )}
       </Card>
+      {selected.length > 0 && (
+        <div className="bulk-bar" role="toolbar">
+          <span style={{ fontWeight: 600 }}>{selected.length} selected</span>
+          <button className="sm" disabled={bulk.isPending} onClick={() => bulk.mutate("strava_to_komoot")}>Copy to Komoot</button>
+          <button className="sm" disabled={bulk.isPending} onClick={() => bulk.mutate("komoot_to_strava")}>Copy to Strava</button>
+          <button className="sm" disabled={selected.length < 2} onClick={() => setTrip(true)} title="Combine the selected activities, e.g. the stages of a multi-day tour">Analyse as trip</button>
+          <button className="sm ghost" onClick={() => setSelected([])}>Clear</button>
+        </div>
+      )}
+      {trip && <TripView ids={selected} onClose={() => setTrip(false)} />}
       <p className="small muted mt8">
         <span className="prov strava" style={{ width: 14, height: 14, fontSize: 9 }}>S</span> Strava ·{" "}
         <span className="prov komoot" style={{ width: 14, height: 14, fontSize: 9 }}>K</span> Komoot · faded = copy created by RoutePass · grey = not on that platform

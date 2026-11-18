@@ -203,14 +203,16 @@ export default function ActivityPage() {
           <Card title="Splits" hint={`Every ${km(an.split_m ?? 1000, 0)} km`} flush>
             <div className="table-wrap" style={{ maxHeight: 420 }}>
               <table>
-                <thead><tr><th>#</th><th className="r">Distance</th><th className="r">Time</th><th className="r">{a.family === "run" || a.family === "walk" ? "Pace" : "Speed"}</th><th className="r">HR</th><th className="r">Power</th><th className="r">Gain</th><th className="r">Loss</th><th style={{ width: "30%" }} /></tr></thead>
+                <thead><tr><th>#</th><th className="r">Distance</th><th className="r">Time</th><th className="r">{a.family === "run" || a.family === "walk" ? "Pace" : "Speed"}</th>{an.splits.some((s) => s.hr != null) && <th className="r">HR</th>}{an.splits.some((s) => s.power != null) && <th className="r">Power</th>}<th className="r">Gain</th><th className="r">Loss</th><th style={{ width: "30%" }} /></tr></thead>
                 <tbody>
                   {(() => {
                     const maxV = Math.max(...an.splits!.map((s) => s.speed_ms || 0));
+                    const hasHr = an.splits!.some((s) => s.hr != null);
+                    const hasPw = an.splits!.some((s) => s.power != null);
                     return an.splits!.map((s) => (
                       <tr key={s.index}>
                         <td>{s.index}</td><td className="r">{km(s.distance_m, 2)}</td><td className="r">{duration(s.duration_s, true)}</td>
-                        <td className="r">{speed(s.speed_ms, a.family)}</td><td className="r">{int(s.hr)}</td><td className="r">{int(s.power)}</td>
+                        <td className="r">{speed(s.speed_ms, a.family)}</td>{hasHr && <td className="r">{int(s.hr)}</td>}{hasPw && <td className="r">{int(s.power)}</td>}
                         <td className="r">{int(s.gain_m)}</td><td className="r">{int(s.loss_m)}</td>
                         <td><div className="bar-track"><div className="bar-fill" style={{ width: `${((s.speed_ms || 0) / maxV) * 100}%`, background: familyColor(a.family) }} /></div></td>
                       </tr>

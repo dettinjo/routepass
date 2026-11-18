@@ -239,6 +239,29 @@ def list_activities(
     )
 
 
+class BulkSyncBody(BaseModel):
+    activity_ids: list[int] = Field(..., max_length=200)
+    direction: Direction
+
+
+@router.post("/activities/bulk-sync", tags=["activities"])
+def bulk_sync(body: BulkSyncBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    result = _call(services.bulk_sync, db, body.activity_ids, body.direction)
+    if result["job_ids"]:
+        threading.Thread(target=_run_jobs, args=(result["job_ids"],), daemon=True).start()
+    return result
+
+
+class TripBody(BaseModel):
+    activity_ids: list[int] = Field(..., min_length=2, max_length=100)
+
+
+@router.post("/activities/trip", tags=["activities"])
+def trip(body: TripBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    out = _call(services.trip_analysis, db, body.activity_ids)
+    return out
+
+
 @router.get("/activities/{activity_id}", tags=["activities"])
 def activity_detail(activity_id: int, db: Session = Depends(get_session)) -> dict[str, Any]:
     return _call(services.activity_detail, db, activity_id)
@@ -470,9 +493,13 @@ def set_strava_app(body: StravaAppBody, db: Session = Depends(get_session)) -> d
 
 def _redirect_uri() -> str:
     settings = get_settings()
-    return (
-        settings.strava_redirect_uri or settings.base_url.rstrip("/") + "/api/v1/connections/strava/callback"
-    )
+    base = settings.public_url or settings.base_url
+    return settings.strava_redirect_uri or base.rstrip("/") + "/api/v1/connections/strava/callback"
+
+
+def _ui(path: str) -> str:
+    # The callback may arrive on the public API host; the UI lives on base_url.
+    return get_settings().base_url.rstrip("/") + path
 
 
 @router.get("/connections/strava/authorize", tags=["connections"])
@@ -522,10 +549,10 @@ def strava_callback(
 ) -> RedirectResponse:
     expected = store.get_value(db, "strava.oauth_state")
     if error or not code or not expected or not secrets.compare_digest(state, expected):
-        return RedirectResponse(f"/settings?strava=error&reason={error or 'state'}")
+        return RedirectResponse(_ui(f"/settings?strava=error&reason={error or 'state'}"))
     store.delete_value(db, "strava.oauth_state")
     _finish_strava(db, code)
-    return RedirectResponse("/settings?strava=connected")
+    return RedirectResponse(_ui("/settings?strava=connected"))
 
 
 class CodeBody(BaseModel):
@@ -583,3 +610,45 @@ def komoot_disconnect(db: Session = Depends(get_session)) -> dict[str, bool]:
     store.delete_value(db, KOMOOT_CREDENTIALS)
     store.delete_value(db, KOMOOT_ACCOUNT)
     return {"ok": True}
+
+
+# ── Strava webhooks ──────────────────────────────────────────────────────────
+
+
+@public.get("/webhooks/strava", tags=["webhooks"])
+def strava_webhook_verify(request: Request) -> dict[str, str]:
+    q = request.query_params
+    expected = get_settings().strava_webhook_verify_token
+    if not expected or not secrets.compare_digest(q.get("hub.verify_token", ""), expected):
+        raise HTTPException(403, "verify token mismatch")
+    return {"hub.challenge": q.get("hub.challenge", "")}
+
+
+@public.post("/webhooks/strava", tags=["webhooks"])
+def strava_webhook_event(event: dict[str, Any], db: Session = Depends(get_session)) -> dict[str, Any]:
+    return services.handle_strava_event(db, event)
+
+
+@router.get("/connections/strava/webhook", tags=["connections"])
+def strava_webhook_status(db: Session = Depends(get_session)) -> dict[str, Any]:
+    return _call(_provider(services.strava_webhook_status), db)
+
+
+@router.put("/connections/strava/webhook", tags=["connections"])
+def strava_webhook_enable(db: Session = Depends(get_session)) -> dict[str, Any]:
+    return _call(_provider(services.strava_webhook_enable), db)
+
+
+@router.delete("/connections/strava/webhook", tags=["connections"])
+def strava_webhook_disable(db: Session = Depends(get_session)) -> dict[str, Any]:
+    return _call(_provider(services.strava_webhook_disable), db)
+
+
+def _provider(fn):
+    def wrapped(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except strava.StravaError as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+    return wrapped

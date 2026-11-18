@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Route, Routes } from "react-router-dom";
 import { IconChart, IconHome, IconList, IconRefresh, IconSettings, IconSync } from "./components/icons";
+import { Logo } from "./components/Logo";
 import { useRunSync, useStatus } from "./lib/hooks";
 import { ago } from "./lib/format";
 import { setToken } from "./lib/api";
@@ -24,7 +25,7 @@ function TokenGate() {
   return (
     <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 16 }}>
       <form className="card stack" style={{ width: "min(420px, 100%)" }} onSubmit={(e) => { e.preventDefault(); setToken(value.trim()); location.reload(); }}>
-        <div className="brand" style={{ padding: 0 }}><img src="/favicon.svg" alt="" />RoutePass</div>
+        <div className="brand" style={{ padding: 0 }}><Logo />RoutePass</div>
         <p className="secondary" style={{ margin: 0 }}>This instance requires its API token (<span className="mono">ROUTEPASS_API_TOKEN</span>). It is stored in this browser only.</p>
         <input type="password" autoFocus placeholder="API token" value={value} onChange={(e) => setValue(e.target.value)} />
         <button className="primary" type="submit">Continue</button>
@@ -61,7 +62,7 @@ export default function App() {
   return (
     <div className="app">
       <aside className="sidebar">
-        <div className="brand"><img src="/favicon.svg" alt="" />RoutePass</div>
+        <div className="brand"><Logo />RoutePass</div>
         <nav className="nav stack" style={{ gap: 2 }}>
           {NAV.map(({ to, label, icon: Icon, end }) => (
             <NavLink key={to} to={to} end={end}><Icon />{label}</NavLink>

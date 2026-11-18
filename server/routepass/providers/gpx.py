@@ -73,6 +73,14 @@ def encode_polyline(points: list[tuple[float, float]]) -> str:
 
 
 def decode_polyline(encoded: str) -> list[tuple[float, float]]:
+    """Decode a Google polyline; a truncated or malformed string yields the points decoded so far."""
+    try:
+        return _decode(encoded)
+    except IndexError:
+        return []
+
+
+def _decode(encoded: str) -> list[tuple[float, float]]:
     coords: list[tuple[float, float]] = []
     index = lat = lng = 0
     while index < len(encoded):

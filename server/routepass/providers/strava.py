@@ -271,3 +271,43 @@ class StravaClient:
 
     def update_activity(self, activity_id: str, **fields: Any) -> dict[str, Any]:
         return self._request("PUT", f"/activities/{activity_id}", json=fields).json()
+
+
+def list_push_subscriptions(client_id: str, client_secret: str) -> list[dict[str, Any]]:
+    resp = httpx.get(
+        f"{API}/push_subscriptions",
+        params={"client_id": client_id, "client_secret": client_secret},
+        timeout=30,
+    )
+    if resp.status_code >= 400:
+        raise StravaError(f"Strava push_subscriptions → {resp.status_code}: {resp.text[:300]}")
+    return resp.json()
+
+
+def create_push_subscription(
+    client_id: str, client_secret: str, callback_url: str, verify_token: str
+) -> dict:
+    # Strava calls the callback (GET hub.challenge) synchronously before answering this request.
+    resp = httpx.post(
+        f"{API}/push_subscriptions",
+        data={
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "callback_url": callback_url,
+            "verify_token": verify_token,
+        },
+        timeout=60,
+    )
+    if resp.status_code >= 400:
+        raise StravaError(f"Strava push_subscriptions → {resp.status_code}: {resp.text[:300]}")
+    return resp.json()
+
+
+def delete_push_subscription(client_id: str, client_secret: str, subscription_id: int) -> None:
+    resp = httpx.delete(
+        f"{API}/push_subscriptions/{subscription_id}",
+        params={"client_id": client_id, "client_secret": client_secret},
+        timeout=30,
+    )
+    if resp.status_code >= 400:
+        raise StravaError(f"Strava push_subscriptions → {resp.status_code}: {resp.text[:300]}")

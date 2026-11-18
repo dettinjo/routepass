@@ -57,9 +57,11 @@ export function TrackMap({ points, highlight, climbs }: {
 }
 
 /** All routes drawn translucently — overlapping roads build up into a heatmap. */
-export function RoutesMap({ routes, onSelect }: {
+export function RoutesMap({ routes, onSelect, opacity = 0.35, weight = 2 }: {
   routes: { id: number; family: string; points: [number, number][] }[];
   onSelect?: (id: number) => void;
+  opacity?: number;
+  weight?: number;
 }) {
   const el = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -69,7 +71,7 @@ export function RoutesMap({ routes, onSelect }: {
     const group = L.featureGroup();
     for (const r of routes) {
       if (r.points.length < 2) continue;
-      const line = L.polyline(r.points, { color: cssVar(familyColor(r.family)), weight: 2, opacity: 0.35, renderer });
+      const line = L.polyline(r.points, { color: cssVar(familyColor(r.family)), weight, opacity, renderer });
       if (onSelect) line.on("click", () => onSelect(r.id));
       group.addLayer(line);
     }
@@ -77,6 +79,6 @@ export function RoutesMap({ routes, onSelect }: {
     if (group.getLayers().length) m.fitBounds(group.getBounds(), { padding: [20, 20] });
     else m.setView([47, 8], 5);
     return () => { m.remove(); };
-  }, [routes, onSelect]);
+  }, [routes, onSelect, opacity, weight]);
   return <div className="map tall" ref={el} />;
 }
