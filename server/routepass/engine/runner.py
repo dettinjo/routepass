@@ -21,7 +21,7 @@ from routepass.timeutil import utcnow
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
-BACKLOG_INTERVAL_S = 120
+BACKLOG_INTERVAL_S = 30
 _wake = threading.Event()
 _stop = threading.Event()
 _thread: threading.Thread | None = None
@@ -217,7 +217,7 @@ def trigger_soon(delay_s: float = 0) -> None:
 def _interval_s() -> float:
     with session_scope() as db:
         minutes = store.get_preferences(db).get("poll_interval_minutes")
-    return max(5, minutes or get_settings().poll_interval_minutes) * 60.0
+    return max(1, minutes or get_settings().poll_interval_minutes) * 60.0
 
 
 def _loop() -> None:

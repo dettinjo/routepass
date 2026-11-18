@@ -462,6 +462,10 @@ def patch_preferences(patch: dict[str, Any], db: Session = Depends(get_session))
         threading.Thread(target=_recompute, daemon=True).start()
     if prefs["matching"] != before["matching"]:
         ingest.match_unlinked(db)
+    if prefs.get("poll_interval_minutes") != before.get("poll_interval_minutes") or prefs["sync"].get(
+        "delay_minutes"
+    ) != before["sync"].get("delay_minutes"):
+        runner.trigger_soon()
     return prefs
 
 

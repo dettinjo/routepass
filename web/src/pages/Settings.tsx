@@ -159,12 +159,12 @@ function Komoot() {
   );
 }
 
-function NumberField({ label, value, onSave, step }: { label: string; value: number | null; onSave: (v: number | null) => void; step?: number }) {
+function NumberField({ label, value, onSave, step, min, placeholder }: { label: string; value: number | null; onSave: (v: number | null) => void; step?: number; min?: number; placeholder?: string }) {
   const [v, setV] = useState(value == null ? "" : String(value));
   useEffect(() => setV(value == null ? "" : String(value)), [value]);
   return (
     <label className="field">{label}
-      <input type="number" step={step} value={v} onChange={(e) => setV(e.target.value)} onBlur={() => { const n = v === "" ? null : Number(v); if (n !== value) onSave(n); }} />
+      <input type="number" step={step} min={min} placeholder={placeholder} value={v} onChange={(e) => setV(e.target.value)} onBlur={() => { const n = v === "" ? null : Number(v); if (n !== value) onSave(n); }} />
     </label>
   );
 }
@@ -227,7 +227,20 @@ export default function Settings() {
                   <label className="field">History starts at
                     <input type="date" value={prefs.import.history_start ?? ""} onChange={(e) => save.mutate({ import: { history_start: e.target.value || null } })} />
                   </label>
-                  <NumberField label="Poll every (minutes)" value={prefs.poll_interval_minutes} onSave={(v) => save.mutate({ poll_interval_minutes: v })} />
+                  <NumberField label="Poll every (minutes, min 1)" min={1} placeholder="30" value={prefs.poll_interval_minutes} onSave={(v) => save.mutate({ poll_interval_minutes: v != null ? Math.max(1, v) : null })} />
+                </div>
+                <div className="row" style={{ gap: 6 }}>
+                  <span className="xs muted">Quick presets:</span>
+                  <button type="button" className={`chip ${(prefs.poll_interval_minutes === 1 && prefs.sync.delay_minutes === 0) ? "on" : ""}`}
+                    onClick={() => save.mutate({ poll_interval_minutes: 1, sync: { delay_minutes: 0 } }, { onSuccess: () => toast("Instant sync enabled (1 min poll, 0 min delay)") })}>
+                    1 min + 0 delay (instant)
+                  </button>
+                  <button type="button" className={`chip ${prefs.poll_interval_minutes === 2 ? "on" : ""}`}
+                    onClick={() => save.mutate({ poll_interval_minutes: 2 })}>2 min</button>
+                  <button type="button" className={`chip ${prefs.poll_interval_minutes === 5 ? "on" : ""}`}
+                    onClick={() => save.mutate({ poll_interval_minutes: 5 })}>5 min</button>
+                  <button type="button" className={`chip ${(prefs.poll_interval_minutes === 30 || prefs.poll_interval_minutes == null) ? "on" : ""}`}
+                    onClick={() => save.mutate({ poll_interval_minutes: 30 })}>30 min</button>
                 </div>
                 {status && (
                   <p className="small muted" style={{ marginBottom: 0 }}>

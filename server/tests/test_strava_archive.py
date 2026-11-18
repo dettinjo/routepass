@@ -355,3 +355,21 @@ def test_strava_oauth_inactive_falls_back_to_web_session(client, connected, mock
     res = runner.run_cycle("test", tracks=False)
     assert res["status"] == "ok", res
     assert res["stats"]["import_strava"]["new"] == 1
+
+
+def test_instant_poll_interval_preference(client) -> None:
+    """Option 3: poll_interval_minutes can be lowered to 1 minute and wakes the scheduler."""
+    from routepass.engine import runner
+
+    runner._wake.clear()
+    r = client.patch(
+        "/api/v1/settings",
+        json={"poll_interval_minutes": 1, "sync": {"delay_minutes": 0}},
+        headers=AUTH,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["poll_interval_minutes"] == 1
+    assert body["sync"]["delay_minutes"] == 0
+    assert runner._interval_s() == 60.0
+    assert runner._wake.is_set()
