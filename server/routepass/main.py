@@ -25,15 +25,47 @@ STATIC_DIR = Path(__file__).parent / "static"
 PUBLIC_PREFIXES = ("/api/v1/", "/mcp")
 
 
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def cross_site(scope: Scope) -> bool:
+    """True when a browser says this request was started by another site.
+
+    Browser sessions here are ambient (cookie or Tailscale identity), so a page on another site could
+    otherwise make the browser call RoutePass with the user's identity. Browsers send `Origin` on
+    cross-origin POST/PUT/PATCH/DELETE and WebSocket handshakes, and `Sec-Fetch-Site` on modern engines.
+    Requests without those headers (API clients, Strava's webhook) are not affected."""
+    headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers") or []}
+    if headers.get("authorization", "").lower().startswith("bearer "):
+        return False  # a custom header cannot be attached by another site without CORS approval
+    if headers.get("sec-fetch-site") == "cross-site":
+        return True
+    origin = headers.get("origin")
+    if not origin or origin == "null":
+        return origin == "null"
+    from urllib.parse import urlparse
+
+    return urlparse(origin).netloc.lower() != headers.get("host", "").lower()
+
+
 class AccessGate:
-    """MCP needs a signed-in identity or the API token; the public listener serves API paths only."""
+    """MCP needs a signed-in identity or the API token; the public listener serves API paths only;
+    state-changing browser requests and WebSockets must come from RoutePass's own pages."""
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "websocket" and cross_site(scope):
+            await send({"type": "websocket.close", "code": 4403})
+            return
         if scope["type"] == "http":
             path = scope["path"]
+            if scope["method"] in UNSAFE_METHODS and cross_site(scope):
+                await JSONResponse({"detail": "Cross-site request refused"}, status_code=403)(
+                    scope, receive, send
+                )
+                return
             if auth.is_public_listener(scope) and not path.startswith(PUBLIC_PREFIXES):
                 await JSONResponse({"detail": "Not found"}, status_code=404)(scope, receive, send)
                 return
