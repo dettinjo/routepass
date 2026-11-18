@@ -6,7 +6,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -17,7 +17,7 @@ from routepass.analysis import insights
 from routepass.analysis import track as trk
 from routepass.api import serialize
 from routepass.config import get_settings
-from routepass.db import get_session
+from routepass.db import get_session, session_scope
 from routepass.engine import ingest, runner, sync
 from routepass.engine.clients import (
     KOMOOT_ACCOUNT,
@@ -31,7 +31,7 @@ from routepass.engine.clients import (
 )
 from routepass.engine.rules import RuleError
 from routepass.models import SyncRun, Track
-from routepass.providers import komoot, sports, strava
+from routepass.providers import komoot, sports, strava, strava_browser
 from routepass.providers.gpx import track_to_gpx
 from routepass.timeutil import utcnow
 
@@ -575,18 +575,7 @@ class StravaSessionBody(BaseModel):
     remember_token: str = ""
 
 
-@router.put("/connections/strava/session", tags=["connections"])
-def strava_session_connect(body: StravaSessionBody, db: Session = Depends(get_session)) -> dict[str, Any]:
-    """Connect Strava using a browser session cookie (`_strava4_session` / `strava_remember_token`)."""
-    try:
-        cookies = strava.parse_web_cookies(body.cookie, body.remember_token)
-        with strava.StravaWebClient(cookies) as client:
-            athlete = client.athlete()
-            cookies = dict(client.cookies)
-    except strava.StravaAuthError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except strava.StravaError as exc:
-        raise HTTPException(502, str(exc)) from exc
+def _save_strava_web_session(db: Session, cookies: dict[str, str], athlete: dict[str, Any]) -> None:
     store.set_secret(db, STRAVA_WEB_SESSION, {"cookies": cookies})
     existing = store.get_value(db, STRAVA_ATHLETE) or {}
     store.set_value(
@@ -599,14 +588,51 @@ def strava_session_connect(body: StravaSessionBody, db: Session = Depends(get_se
             or f"{athlete.get('firstname', '')} {athlete.get('lastname', '')}".strip(),
             "connected_at": existing.get("connected_at") or utcnow().isoformat(),
             "mode": "web",
+            "has_remember_token": "strava_remember_token" in cookies,
         },
     )
     store.delete_value(db, "strava.error")
     runner.trigger_soon()
+
+
+@router.put("/connections/strava/session", tags=["connections"])
+def strava_session_connect(body: StravaSessionBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    """Connect Strava using a browser session cookie (`_strava4_session` / `strava_remember_token`)."""
+    try:
+        cookies = strava.parse_web_cookies(body.cookie, body.remember_token)
+        with strava.StravaWebClient(cookies) as client:
+            athlete = client.athlete()
+            cookies = dict(client.cookies)
+    except strava.StravaAuthError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except strava.StravaError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    _save_strava_web_session(db, cookies, athlete)
     return {
         "ok": True,
         "athlete": {"id": athlete.get("id"), "name": athlete.get("name") or athlete.get("firstname")},
+        "has_remember_token": "strava_remember_token" in cookies,
     }
+
+
+@router.get("/connections/strava/browser-login/status", tags=["connections"])
+def strava_browser_login_status() -> dict[str, Any]:
+    """Return whether the embedded Playwright Chromium browser login is available."""
+    return strava_browser.browser_status()
+
+
+@public.websocket("/connections/strava/browser-login")
+async def strava_browser_login_ws(websocket: WebSocket) -> None:
+    """Interactive in-app Strava browser login session that auto-captures HttpOnly session cookies."""
+    if auth.is_public_listener(websocket.scope) or auth.identify(websocket) is None:
+        await websocket.close(code=4401)
+        return
+
+    def _on_auth(cookies: dict[str, str], athlete: dict[str, Any]) -> None:
+        with session_scope() as db:
+            _save_strava_web_session(db, cookies, athlete)
+
+    await strava_browser.run_browser_login_session(websocket, _on_auth)
 
 
 @router.delete("/connections/strava/session", tags=["connections"])

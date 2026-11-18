@@ -373,3 +373,71 @@ def test_instant_poll_interval_preference(client) -> None:
     assert body["sync"]["delay_minutes"] == 0
     assert runner._interval_s() == 60.0
     assert runner._wake.is_set()
+
+
+def test_strava_remember_token_auto_renews_expired_session(mock_apis) -> None:
+    """When _strava4_session expires, StravaWebClient uses strava_remember_token to mint a new session cookie."""
+    from routepass.providers import strava
+
+    refreshed: list[dict[str, str]] = []
+    calls = {"training": 0}
+
+    def training_handler(request: httpx.Request) -> httpx.Response:
+        calls["training"] += 1
+        cookie_hdr = request.headers.get("cookie", "")
+        if "renewed-session-cookie" not in cookie_hdr:
+            return httpx.Response(302, headers={"Location": "https://www.strava.com/login"})
+        return httpx.Response(
+            200,
+            json={
+                "models": [
+                    {
+                        "id": 9901,
+                        "name": "Auto Renewed Ride",
+                        "sport_type": "Ride",
+                        "start_date_local_raw": 1778231510,
+                        "distance_raw": 15000.0,
+                        "moving_time_raw": 1800,
+                        "elevation_gain_raw": 120.0,
+                    }
+                ]
+            },
+        )
+
+    mock_apis.get("https://www.strava.com/athlete/training_activities").mock(side_effect=training_handler)
+    mock_apis.get("https://www.strava.com/dashboard").mock(
+        return_value=httpx.Response(
+            200,
+            text='<html><head><meta name="csrf-token" content="csrf-renewed" /></head>'
+            '<body><a href="/athletes/77777">Jonathan</a></body></html>',
+            headers={"Set-Cookie": "_strava4_session=renewed-session-cookie; Path=/; HttpOnly"},
+        )
+    )
+
+    with strava.StravaWebClient(
+        {"_strava4_session": "expired-cookie", "strava_remember_token": "long-lived-remember"},
+        on_refresh=lambda c: refreshed.append(c),
+    ) as web_client:
+        items = web_client.list_activities(page=1, per_page=20)
+        assert len(items) == 1
+        assert items[0]["id"] == 9901
+        assert web_client.cookies["_strava4_session"] == "renewed-session-cookie"
+
+    assert calls["training"] == 2
+    assert refreshed and refreshed[-1]["_strava4_session"] == "renewed-session-cookie"
+
+
+def test_strava_browser_login_status_and_helpers(client) -> None:
+    """Option A: browser-login status endpoint and URL detector work as expected."""
+    from routepass.providers import strava_browser
+
+    assert not strava_browser._is_authenticated_strava_url("https://www.strava.com/login")
+    assert not strava_browser._is_authenticated_strava_url("https://www.strava.com/session")
+    assert not strava_browser._is_authenticated_strava_url("https://accounts.google.com/o/oauth2/auth")
+    assert strava_browser._is_authenticated_strava_url("https://www.strava.com/dashboard")
+    assert strava_browser._is_authenticated_strava_url("https://www.strava.com/onboarding")
+    assert strava_browser._is_authenticated_strava_url("https://www.strava.com/athletes/77777")
+
+    r = client.get("/api/v1/connections/strava/browser-login/status", headers=AUTH)
+    assert r.status_code == 200
+    assert r.json()["available"] is True

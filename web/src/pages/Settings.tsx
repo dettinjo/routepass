@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { BrandIcon, IconApi, IconRefresh, IconTarget, IconImport, IconUser } from "../components/icons";
 import { Callout, Card, Skeleton, useToast } from "../components/ui";
 import { StravaArchive } from "../components/StravaArchive";
+import { StravaBrowserLoginModal } from "../components/StravaBrowserLogin";
 import { api, type Me } from "../lib/api";
 import { useQuery } from "@tanstack/react-query";
 import { ago, int } from "../lib/format";
@@ -29,6 +30,7 @@ function Strava() {
   const [sessionCookie, setSessionCookie] = useState("");
   const [rememberToken, setRememberToken] = useState("");
   const [redirect, setRedirect] = useState<string | null>(null);
+  const [browserModalOpen, setBrowserModalOpen] = useState(false);
   const s = status?.connections.strava;
   const connect = async () => {
     try {
@@ -55,13 +57,30 @@ function Strava() {
             </div>
           </div>
         )}
-        <details open={!s?.connected || Boolean(s?.error) || s?.mode === "web" || s?.mode === "oauth+web"}>
+        <div className="stack" style={{ gap: 8 }}>
+          <p className="small muted" style={{ margin: 0 }}>
+            Sign in normally inside RoutePass with <b>Email 6-digit One-Time Code</b>, <b>Google</b>, <b>Apple</b>, or password — RoutePass automatically captures and refreshes your session cookie (<span className="mono">_strava4_session</span> + <span className="mono">strava_remember_token</span>) without requiring a paid Strava API subscription.
+          </p>
+          <div className="row">
+            <button className="primary" type="button" onClick={() => setBrowserModalOpen(true)}>
+              <BrandIcon provider="strava" size={16} />
+              {s?.mode === "web" || s?.mode === "oauth+web" ? "Sign in to Strava again" : "Sign in to Strava"}
+            </button>
+            {(s?.mode === "web" || s?.mode === "oauth+web") && (
+              <button className="sm ghost" type="button" onClick={() => call.mutate({ path: "/connections/strava/session", method: "DELETE" }, { onSuccess: () => toast("Strava web session removed") })}>
+                Remove web session
+              </button>
+            )}
+          </div>
+        </div>
+        {browserModalOpen && <StravaBrowserLoginModal onClose={() => setBrowserModalOpen(false)} />}
+        <details>
           <summary className="small secondary" style={{ cursor: "pointer" }}>
-            <b>Web session (free · works with Email One-Time Code, Google, or Apple)</b>
+            Advanced: paste session cookie or <span className="mono">Copy as cURL</span> manually
           </summary>
           <div className="stack mt8">
             <p className="small muted" style={{ margin: 0 }}>
-              Bypasses Strava’s paid API requirement by using your signed-in browser session on <a href="https://www.strava.com/login" target="_blank" rel="noreferrer">strava.com/login</a> (sign in with <b>Email One-Time Code</b>, <b>Google</b>, or <b>Apple</b> with “Remember me” checked). Then in DevTools either right-click any <span className="mono">strava.com</span> request in <b>Network → Copy → Copy as cURL</b> (or Copy Request Headers), or copy <span className="mono">_strava4_session</span> / <span className="mono">strava_remember_token</span> from <b>Application → Cookies</b>, and paste below.
+              If you prefer to copy a session from your own desktop browser: in DevTools right-click any <span className="mono">strava.com</span> request in <b>Network → Copy → Copy as cURL</b> (or copy <span className="mono">_strava4_session</span> / <span className="mono">strava_remember_token</span> from <b>Application → Cookies</b>), and paste below.
             </p>
             <div className="fields">
               <label className="field">Session cookie, <span className="mono">Cookie:</span> header, or <span className="mono">Copy as cURL</span>
@@ -72,12 +91,9 @@ function Strava() {
               </label>
             </div>
             <div className="row">
-              <button className="primary sm" disabled={!sessionCookie.trim() && !rememberToken.trim()} onClick={() => call.mutate({ path: "/connections/strava/session", method: "PUT", body: { cookie: sessionCookie, remember_token: rememberToken } }, { onSuccess: () => { setSessionCookie(""); setRememberToken(""); toast("Strava web session connected"); } })}>
-                {s?.mode === "web" || s?.mode === "oauth+web" ? "Update web session" : "Connect web session"}
+              <button className="sm" disabled={!sessionCookie.trim() && !rememberToken.trim()} onClick={() => call.mutate({ path: "/connections/strava/session", method: "PUT", body: { cookie: sessionCookie, remember_token: rememberToken } }, { onSuccess: () => { setSessionCookie(""); setRememberToken(""); toast("Strava web session connected"); } })}>
+                Save cookie manually
               </button>
-              {(s?.mode === "web" || s?.mode === "oauth+web") && (
-                <button className="sm ghost" onClick={() => call.mutate({ path: "/connections/strava/session", method: "DELETE" }, { onSuccess: () => toast("Strava web session removed") })}>Remove web session</button>
-              )}
             </div>
           </div>
         </details>
