@@ -37,6 +37,8 @@ downloaded in the background within Strava's rate limits.
 | `ROUTEPASS_API_TOKEN` | *(empty)* | Bearer token for UI, API and MCP. Empty = no auth (trusted network only) |
 | `ROUTEPASS_BASE_URL` | `http://localhost:8000` | URL users open; builds the Strava OAuth redirect |
 | `ROUTEPASS_STRAVA_CLIENT_ID` / `_SECRET` | | Strava API app (can also be entered in Settings) |
+| `ROUTEPASS_PUBLIC_URL` | | Internet-facing URL that exposes only the API paths (OAuth callback, Strava webhook, REST, MCP); used for the Strava redirect and webhook |
+| `ROUTEPASS_STRAVA_WEBHOOK_VERIFY_TOKEN` | | Shared secret for Strava push events (instant sync); enable under Settings → Strava |
 | `ROUTEPASS_STRAVA_REDIRECT_URI` | | Override the OAuth redirect; paste the returned `code` in Settings |
 | `ROUTEPASS_SECRET_KEY` | generated | Fernet key for stored credentials (else `/data/secret.key`) |
 | `ROUTEPASS_POLL_INTERVAL_MINUTES` | `30` | How often both platforms are polled |

@@ -64,6 +64,21 @@ Eddington, route heatmap, platform coverage.
 
 Profile changes (FTP, HR max/rest) recompute every stored track in the background.
 
+## Deployment shape
+
+The UI is meant for a private network. Optionally a reverse proxy publishes `ROUTEPASS_PUBLIC_URL`
+with only these paths: `/api/v1/connections/strava/callback` (OAuth), `/api/v1/webhooks/strava`
+(Strava push events → a cycle now and another after the settle delay), `/api/v1/*` and `/mcp`
+(bearer token). The homelab does this with Caddy on the public VPS → tailnet → home server.
+
+## Validation on real tracks
+
+Ten public recorded Komoot tours (road/MTB rides up to 142 km, half marathons, an 87 km hike,
+ski and mountain tours) were run through the engine: distance within 1–4 % of Komoot, elevation
+gain within 0–5 % on clean tracks (Komoot computes its own total from data it does not export, so
+provider totals stay authoritative), moving time within 0–3 % except where Komoot counts stops as
+motion. Two anonymised tracks are regression fixtures in `server/tests/fixtures`.
+
 ## Security
 
 Bearer token (`ROUTEPASS_API_TOKEN`) on API, MCP and UI; meant to run on a private network
