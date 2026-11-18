@@ -536,6 +536,15 @@ def _track_source(act: Activity) -> ProviderActivity | None:
     return live[0] if live else None
 
 
+WEB_TRACKS_PER_RUN = 20  # recordings fetched via the Strava website per sync run
+
+
+def _uses_web(client) -> bool:
+    from routepass.providers.strava import StravaWebClient
+
+    return isinstance(client, StravaWebClient) or bool(getattr(client, "_use_web", False))
+
+
 def fetch_tracks(db: Session, budget_s: float = 240.0, limit: int = 200) -> dict[str, int]:
     """Download recordings for activities without a track, newest first."""
     started = time.monotonic()
@@ -549,6 +558,7 @@ def fetch_tracks(db: Session, budget_s: float = 240.0, limit: int = 200) -> dict
     strava: StravaClient | None = None
     komoot: KomootClient | None = None
     strava_blocked = False
+    web_fetches = 0
     try:
         for act in rows:
             if time.monotonic() - started > budget_s:
@@ -564,6 +574,10 @@ def fetch_tracks(db: Session, budget_s: float = 240.0, limit: int = 200) -> dict
                         src.track_status = "none"
                         continue
                     strava = strava or strava_client(db, background=True)
+                    if _uses_web(strava):
+                        if web_fetches >= WEB_TRACKS_PER_RUN:
+                            continue
+                        web_fetches += 1
                     normalized = trk.from_strava_streams(strava.streams(src.external_id))
                 else:
                     komoot = komoot or komoot_client(db)

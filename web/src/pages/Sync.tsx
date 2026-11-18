@@ -49,6 +49,10 @@ function summarize(r: Rule): string {
   if (c.name_contains) parts.push(`name has “${c.name_contains}”`);
   if (c.name_regex) parts.push(`name ~ /${c.name_regex}/`);
   if (c.weekdays?.length) parts.push(c.weekdays.map((d: number) => WEEKDAYS[d]).join("/"));
+  for (const [k, word] of [["start_near", "starts"], ["end_near", "ends"]] as const) {
+    const g = c[k];
+    if (g) parts.push(`${word} within ${g.radius_km ?? 1} km of ${g.place ?? `${Number(g.lat).toFixed(3)}, ${Number(g.lng).toFixed(3)}`}`);
+  }
   if (c.date?.from || c.date?.to) parts.push(`${c.date.from ?? "…"} → ${c.date.to ?? "…"}`);
   for (const f of ["commute", "trainer", "has_heartrate", "has_power"]) if (c[f] != null) parts.push(`${c[f] ? "" : "not "}${f.replace("has_", "with ")}`);
   const a = r.actions || {};
@@ -97,6 +101,8 @@ function clean(o: Record<string, any>): Record<string, any> {
 
 function RuleEditor({ rule, direction, onClose }: { rule: Partial<Rule> | null; direction: string; onClose: () => void }) {
   const { data: meta } = useSportMeta();
+  const { data: prefs } = usePrefs();
+  const places = prefs?.places ?? [];
   const qc = useQueryClient();
   const toast = useToast();
   const [name, setName] = useState(rule?.name ?? "");
@@ -161,6 +167,24 @@ function RuleEditor({ rule, direction, onClose }: { rule: Partial<Rule> | null; 
         <TriState label="Has heart rate" value={c.has_heartrate} onChange={(v) => setCond("has_heartrate", v)} />
         <TriState label="Has power" value={c.has_power} onChange={(v) => setCond("has_power", v)} />
       </div>
+      <div className="fields">
+        {(["start_near", "end_near"] as const).map((k) => (
+          <label key={k} className="field">{k === "start_near" ? "Starts near" : "Ends near"}
+            <div className="row nowrap">
+              <select value={c[k]?.place ?? ""} onChange={(e) => setCond(k, e.target.value ? { place: e.target.value, radius_km: c[k]?.radius_km ?? undefined } : undefined)}>
+                <option value="">Anywhere</option>
+                {places.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
+              </select>
+              {c[k]?.place && (
+                <input type="number" inputMode="decimal" step={0.1} min={0.1} style={{ width: 90 }} title="Radius in km (default: the place's radius)"
+                  placeholder={String(places.find((p) => p.name === c[k].place)?.radius_km ?? 1)} value={c[k]?.radius_km ?? ""}
+                  onChange={(e) => setCond(k, { ...c[k], radius_km: e.target.value ? Number(e.target.value) : undefined })} />
+              )}
+            </div>
+          </label>
+        ))}
+      </div>
+      {places.length === 0 && <p className="xs muted" style={{ margin: 0 }}>Save places like “Home” in Settings to use them here.</p>}
 
       <div className="section-label">Then</div>
       <div><Seg value={a.skip ? "skip" : "sync"} options={[{ value: "sync", label: `Copy to ${toKomoot ? "Komoot" : "Strava"}` }, { value: "skip", label: "Don't sync" }]}
@@ -388,6 +412,42 @@ function FullHistory({ ready }: { ready: boolean }) {
   );
 }
 
+function Duplicates() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const { data } = useQuery<any[]>({ queryKey: ["duplicates"], queryFn: () => api("/activities/duplicates") });
+  const act = useMutation({
+    mutationFn: ({ path, body }: { path: string; body: unknown }) => api(path, { method: "POST", body }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["duplicates"] }); qc.invalidateQueries({ queryKey: ["activities"] }); qc.invalidateQueries({ queryKey: ["status"] }); },
+    onError: (e: Error) => toast(e.message, true),
+  });
+  if (!data?.length) return null;
+  return (
+    <Card title="Possible duplicates" icon={IconSync} hint="Looked alike but were not merged automatically — check and decide" flush>
+      <div className="list">
+        {data.map((d) => (
+          <div key={`${d.activity.id}-${d.candidate.id}`} className="item" style={{ cursor: "default", flexWrap: "wrap" }}>
+            <div className="main-col" style={{ minWidth: 220 }}>
+              {[d.activity, d.candidate].map((a: any) => (
+                <Link key={a.id} to={`/activities/${a.id}`} className="row nowrap small" style={{ gap: 6 }}>
+                  {a.providers.map((p: string) => <BrandIcon key={p} provider={p} size={14} />)}
+                  <span className="ellipsis">{a.name}</span>
+                  <span className="muted" style={{ flex: "none" }}>· {km(a.distance_m)} km · {activityDate(a)}</span>
+                </Link>
+              ))}
+              <span className="xs muted">{d.time_diff_min} min apart{d.distance_diff_pct != null ? ` · ${d.distance_diff_pct} % distance difference` : ""}</span>
+            </div>
+            <div className="row nowrap">
+              <button className="sm primary" onClick={() => act.mutate({ path: `/activities/${d.activity.id}/merge`, body: { other_id: d.candidate.id } }, { onSuccess: () => toast("Merged into one activity") })}>Same — merge</button>
+              <button className="sm ghost" onClick={() => act.mutate({ path: `/activities/${d.activity.id}/dismiss-duplicate`, body: { other_id: d.candidate.id } })}>Not the same</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 function Jobs() {
   const [status, setStatus] = useState("queued,running,failed");
   const { data } = useQuery<{ items: SyncJob[]; total: number }>({ queryKey: ["jobs", status], queryFn: () => api("/sync/jobs", { params: { status: status === "all" ? undefined : status, limit: 100 } }), refetchInterval: 15000 });
@@ -514,6 +574,7 @@ export default function SyncPage() {
           )}
         </Card>
 
+        <Duplicates />
         <Jobs />
         <Runs />
       </div>

@@ -121,6 +121,7 @@ def activity_detail(db: Session, activity_id: int) -> dict[str, Any]:
         select(Activity.id).where(Activity.start_time > act.start_time).order_by(Activity.start_time).limit(1)
     )
     out["prev_id"], out["next_id"] = prev_id, next_id
+    out["tiles"] = insights.activity_tile_stats(db, act)
     return out
 
 
@@ -528,3 +529,155 @@ def trip_analysis(db: Session, activity_ids: list[int]) -> dict[str, Any]:
         "most_climbing_day": hardest["date"],
         "sports": sorted({a.sport for a in acts}),
     }
+
+
+# ── duplicate suggestions ────────────────────────────────────────────────────
+
+DISMISSED_KEY = "matching.dismissed_pairs"
+
+
+def duplicate_candidates(db: Session, limit: int = 50) -> list[dict[str, Any]]:
+    """Pairs that look like the same activity but were not merged automatically: same sport family,
+    starts within 4 h, distance within 35 %, records from different platforms. Scans the whole history
+    with a time-sorted sliding window."""
+    dismissed = {
+        tuple(p) for p in (store.get_value(db, DISMISSED_KEY) or []) if isinstance(p, list) and len(p) == 2
+    }
+    acts = db.scalars(
+        select(Activity).options(selectinload(Activity.sources)).order_by(Activity.start_time)
+    ).all()
+    window = timedelta(hours=4)
+    out: list[dict[str, Any]] = []
+    for i, a in enumerate(acts):
+        provs_a = {s.provider for s in a.sources if not s.deleted}
+        for b in acts[i + 1 :]:
+            if b.start_time - a.start_time > window:
+                break
+            if a.family != b.family or (min(a.id, b.id), max(a.id, b.id)) in dismissed:
+                continue
+            provs_b = {s.provider for s in b.sources if not s.deleted}
+            if provs_a & provs_b:
+                continue  # merging would put two records of one platform on one activity
+            da, dbm = a.distance_m or 0.0, b.distance_m or 0.0
+            dist_pct = abs(da - dbm) / max(da, dbm) * 100 if da > 200 and dbm > 200 else None
+            minutes = (b.start_time - a.start_time).total_seconds() / 60
+            if dist_pct is None and minutes > 30:
+                continue
+            if dist_pct is not None and dist_pct > 35:
+                continue
+            out.append(
+                {
+                    "activity": serialize.activity_row(b),
+                    "candidate": serialize.activity_row(a),
+                    "time_diff_min": round(minutes, 1),
+                    "distance_diff_pct": round(dist_pct, 1) if dist_pct is not None else None,
+                }
+            )
+    out.sort(key=lambda c: c["activity"]["start_time"], reverse=True)
+    return out[:limit]
+
+
+def dismiss_duplicate(db: Session, activity_id: int, other_id: int) -> dict[str, bool]:
+    pair = sorted([int(activity_id), int(other_id)])
+    existing = [p for p in (store.get_value(db, DISMISSED_KEY) or []) if isinstance(p, list)]
+    if pair not in existing:
+        store.set_value(db, DISMISSED_KEY, [*existing, pair])
+    return {"ok": True}
+
+
+# ── export ───────────────────────────────────────────────────────────────────
+
+CSV_COLUMNS = [
+    "id",
+    "date_local",
+    "start_utc",
+    "name",
+    "sport",
+    "sport_label",
+    "family",
+    "distance_km",
+    "moving_time_s",
+    "elapsed_time_s",
+    "elevation_gain_m",
+    "elevation_loss_m",
+    "avg_speed_kmh",
+    "max_speed_kmh",
+    "avg_hr",
+    "max_hr",
+    "avg_power",
+    "normalized_power",
+    "avg_cadence",
+    "work_kj",
+    "load",
+    "load_method",
+    "commute",
+    "trainer",
+    "gear",
+    "strava_id",
+    "komoot_id",
+    "strava_url",
+    "komoot_url",
+]
+
+
+def export_activities_csv(db: Session, **filters: Any) -> str:
+    """Every activity matching the filters (not just one page) as CSV."""
+    import csv
+    import io
+
+    def r(v: float | None, digits: int = 1, scale: float = 1.0) -> Any:
+        return "" if v is None else round(v * scale, digits)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(CSV_COLUMNS)
+    page = 1
+    while True:
+        res = list_activities(db, **{**filters, "page": page, "per_page": 500})
+        ids = [i["id"] for i in res["items"]]
+        acts = {
+            a.id: a
+            for a in db.scalars(
+                select(Activity).where(Activity.id.in_(ids)).options(selectinload(Activity.sources))
+            )
+        }
+        for item in res["items"]:
+            a = acts[item["id"]]
+            src = {s.provider: s for s in a.sources if not s.deleted}
+            writer.writerow(
+                [
+                    a.id,
+                    (a.start_local or a.start_time).isoformat(sep=" "),
+                    a.start_time.isoformat() + "Z",
+                    a.name,
+                    a.sport,
+                    sports.label(a.sport),
+                    a.family,
+                    r(a.distance_m, 3, 0.001),
+                    r(a.moving_time_s, 0),
+                    r(a.elapsed_time_s, 0),
+                    r(a.elevation_gain_m, 0),
+                    r(a.elevation_loss_m, 0),
+                    r(a.avg_speed_ms, 2, 3.6),
+                    r(a.max_speed_ms, 2, 3.6),
+                    r(a.avg_hr),
+                    r(a.max_hr),
+                    r(a.avg_power),
+                    r(a.normalized_power),
+                    r(a.avg_cadence),
+                    r(a.work_kj, 0),
+                    r(a.load),
+                    a.load_method or "",
+                    a.commute,
+                    a.trainer,
+                    a.gear or "",
+                    src["strava"].external_id if "strava" in src else "",
+                    src["komoot"].external_id if "komoot" in src else "",
+                    serialize.provider_url("strava", src["strava"].external_id) if "strava" in src else "",
+                    serialize.provider_url("komoot", src["komoot"].external_id) if "komoot" in src else "",
+                ]
+            )
+        if page * res["per_page"] >= res["total"]:
+            break
+        page += 1
+    return buf.getvalue()

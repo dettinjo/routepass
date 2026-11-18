@@ -263,6 +263,45 @@ def trip(body: TripBody, db: Session = Depends(get_session)) -> dict[str, Any]:
     return out
 
 
+@router.get("/activities/duplicates", tags=["activities"])
+def duplicates(
+    limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_session)
+) -> list[dict[str, Any]]:
+    """Activities that look like the same recording but were not merged automatically."""
+    return services.duplicate_candidates(db, limit)
+
+
+class DismissBody(BaseModel):
+    other_id: int
+
+
+@router.post("/activities/{activity_id}/dismiss-duplicate", tags=["activities"])
+def dismiss_duplicate(
+    activity_id: int, body: DismissBody, db: Session = Depends(get_session)
+) -> dict[str, bool]:
+    return services.dismiss_duplicate(db, activity_id, body.other_id)
+
+
+@router.get("/activities/export.csv", tags=["activities"])
+def export_csv(
+    q: str | None = None,
+    sport: list[str] | None = Query(None),
+    family: list[str] | None = Query(None),
+    start: date | None = None,
+    end: date | None = None,
+    presence: Literal["both", "strava_only", "komoot_only", "synced"] | None = None,
+    db: Session = Depends(get_session),
+) -> Response:
+    text = services.export_activities_csv(
+        db, q=q, sport=sport, family=family, start=start, end=end, presence=presence
+    )
+    return Response(
+        text,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="routepass-activities-{date.today()}.csv"'},
+    )
+
+
 @router.get("/activities/{activity_id}", tags=["activities"])
 def activity_detail(activity_id: int, db: Session = Depends(get_session)) -> dict[str, Any]:
     return _call(services.activity_detail, db, activity_id)
@@ -440,6 +479,40 @@ def heatmap(
     return insights.heatmap(db, f)
 
 
+@router.get("/insights/tiles", tags=["insights"])
+def tiles(f: insights.Filters = Depends(_filters), db: Session = Depends(get_session)) -> dict[str, Any]:
+    """Explorer tiles (zoom 14): total, max square, max cluster, new tiles per year."""
+    return insights.explorer_tiles(db, f)
+
+
+@router.get("/insights/zones", tags=["insights"])
+def zones(
+    grain: Literal["week", "month", "year"] = "month",
+    f: insights.Filters = Depends(_filters),
+    db: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """Time in heart-rate and power zones plus polarisation (low / threshold / high)."""
+    return insights.zone_distribution(db, f, grain)
+
+
+@router.get("/insights/efficiency", tags=["insights"])
+def efficiency(
+    f: insights.Filters = Depends(_filters), db: Session = Depends(get_session)
+) -> list[dict[str, Any]]:
+    """Aerobic efficiency factor (speed or power per heartbeat) and decoupling per activity."""
+    return insights.efficiency_trend(db, f)
+
+
+@router.get("/insights/goals", tags=["insights"])
+def goals(family: list[str] | None = Query(None), db: Session = Depends(get_session)) -> list[dict[str, Any]]:
+    return insights.goals_progress(db, date.today(), store.get_preferences(db), family or None)
+
+
+@router.get("/insights/gear", tags=["insights"])
+def gear(f: insights.Filters = Depends(_filters), db: Session = Depends(get_session)) -> dict[str, Any]:
+    return insights.gear_stats(db, f, store.get_preferences(db))
+
+
 @router.get("/insights/coverage", tags=["insights"])
 def coverage(db: Session = Depends(get_session)) -> dict[str, Any]:
     return insights.coverage(db)
@@ -455,6 +528,13 @@ def get_preferences(db: Session = Depends(get_session)) -> dict[str, Any]:
 
 @router.patch("/settings", tags=["settings"])
 def patch_preferences(patch: dict[str, Any], db: Session = Depends(get_session)) -> dict[str, Any]:
+    if "poll_interval_minutes" in patch:
+        value = patch["poll_interval_minutes"]
+        if value is not None and value not in (0, *runner.POLL_CHOICES_MIN):
+            raise HTTPException(
+                422,
+                f"poll_interval_minutes must be 0 (manual only) or one of {list(runner.POLL_CHOICES_MIN)}",
+            )
     before = store.get_preferences(db)
     prefs = store.update_preferences(db, patch)
     if prefs["profile"] != before["profile"]:
@@ -465,7 +545,7 @@ def patch_preferences(patch: dict[str, Any], db: Session = Depends(get_session))
     if prefs.get("poll_interval_minutes") != before.get("poll_interval_minutes") or prefs["sync"].get(
         "delay_minutes"
     ) != before["sync"].get("delay_minutes"):
-        runner.trigger_soon()
+        runner.reschedule()
     return prefs
 
 

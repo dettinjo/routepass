@@ -2,10 +2,10 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { TripView } from "../components/TripView";
-import { BrandIcon, IconFilter, IconLeft, IconRight, IconSearch, IconSelect, IconSync, IconX, MetricIcon } from "../components/icons";
+import { BrandIcon, IconDownload, IconFilter, IconLeft, IconRight, IconSearch, IconSelect, IconSync, IconX, MetricIcon } from "../components/icons";
 import { ActivityItem, FamilyChips } from "../components/shared";
 import { Card, Empty, Modal, Seg, Skeleton, useToast } from "../components/ui";
-import { api } from "../lib/api";
+import { api, qs } from "../lib/api";
 import { FAMILY_LABEL } from "../lib/colors";
 import { int } from "../lib/format";
 import type { ActivityRow } from "../lib/types";
@@ -93,9 +93,14 @@ export default function Activities() {
           <h1>Activities</h1>
           <div className="sub">{data ? `${int(data.total)} activities` : " "} · each listed once, wherever it was recorded</div>
         </div>
-        <button className={selecting ? "primary sm" : "sm"} onClick={() => { setSelecting(!selecting); setSelected([]); }}>
-          <IconSelect size={16} />{selecting ? "Done" : "Select"}
-        </button>
+        <div className="row nowrap">
+          <a className="btn sm" href={`/api/v1/activities/export.csv${qs({ q: get("q"), family: families, presence: get("presence"), start: get("start"), end: get("end") })}`} title="Download the activities matching the filters as CSV">
+            <IconDownload size={16} /><span className="hide-mobile">CSV</span>
+          </a>
+          <button className={selecting ? "primary sm" : "sm"} onClick={() => { setSelecting(!selecting); setSelected([]); }}>
+            <IconSelect size={16} />{selecting ? "Done" : "Select"}
+          </button>
+        </div>
       </div>
 
       <div className="stack" style={{ gap: 10, marginBottom: 12 }}>

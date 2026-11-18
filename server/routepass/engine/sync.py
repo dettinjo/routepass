@@ -113,7 +113,12 @@ def plan(
                 continue
             src = _live_source(act, rule_engine.DIRECTION_SOURCE[direction])
             decision = rule_engine.decide(
-                act, direction, rules, dprefs, description=src.raw.get("description", "") or ""
+                act,
+                direction,
+                rules,
+                dprefs,
+                description=src.raw.get("description", "") or "",
+                places=prefs.get("places"),
             )
             job = SyncJob(
                 activity_id=act.id,
@@ -152,7 +157,12 @@ def preview(db: Session, direction: str, limit: int = 200) -> list[dict[str, Any
             continue
         block = blocker(act, direction, prefs, now)
         decision = rule_engine.decide(
-            act, direction, rules, prefs["sync"][direction], src.raw.get("description", "") or ""
+            act,
+            direction,
+            rules,
+            prefs["sync"][direction],
+            src.raw.get("description", "") or "",
+            prefs.get("places"),
         )
         out.append(
             {

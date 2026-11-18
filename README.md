@@ -23,6 +23,13 @@ one SQLite file.
   every route, and per activity: map with linked stream charts, HR/power zones, splits,
   climbs, best efforts, peak power, aerobic decoupling and repeats of the same route.
   Select several activities to copy them in bulk or to analyse them as one multi-day trip.
+- **More insights** — heart-rate/power zones with polarisation, aerobic efficiency trend, Explorer tiles
+  (map, max square, max cluster, new tiles per year), goals with projection on Home, gear mileage with service
+  intervals, review of possible duplicates (merge or dismiss), and CSV export of every activity.
+- **Places & geofences** — save places such as "Home" (from your phone's location) and use them in rules
+  ("starts near Home → don't copy").
+- **Installable app (PWA)** — add RoutePass to your phone's home screen; recent data stays readable offline and
+  is cleared on sign-out. Light/dark/automatic theme.
 - **API & MCP** — everything the UI does is in the REST API (`/api/docs`) and as MCP tools
   (`/mcp`, streamable HTTP) for AI assistants.
 
@@ -31,6 +38,7 @@ one SQLite file.
 Strava's API now needs a paid subscription on the app owner's account (`403 Application Status: Inactive`) and restricts storing API data. RoutePass gives you two ways to sync without paying for the API:
 
 1. **Continuous Web Session sync (both directions, `Strava ⇄ Komoot`)** — sign in to `strava.com` in your browser (supports Email 6-digit One-Time Code, Google, Apple, or password) and paste your `_strava4_session` cookie, `Cookie:` header, or DevTools *Copy as cURL* under **Settings → Strava → Web session**. RoutePass uses `StravaWebClient` (`strava.com/athlete/training_activities`, `/activities/{id}/streams`, `/export_original`, `/upload/files`) to poll, download tracks, and upload Komoot GPX files to Strava automatically. If an OAuth API app is also connected and returns `403 Inactive`, RoutePass seamlessly falls back to the web session.
+   ⚠️ Strava's terms of service forbid automated access to the website; using this mode risks your Strava account being suspended. RoutePass paces website requests (≥1.5 s apart, at most 20 recordings per sync run) but cannot make it compliant. The data export import (below) and the paid API are the sanctioned routes.
 2. **Bulk Strava archive import** — import Strava's free personal data export (**Settings → Strava → Import your Strava data export**): the complete history with original FIT/GPX/TCX recordings, merged with Komoot like any other source.
 
 ## Interface
@@ -63,7 +71,7 @@ downloaded in the background within Strava's rate limits.
 | `ROUTEPASS_STRAVA_WEBHOOK_VERIFY_TOKEN` | | Shared secret for Strava push events (instant sync); enable under Settings → Strava |
 | `ROUTEPASS_STRAVA_REDIRECT_URI` | | Override the OAuth redirect; paste the returned `code` in Settings |
 | `ROUTEPASS_SECRET_KEY` | generated | Fernet key for stored credentials (else `/data/secret.key`) |
-| `ROUTEPASS_POLL_INTERVAL_MINUTES` | `30` | How often both platforms are polled |
+| `ROUTEPASS_POLL_INTERVAL_MINUTES` | `30` | Automatic sync interval: `0` = manual only, else 30/60/120/360 (Settings overrides it) |
 | `ROUTEPASS_DATA_DIR` | `/data` | SQLite database + key |
 
 ## Sign-in

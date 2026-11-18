@@ -3,6 +3,7 @@ import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { CalendarHeatmap, GridHeatmap, HBars, Legend, LineChart, StackedBars } from "../components/charts";
 import { RoutesMap } from "../components/maps";
+import { ZonesTab, TilesTab, GearTab } from "../components/InsightsExtras";
 import { Card, Empty, Seg, Skeleton, SportDot, Stat, Tabs } from "../components/ui";
 import { api } from "../lib/api";
 import { FAMILIES, FAMILY_LABEL, familyColor } from "../lib/colors";
@@ -10,15 +11,18 @@ import { duration, hours, int, km, num, speed } from "../lib/format";
 import { FamilyChips, METRICS, metricFormat, type Metric } from "../components/shared";
 import { SportIcon } from "../components/icons";
 
-type Tab = "trends" | "calendar" | "fitness" | "records" | "power" | "habits" | "map";
+type Tab = "trends" | "calendar" | "fitness" | "zones" | "records" | "power" | "habits" | "map" | "tiles" | "gear";
 const TABS: { value: Tab; label: string }[] = [
   { value: "trends", label: "Trends" },
   { value: "calendar", label: "Calendar" },
   { value: "fitness", label: "Fitness & form" },
+  { value: "zones", label: "Zones & efficiency" },
   { value: "records", label: "Records" },
   { value: "power", label: "Power curve" },
   { value: "habits", label: "Habits" },
   { value: "map", label: "Route map" },
+  { value: "tiles", label: "Explorer tiles" },
+  { value: "gear", label: "Gear" },
 ];
 const YEAR_COLORS = ["var(--series-1)", "var(--series-2)", "var(--series-3)", "var(--series-4)", "var(--series-5)"];
 type Range = "all" | "1y" | "90d" | "ytd";
@@ -351,6 +355,9 @@ export default function Insights() {
       {t === "power" && <PowerTab />}
       {t === "habits" && <Habits families={families} />}
       {t === "map" && <MapTab families={families} />}
+      {t === "zones" && <ZonesTab families={families} />}
+      {t === "tiles" && <TilesTab families={families} />}
+      {t === "gear" && <GearTab />}
     </>
   );
 }

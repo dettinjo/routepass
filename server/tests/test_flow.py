@@ -363,3 +363,23 @@ def test_provider_error_is_reported_with_hint(client, connected, mock_apis):
     _strava_list(mock_apis, [])
     runner.run_cycle("test", tracks=False)
     assert client.get("/api/v1/status", headers=AUTH).json()["connections"]["strava"]["error"] is None
+
+
+def test_poll_interval_is_30_min_or_manual(client):
+    from routepass.engine import runner
+
+    for bad in (1, 5, 15, 45):
+        assert (
+            client.patch("/api/v1/settings", json={"poll_interval_minutes": bad}, headers=AUTH).status_code
+            == 422
+        )
+    assert (
+        client.patch("/api/v1/settings", json={"poll_interval_minutes": 0}, headers=AUTH).status_code == 200
+    )
+    assert runner.poll_interval_min() == 0  # manual only
+    assert (
+        client.patch("/api/v1/settings", json={"poll_interval_minutes": 30}, headers=AUTH).status_code == 200
+    )
+    assert runner.poll_interval_min() == 30
+    client.patch("/api/v1/settings", json={"poll_interval_minutes": None}, headers=AUTH)
+    assert runner.poll_interval_min() == 30  # environment default
