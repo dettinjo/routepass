@@ -398,6 +398,34 @@ class UnlinkBody(BaseModel):
     source_id: int
 
 
+@router.get("/activities/{activity_id}/media", tags=["activities"])
+def activity_media(
+    activity_id: int, refresh: bool = False, db: Session = Depends(get_session)
+) -> dict[str, Any]:
+    """Photos (and Strava videos) of an activity from Strava and Komoot. Images load straight from the
+    platforms' CDNs; lists are cached for a few hours (refresh=true re-reads them)."""
+    from routepass.engine import media
+
+    act = _call(services.get_activity, db, activity_id)
+    return media.activity_media(db, act, refresh)
+
+
+class VisibilityBody(BaseModel):
+    level: Literal["public", "friends", "private"]
+    providers: list[Literal["strava", "komoot"]] | None = None
+
+
+@router.put("/activities/{activity_id}/visibility", tags=["activities"])
+def set_activity_visibility(
+    activity_id: int, body: VisibilityBody, db: Session = Depends(get_session)
+) -> dict[str, Any]:
+    """Who can see this activity, set on Strava and Komoot together (or only the given platforms)."""
+    from routepass.engine import visibility
+
+    act = _call(services.get_activity, db, activity_id)
+    return visibility.set_for_activity(db, act, body.level, body.providers)
+
+
 @router.post("/activities/{activity_id}/unlink", tags=["activities"])
 def unlink(activity_id: int, body: UnlinkBody, db: Session = Depends(get_session)) -> dict[str, Any]:
     return _call(services.unlink_source, db, activity_id, body.source_id)

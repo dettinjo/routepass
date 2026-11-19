@@ -96,6 +96,17 @@ def _cycle(trigger: str, full: bool, tracks: bool) -> dict[str, Any]:
         stats["linked"] = ingest.match_unlinked(db)
         note(f"matching: {stats['linked']} records merged into existing activities")
 
+    if conn.get("strava") and conn.get("komoot"):
+        try:
+            from routepass.engine import visibility
+
+            with session_scope() as db:
+                stats["visibility"] = visibility.propagate(db)
+            if stats["visibility"]:
+                note(f"visibility: {stats['visibility']} copies now match their original")
+        except Exception:  # noqa: BLE001
+            logger.exception("Visibility alignment failed")
+
     with session_scope() as db:
         has_strava_records = (
             db.scalar(

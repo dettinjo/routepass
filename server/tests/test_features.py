@@ -218,3 +218,60 @@ def test_merged_records_stay_merged_after_the_next_sync(client):
         assert db.scalar(select(func.count(Activity.id))) == 1
     dups = client.get("/api/v1/activities/duplicates", headers=AUTH).json()
     assert dups == []
+
+
+def test_visibility_levels_copies_and_propagation(client, monkeypatch):
+    from types import SimpleNamespace
+
+    from routepass.engine import visibility as vis
+
+    with session_scope() as db:
+        act = _activity(db, datetime(2026, 6, 1, 9), provider="komoot", ext="k9")
+        db.flush()
+        komoot_rec = (
+            act.sources[0] if act.sources else db.query(ProviderActivity).filter_by(external_id="k9").one()
+        )
+        komoot_rec.raw = {"status": "friends"}
+        db.refresh(act)
+        # A copy inherits the original's visibility …
+        d = rule_engine.decide(act, "komoot_to_strava", [], {"default_action": "sync"})
+        assert d.plan["strava"]["visibility"] == "followers_only"
+        # … unless a rule sets one.
+        rule = SimpleNamespace(
+            id=1,
+            priority=1,
+            enabled=True,
+            direction="komoot_to_strava",
+            name="r",
+            conditions={},
+            actions={"strava": {"visibility": "only_me"}},
+        )
+        d = rule_engine.decide(act, "komoot_to_strava", [rule], {"default_action": "sync"})
+        assert d.plan["strava"]["visibility"] == "only_me"
+
+        copy = ProviderActivity(
+            provider="strava",
+            external_id="s9",
+            activity_id=act.id,
+            name="A",
+            sport="Ride",
+            start_time=act.start_time,
+            created_by_sync=True,
+            raw={"visibility": "only_me", vis.SYNCED_FROM: "friends"},
+        )
+        db.add(copy)
+        db.flush()
+        pushed = []
+        monkeypatch.setattr(
+            vis,
+            "push",
+            lambda db, rec, level: (pushed.append((rec.provider, level)), vis._remember(rec, level)),
+        )
+        assert vis.propagate(db) == 0  # original unchanged since the copy was made: rule choice kept
+        komoot_rec.raw = {"status": "public"}  # the user makes the original public
+        assert vis.propagate(db) == 1 and pushed == [("strava", "public")]
+        assert vis.level_of(copy) == "public"
+        assert vis.propagate(db) == 0
+        act_id = act.id
+    row = client.get(f"/api/v1/activities/{act_id}", headers=AUTH).json()
+    assert row["visibility"] == {"by_provider": {"komoot": "public", "strava": "public"}, "mismatch": False}

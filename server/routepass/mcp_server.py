@@ -494,6 +494,25 @@ def test_rule(direction: str, conditions: dict, rule_id: int | None = None, limi
 
 
 @mcp.tool()
+def get_activity_media(activity_id: int) -> dict:
+    """Photo (and Strava video) URLs of an activity from Strava and Komoot."""
+    from routepass.engine import media
+
+    with session_scope() as db:
+        return media.activity_media(db, services.get_activity(db, activity_id))
+
+
+@mcp.tool()
+def set_activity_visibility(activity_id: int, level: str, providers: list[str] | None = None) -> dict:
+    """Set who can see an activity: level 'public' | 'friends' | 'private', on both platforms by default
+    (or only `providers`, e.g. ['komoot'])."""
+    from routepass.engine import visibility
+
+    with session_scope() as db:
+        return visibility.set_for_activity(db, services.get_activity(db, activity_id), level, providers)
+
+
+@mcp.tool()
 def get_data_quality() -> dict:
     """How much recent training load is measured (power / heart rate) rather than estimated, which profile
     values are missing, and values (max HR, FTP) suggested from the recorded data. Set them with
