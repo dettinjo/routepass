@@ -6,7 +6,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -17,7 +17,7 @@ from routepass.analysis import insights
 from routepass.analysis import track as trk
 from routepass.api import serialize
 from routepass.config import get_settings
-from routepass.db import get_session, session_scope
+from routepass.db import get_session
 from routepass.engine import ingest, runner, sync
 from routepass.engine.clients import (
     KOMOOT_ACCOUNT,
@@ -31,7 +31,7 @@ from routepass.engine.clients import (
 )
 from routepass.engine.rules import RuleError
 from routepass.models import SyncRun, Track
-from routepass.providers import komoot, sports, strava, strava_browser
+from routepass.providers import komoot, sports, strava, strava_userscript
 from routepass.providers.gpx import track_to_gpx
 from routepass.timeutil import utcnow
 
@@ -615,24 +615,49 @@ def strava_session_connect(body: StravaSessionBody, db: Session = Depends(get_se
     }
 
 
-@router.get("/connections/strava/browser-login/status", tags=["connections"])
-def strava_browser_login_status() -> dict[str, Any]:
-    """Return whether the embedded Playwright Chromium browser login is available."""
-    return strava_browser.browser_status()
+class StravaHandoffBody(BaseModel):
+    token: str
+    cookies: dict[str, str] | str
 
 
-@public.websocket("/connections/strava/browser-login")
-async def strava_browser_login_ws(websocket: WebSocket) -> None:
-    """Interactive in-app Strava browser login session that auto-captures HttpOnly session cookies."""
-    if auth.is_public_listener(websocket.scope) or auth.identify(websocket) is None:
-        await websocket.close(code=4401)
-        return
+@router.get("/connections/strava/userscript.user.js", tags=["connections"])
+def strava_userscript_download(request: Request) -> Response:
+    """Serve a personalized 1-click Tampermonkey/Userscript that auto-syncs Strava cookies."""
+    origin = str(request.base_url).rstrip("/") or get_settings().base_url.rstrip("/")
+    token = strava_userscript.issue_handoff_token()
+    script = strava_userscript.render_userscript(origin, token)
+    return Response(
+        content=script,
+        media_type="application/javascript; charset=utf-8",
+        headers={
+            "Content-Disposition": 'inline; filename="routepass-strava.user.js"',
+            "Cache-Control": "no-store",
+        },
+    )
 
-    def _on_auth(cookies: dict[str, str], athlete: dict[str, Any]) -> None:
-        with session_scope() as db:
-            _save_strava_web_session(db, cookies, athlete)
 
-    await strava_browser.run_browser_login_session(websocket, _on_auth)
+@public.post("/connections/strava/session/handoff", tags=["connections"])
+def strava_session_handoff(body: StravaHandoffBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    """Accept Strava session cookies from the installed userscript using its scoped HMAC token."""
+    if not strava_userscript.verify_handoff_token(body.token):
+        raise HTTPException(
+            401, "Invalid or expired Strava handoff token — reinstall the userscript in Settings"
+        )
+    try:
+        cookies = strava.parse_web_cookies(body.cookies)
+        with strava.StravaWebClient(cookies) as client:
+            athlete = client.athlete()
+            cookies = dict(client.cookies)
+    except strava.StravaAuthError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except strava.StravaError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    _save_strava_web_session(db, cookies, athlete)
+    return {
+        "ok": True,
+        "athlete": {"id": athlete.get("id"), "name": athlete.get("name") or athlete.get("firstname")},
+        "has_remember_token": "strava_remember_token" in cookies,
+    }
 
 
 @router.delete("/connections/strava/session", tags=["connections"])

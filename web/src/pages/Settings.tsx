@@ -4,7 +4,6 @@ import { useSearchParams } from "react-router-dom";
 import { BrandIcon, IconApi, IconRefresh, IconTarget, IconImport, IconUser } from "../components/icons";
 import { Callout, Card, Skeleton, useToast } from "../components/ui";
 import { StravaArchive } from "../components/StravaArchive";
-import { StravaBrowserLoginModal } from "../components/StravaBrowserLogin";
 import { api, type Me } from "../lib/api";
 import { useQuery } from "@tanstack/react-query";
 import { ago, int } from "../lib/format";
@@ -30,7 +29,6 @@ function Strava() {
   const [sessionCookie, setSessionCookie] = useState("");
   const [rememberToken, setRememberToken] = useState("");
   const [redirect, setRedirect] = useState<string | null>(null);
-  const [browserModalOpen, setBrowserModalOpen] = useState(false);
   const s = status?.connections.strava;
   const connect = async () => {
     try {
@@ -59,13 +57,16 @@ function Strava() {
         )}
         <div className="stack" style={{ gap: 8 }}>
           <p className="small muted" style={{ margin: 0 }}>
-            Sign in normally inside RoutePass with <b>Email 6-digit One-Time Code</b>, <b>Google</b>, <b>Apple</b>, or password — RoutePass automatically captures and refreshes your session cookie (<span className="mono">_strava4_session</span> + <span className="mono">strava_remember_token</span>) without requiring a paid Strava API subscription.
+            Sign in normally on <span className="mono">strava.com</span> (<b>Email 6-digit One-Time Code</b>, <b>Google</b>, <b>Apple</b>, or password) — no paid Strava API required. Install the tiny 1-click userscript once (requires <a href="https://www.tampermonkey.net/" target="_blank" rel="noreferrer">Tampermonkey 5+</a>), then click <b>Sign in to Strava</b> to capture and auto-refresh your session cookies.
           </p>
-          <div className="row">
-            <button className="primary" type="button" onClick={() => setBrowserModalOpen(true)}>
-              <BrandIcon provider="strava" size={16} />
-              {s?.mode === "web" || s?.mode === "oauth+web" ? "Sign in to Strava again" : "Sign in to Strava"}
-            </button>
+          <div className="row" style={{ gap: 8 }}>
+            <a className="button sm" href="/api/v1/connections/strava/userscript.user.js" target="_blank" rel="noreferrer">
+              1. Install 1-click connector (.user.js)
+            </a>
+            <a className="button primary sm" href="https://www.strava.com/dashboard#routepass-connect" target="_blank" rel="noreferrer">
+              <BrandIcon provider="strava" size={15} />
+              {s?.mode === "web" || s?.mode === "oauth+web" ? "2. Refresh Strava sign-in" : "2. Sign in to Strava"}
+            </a>
             {(s?.mode === "web" || s?.mode === "oauth+web") && (
               <button className="sm ghost" type="button" onClick={() => call.mutate({ path: "/connections/strava/session", method: "DELETE" }, { onSuccess: () => toast("Strava web session removed") })}>
                 Remove web session
@@ -73,7 +74,6 @@ function Strava() {
             )}
           </div>
         </div>
-        {browserModalOpen && <StravaBrowserLoginModal onClose={() => setBrowserModalOpen(false)} />}
         <details>
           <summary className="small secondary" style={{ cursor: "pointer" }}>
             Advanced: paste session cookie or <span className="mono">Copy as cURL</span> manually

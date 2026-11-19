@@ -427,17 +427,48 @@ def test_strava_remember_token_auto_renews_expired_session(mock_apis) -> None:
     assert refreshed and refreshed[-1]["_strava4_session"] == "renewed-session-cookie"
 
 
-def test_strava_browser_login_status_and_helpers(client) -> None:
-    """Option A: browser-login status endpoint and URL detector work as expected."""
-    from routepass.providers import strava_browser
+def test_strava_userscript_and_session_handoff(client, mock_apis) -> None:
+    """Option 1: 1-click userscript download and scoped HMAC session handoff work end-to-end."""
+    import re
 
-    assert not strava_browser._is_authenticated_strava_url("https://www.strava.com/login")
-    assert not strava_browser._is_authenticated_strava_url("https://www.strava.com/session")
-    assert not strava_browser._is_authenticated_strava_url("https://accounts.google.com/o/oauth2/auth")
-    assert strava_browser._is_authenticated_strava_url("https://www.strava.com/dashboard")
-    assert strava_browser._is_authenticated_strava_url("https://www.strava.com/onboarding")
-    assert strava_browser._is_authenticated_strava_url("https://www.strava.com/athletes/77777")
-
-    r = client.get("/api/v1/connections/strava/browser-login/status", headers=AUTH)
+    r = client.get("/api/v1/connections/strava/userscript.user.js", headers=AUTH)
     assert r.status_code == 200
-    assert r.json()["available"] is True
+    script = r.text
+    assert "// ==UserScript==" in script
+    assert "GM_cookie" in script
+    assert "/api/v1/connections/strava/session/handoff" in script
+
+    m = re.search(r'const HANDOFF_TOKEN = "([^"]+)";', script)
+    assert m, "handoff token missing from userscript"
+    token = m.group(1)
+
+    # Invalid token is rejected
+    bad = client.post(
+        "/api/v1/connections/strava/session/handoff",
+        json={"token": "invalid.token", "cookies": {"_strava4_session": "abc"}},
+    )
+    assert bad.status_code == 401
+
+    # Valid scoped token connects Strava without needing the master API token
+    mock_apis.get("https://www.strava.com/dashboard").mock(
+        return_value=httpx.Response(
+            200,
+            text='<html><head><meta name="csrf-token" content="csrf-u1" /></head>'
+            '<body><a href="/athletes/88888">Jonathan</a></body></html>',
+        )
+    )
+    ok = client.post(
+        "/api/v1/connections/strava/session/handoff",
+        json={
+            "token": token,
+            "cookies": {
+                "_strava4_session": "userscript-session-val",
+                "strava_remember_token": "userscript-remember-val",
+            },
+        },
+    )
+    assert ok.status_code == 200, ok.text
+    body = ok.json()
+    assert body["ok"] is True
+    assert body["has_remember_token"] is True
+    assert body["athlete"]["id"] == 88888
