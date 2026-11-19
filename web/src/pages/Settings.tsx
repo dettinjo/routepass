@@ -202,7 +202,7 @@ export default function Settings() {
   const { data: st } = useStatus();
   const origin = window.location.origin;
   const apiBase = st?.public_url || origin;
-  const mcpConfig = JSON.stringify({ mcpServers: { routepass: { type: "http", url: `${apiBase}/mcp`, headers: { Authorization: "Bearer <ROUTEPASS_API_TOKEN>" } } } }, null, 2);
+  const mcpConfig = JSON.stringify({ mcpServers: { routepass: { type: "http", url: `${apiBase}/mcp`, headers: { Authorization: "Bearer <ROUTEPASS_LOCAL_API_TOKEN>" } } } }, null, 2);
 
   return (
     <>
@@ -272,7 +272,7 @@ export default function Settings() {
               <dt>REST API</dt><dd><a href="/api/docs" target="_blank" rel="noreferrer" className="mono">{origin}/api/v1</a> · <a href="/api/docs" target="_blank" rel="noreferrer">interactive docs</a></dd>
               <dt>MCP</dt><dd className="mono">{origin}/mcp</dd>
               {st?.public_url && <><dt>Public (API only)</dt><dd className="mono">{st.public_url}/api/v1 · {st.public_url}/mcp</dd></>}
-              <dt>Auth</dt><dd>Header <span className="mono">Authorization: Bearer &lt;ROUTEPASS_API_TOKEN&gt;</span> (the web UI uses your sign-in instead)</dd>
+              <dt>Auth</dt><dd>Header <span className="mono">Authorization: Bearer &lt;ROUTEPASS_LOCAL_API_TOKEN&gt;</span> (the web UI uses your sign-in instead)</dd>
             </dl>
             <div className="section-label">MCP client config</div>
             <pre className="mono callout" style={{ margin: 0, overflowX: "auto" }}>{mcpConfig}</pre>

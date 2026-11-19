@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,7 +12,10 @@ class Settings(BaseSettings):
 
     data_dir: Path = Path("./data")
     # Bearer token for API and MCP clients (also accepted as a UI login fallback).
-    api_token: str = ""
+    api_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("ROUTEPASS_LOCAL_API_TOKEN", "ROUTEPASS_API_TOKEN"),
+    )
     # Who may sign in to the web UI (comma-separated e-mails). With neither this nor api_token set,
     # the instance is open (trusted network only).
     allowed_emails: str = ""
