@@ -35,16 +35,175 @@ const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
   completed: { label: "Done", cls: "good" },
   partial: { label: "Partial", cls: "warn" },
   missed: { label: "Missed", cls: "bad" },
-  moved: { label: "Moved", cls: "warn" },
+  moved: { label: "Adapted", cls: "warn" },
   skipped: { label: "Skipped", cls: "" },
   planned: { label: "Planned", cls: "" },
 };
+
+const SPORT_META: Record<string, { color: string; icon: string; label: string }> = {
+  trail_run: { color: "#10b981", icon: "⛰️", label: "Trail Run" },
+  run: { color: "#3b82f6", icon: "🏃", label: "Run" },
+  ride: { color: "#f97316", icon: "🚴", label: "Ride" },
+  cycling: { color: "#f97316", icon: "🚴", label: "Cycling" },
+  swim: { color: "#06b6d4", icon: "🏊", label: "Swim" },
+  strength: { color: "#8b5cf6", icon: "💪", label: "Strength / Mobility" },
+  brick: { color: "#ec4899", icon: "⚡", label: "Brick" },
+  recovery: { color: "#14b8a6", icon: "🧘", label: "Recovery" },
+  rest: { color: "#64748b", icon: "😴", label: "Rest" },
+};
+
+const SKIP_REASONS = [
+  { id: "time", icon: "⏰", label: "No time" },
+  { id: "sickness", icon: "🤒", label: "Sick" },
+  { id: "muscle_pain", icon: "🦵", label: "Muscle pain" },
+  { id: "fatigue", icon: "😴", label: "Not recovered" },
+  { id: "injury", icon: "🩹", label: "Injury" },
+] as const;
+
+type SkipReason = (typeof SKIP_REASONS)[number]["id"];
+type SkipSeverity = "mild" | "moderate" | "severe";
 
 function fmtTimeHms(sec: number | null | undefined): string {
   if (sec == null || sec <= 0) return "—";
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   return h > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m`;
+}
+
+function fmtPaceMinKm(secPerKm: number | null | undefined): string {
+  if (secPerKm == null || secPerKm <= 0) return "—";
+  const m = Math.floor(secPerKm / 60);
+  const s = Math.round(secPerKm % 60);
+  return `${m}:${String(s).padStart(2, "0")} /km`;
+}
+
+function fmtDelta(deltaS: number | null | undefined): { text: string; cls: string } | null {
+  if (deltaS == null) return null;
+  const absMin = Math.round(Math.abs(deltaS) / 60);
+  if (absMin === 0) return { text: "On target", cls: "good" };
+  return deltaS < 0
+    ? { text: `${absMin}m faster than goal`, cls: "good" }
+    : { text: `+${absMin}m vs goal`, cls: absMin <= 15 ? "warn" : "bad" };
+}
+
+function AlignmentGauge({ score }: { score: number }) {
+  const clamped = Math.max(0, Math.min(100, Math.round(score)));
+  const r = 44;
+  const circ = 2 * Math.PI * r;
+  const offset = circ * (1 - clamped / 100);
+  const stroke = clamped >= 80 ? "#10b981" : clamped >= 60 ? "#f59e0b" : "#ef4444";
+  return (
+    <div className="tp-gauge" aria-label={`Plan alignment ${clamped} out of 100`}>
+      <svg width="108" height="108" viewBox="0 0 108 108">
+        <circle cx="54" cy="54" r={r} fill="none" stroke="var(--border)" strokeWidth="9" />
+        <circle
+          cx="54"
+          cy="54"
+          r={r}
+          fill="none"
+          stroke={stroke}
+          strokeWidth="9"
+          strokeLinecap="round"
+          strokeDasharray={circ}
+          strokeDashoffset={offset}
+        />
+      </svg>
+      <div className="tp-gauge-label">
+        <span className="tp-gauge-val" style={{ color: stroke }}>{clamped}</span>
+        <span className="tp-gauge-sub">Align</span>
+      </div>
+    </div>
+  );
+}
+
+/** Simulated completed RoutePass activity card for Race Day prediction */
+function RaceActivityPreviewCard({ sim }: { sim: any }) {
+  if (!sim) return null;
+  const delta = fmtDelta(sim.delta_s);
+  const isRun = sim.sport === "TrailRun" || sim.sport === "Run";
+  return (
+    <div className="tp-race-card">
+      <div className="row between" style={{ gap: 10, flexWrap: "wrap", alignItems: "flex-start" }}>
+        <div>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+            <span className="badge" style={{ background: "rgba(249,115,22,0.16)", color: "#f97316", fontWeight: 700 }}>
+              🏁 Projected Race Finish
+            </span>
+            <span className="badge">{sim.sport}</span>
+            <span className="xs muted mono">{sim.date}</span>
+            {sim.confidence_pct != null && (
+              <span className="xs muted">Confidence: <b>{sim.confidence_pct}%</b></span>
+            )}
+          </div>
+          <h3 style={{ margin: "8px 0 2px", fontSize: 18 }}>{sim.name}</h3>
+          <div className="xs muted">Simulated as a completed RoutePass activity based on your live fitness trajectory</div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div className="tp-race-time">{fmtTimeHms(sim.predicted_time_s)}</div>
+          {delta && (
+            <div style={{ marginTop: 4 }}>
+              <span className={`badge ${delta.cls}`}>{delta.text}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="stats mt12">
+        <Stat label="Distance" value={num(sim.distance_km, 1)} unit="km" />
+        <Stat label="Elevation D+" value={`+${int(sim.elevation_gain_m)}`} unit="m" />
+        {isRun ? (
+          <>
+            <Stat label="Avg Pace" value={fmtPaceMinKm(sim.avg_pace_s_per_km)} unit={`${num(sim.avg_speed_kmh, 1)} km/h`} />
+            <Stat label="Est. GAP" value={fmtPaceMinKm(sim.gap_s_per_km)} unit={sim.effort_km ? `${sim.effort_km} eff-km` : ""} />
+          </>
+        ) : (
+          <>
+            <Stat label="Avg Speed" value={num(sim.avg_speed_kmh, 1)} unit="km/h" />
+            {sim.avg_np_w ? <Stat label="Est. Norm Power" value={int(sim.avg_np_w)} unit="W" /> : null}
+          </>
+        )}
+        <Stat label="Est. Load" value={int(sim.estimated_tss)} unit="TSS" />
+        <Stat label="Fueling Target" value={`${int(sim.estimated_carbs_g)}g`} unit={`carbs · ~${int(sim.estimated_calories)} kcal`} />
+      </div>
+
+      {sim.splits?.length > 0 && (
+        <div style={{ overflowX: "auto" }}>
+          <table className="tp-split-table">
+            <thead>
+              <tr>
+                <th>Split / Leg</th>
+                <th>Dist</th>
+                <th>D+</th>
+                <th>Split Time</th>
+                <th>Cumulative</th>
+                <th>Pace / Speed</th>
+                <th>Pacing Cue</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sim.splits.map((sp: any, i: number) => (
+                <tr key={i}>
+                  <td><b>{sp.label}</b></td>
+                  <td>{sp.distance_km > 0 ? `${num(sp.distance_km, 1)} km` : "—"}</td>
+                  <td>{sp.elev_m > 0 ? `+${int(sp.elev_m)} m` : "—"}</td>
+                  <td><b>{fmtTimeHms(sp.time_s)}</b></td>
+                  <td className="muted">{fmtTimeHms(sp.cumulative_s)}</td>
+                  <td>
+                    {sp.pace_s_per_km
+                      ? fmtPaceMinKm(sp.pace_s_per_km)
+                      : sp.speed_kmh
+                        ? `${num(sp.speed_kmh, 1)} km/h`
+                        : "—"}
+                  </td>
+                  <td className="muted">{sp.note || ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function parseHmToSec(hm: string): number | null {
@@ -521,6 +680,10 @@ export function TrainingTab() {
   const [chartMode, setChartMode] = useState<"ctl" | "time">("ctl");
   const [weekIdx, setWeekIdx] = useState<number | null>(null);
   const [adaptNote, setAdaptNote] = useState("");
+  const [skipSessionId, setSkipSessionId] = useState<number | null>(null);
+  const [skipReason, setSkipReason] = useState<SkipReason>("time");
+  const [skipSeverity, setSkipSeverity] = useState<SkipSeverity>("moderate");
+  const [skipNote, setSkipNote] = useState("");
 
   const listQ = useQuery<any>({
     queryKey: ["training-plans"],
@@ -583,6 +746,22 @@ export function TrainingTab() {
       api(`/training/sessions/${id}`, { method: "PATCH", body }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["training-plan", activeId] });
+    },
+    onError: (e: Error) => toast(e.message, true),
+  });
+
+  const skipAdaptMut = useMutation({
+    mutationFn: ({ id, reason, severity, note }: { id: number; reason: SkipReason; severity: SkipSeverity; note: string }) =>
+      api<any>(`/training/sessions/${id}/skip-adapt`, {
+        method: "POST",
+        body: { reason, severity, note },
+      }),
+    onSuccess: (r) => {
+      qc.setQueryData(["training-plan", activeId], r.plan);
+      setSkipSessionId(null);
+      setSkipNote("");
+      const firstAction = r.result?.immediate_actions?.[0];
+      toast(firstAction || r.result?.adaptation?.summary || "Session adapted for recovery");
     },
     onError: (e: Error) => toast(e.message, true),
   });
@@ -658,26 +837,35 @@ export function TrainingTab() {
           const a = plan.analytics;
           const pred = a.prediction;
           const align = a.alignment;
+          const base = a.baseline || {};
+          const gam = a.gamification || {};
           const verdict = VERDICT_META[pred.verdict] || VERDICT_META.on_track;
           const weeks: any[] = plan.weeks || [];
           const curWeek = weeks.find((w) => w.week_index === (weekIdx ?? a.current_week_index)) || weeks[0];
           const discEntries = Object.entries(a.disciplines || {}) as [string, any][];
+          const readinessTone =
+            base.readiness_label === "Fresh & Sharp" || base.readiness_label === "Building"
+              ? "good"
+              : base.readiness_label === "Detraining" || base.readiness_label === "Fatigued"
+                ? "warn"
+                : "";
 
           return (
             <>
-              {/* Plan Summary & KPIs */}
-              <Card
-                title={
-                  <span className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-                    <span>{plan.name}</span>
+              {/* Colorful Hero + Circular Alignment Gauge + Gamification */}
+              <div className="tp-hero">
+                <div className="row between" style={{ gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+                  <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                    <h2 style={{ margin: 0, fontSize: 20 }}>{plan.name}</h2>
                     <span className="badge">{PLAN_TYPE_LABELS[plan.plan_type as PlanType] || plan.plan_type}</span>
                     <span className={`badge ${PHASE_TONE[a.current_phase] || ""}`}>
                       {a.current_phase.replace("_", " ")}
                     </span>
                     <span className={`badge ${verdict.cls}`}>{verdict.label}</span>
-                  </span>
-                }
-                actions={
+                    <span className="tp-badge-pill auto" title="Completed Strava/Komoot workouts auto-match and adapt your calendar">
+                      ● Auto-tracking Strava & Komoot
+                    </span>
+                  </div>
                   <div className="row" style={{ gap: 6 }}>
                     {aiInfo && (
                       <span className="badge" title="Gemini monthly credit usage">
@@ -691,38 +879,95 @@ export function TrainingTab() {
                       Delete
                     </button>
                   </div>
-                }
-              >
-                <div className="stats">
-                  <Stat
-                    label="Race Countdown"
-                    value={a.days_to_race >= 0 ? `${a.days_to_race}d` : "Completed"}
-                    unit={a.days_to_race >= 0 ? `(${a.weeks_to_race}w)` : ""}
-                  />
-                  <Stat label="Plan Alignment" value={`${Math.round(align.overall)}`} unit="/ 100" />
-                  <Stat
-                    label="Predicted Finish"
-                    value={fmtTimeHms(pred.race_day_trend_s)}
-                    unit={pred.target_time_s ? `vs ${fmtTimeHms(pred.target_time_s)}` : "at current trend"}
-                  />
-                  <Stat
-                    label="Optimal (100%)"
-                    value={fmtTimeHms(pred.race_day_optimal_s)}
-                    unit={`CTL ${a.baseline.ctl}`}
-                  />
                 </div>
 
-                {/* 4-pillar alignment mini strip */}
-                <div className="row mt12 xs muted" style={{ gap: 16, flexWrap: "wrap" }}>
-                  <span>Completion: <b>{Math.round(align.completion)}%</b></span>
-                  <span>Load fidelity: <b>{Math.round(align.load)}%</b></span>
-                  <span>Zone discipline: <b>{Math.round(align.intensity)}%</b></span>
-                  <span>Key sessions: <b>{Math.round(align.key_sessions)}%</b></span>
-                  {a.baseline.acwr != null && <span>ACWR: <b>{a.baseline.acwr}</b></span>}
+                <div className="tp-hero-grid">
+                  <AlignmentGauge score={align.overall ?? 100} />
+                  <div className="stack" style={{ gap: 10, width: "100%" }}>
+                    <div className="stats">
+                      <Stat
+                        label="Race Countdown"
+                        value={a.days_to_race >= 0 ? `${a.days_to_race}d` : "Completed"}
+                        unit={a.days_to_race >= 0 ? `(${a.weeks_to_race}w)` : ""}
+                      />
+                      <Stat
+                        label="Predicted Finish"
+                        value={fmtTimeHms(pred.race_day_trend_s)}
+                        unit={pred.target_time_s ? `vs ${fmtTimeHms(pred.target_time_s)}` : "at current trend"}
+                      />
+                      <Stat
+                        label="Optimal (100%)"
+                        value={fmtTimeHms(pred.race_day_optimal_s)}
+                        unit={`CTL ${base.ctl ?? "—"}`}
+                      />
+                      <Stat
+                        label="Live Readiness"
+                        value={base.readiness_label || "Steady"}
+                        unit={
+                          base.days_since_last_activity != null
+                            ? base.days_since_last_activity === 0
+                              ? "trained today"
+                              : `${base.days_since_last_activity}d since last`
+                            : "no recent log"
+                        }
+                      />
+                    </div>
+
+                    {/* 4-pillar alignment mini strip */}
+                    <div className="row xs muted" style={{ gap: 14, flexWrap: "wrap" }}>
+                      <span>Completion: <b>{Math.round(align.completion)}%</b></span>
+                      <span>Load: <b>{Math.round(align.load)}%</b></span>
+                      <span>Zones: <b>{Math.round(align.intensity)}%</b></span>
+                      <span>Key workouts: <b>{Math.round(align.key_sessions)}%</b></span>
+                      <span>CTL / ATL / TSB: <b>{base.ctl}</b> / <b>{base.atl}</b> / <b>{base.tsb}</b></span>
+                      {base.acwr != null && <span>ACWR: <b>{base.acwr}</b></span>}
+                      {base.detraining_factor != null && base.detraining_factor < 0.995 && (
+                        <span style={{ color: "var(--warn)" }}>
+                          Recency factor: <b>{Math.round(base.detraining_factor * 100)}%</b>
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 </div>
+
+                {/* Gamification XP / Level / Streak / Badges */}
+                {gam.level != null && (
+                  <div className="tp-xp-wrap">
+                    <div className="row between xs" style={{ gap: 8, flexWrap: "wrap" }}>
+                      <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                        <b>🏆 Level {gam.level} · {gam.level_title}</b>
+                        <span className="muted">{int(gam.xp)} / {int(gam.xp_next_level)} XP</span>
+                      </div>
+                      <div className="row" style={{ gap: 10 }}>
+                        <span>🔥 Streak: <b>{gam.streak_sessions || 0}</b></span>
+                        <span>✅ Completed: <b>{gam.completed_sessions || 0}</b></span>
+                      </div>
+                    </div>
+                    <div className="tp-xp-track">
+                      <div className="tp-xp-fill" style={{ width: `${Math.max(4, gam.xp_progress_pct || 0)}%` }} />
+                    </div>
+                    {gam.badges?.length > 0 && (
+                      <div className="row mt8" style={{ gap: 6, flexWrap: "wrap" }}>
+                        {gam.badges.map((b: any) => (
+                          <span key={b.id} className={`tp-badge-pill ${b.tone || ""}`}>
+                            <span>{b.icon}</span>
+                            <span>{b.label}</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {base.readiness_note && (
+                  <div className="row mt12 xs" style={{ gap: 8, flexWrap: "wrap" }}>
+                    <span className={`badge ${readinessTone}`}>{base.readiness_label || "Fitness"}</span>
+                    <span className="muted">{base.readiness_note}</span>
+                  </div>
+                )}
 
                 {plan.coach_summary && (
-                  <p className="small muted mt12" style={{ marginBottom: 0 }}>
+                  <p className="small muted mt8" style={{ marginBottom: 0 }}>
                     {plan.coach_summary}
                   </p>
                 )}
@@ -736,19 +981,10 @@ export function TrainingTab() {
                     ))}
                   </div>
                 )}
+              </div>
 
-                {pred.race_day_splits && Object.keys(pred.race_day_splits).length > 1 && (
-                  <div className="row mt12 xs muted" style={{ gap: 12, flexWrap: "wrap" }}>
-                    <b>Predicted Splits:</b>
-                    {pred.race_day_splits.swim_s > 0 && <span>Swim {fmtTimeHms(pred.race_day_splits.swim_s)}</span>}
-                    {pred.race_day_splits.bike_s > 0 && <span>Bike {fmtTimeHms(pred.race_day_splits.bike_s)}</span>}
-                    {pred.race_day_splits.run_s > 0 && <span>Run {fmtTimeHms(pred.race_day_splits.run_s)}</span>}
-                    {pred.race_day_splits.transitions_s > 0 && (
-                      <span>T1+T2 {fmtTimeHms(pred.race_day_splits.transitions_s)}</span>
-                    )}
-                  </div>
-                )}
-              </Card>
+              {/* Simulated Completed Race Activity Preview Card */}
+              <RaceActivityPreviewCard sim={pred.simulated_activity} />
 
               {/* Development & Prediction Graph */}
               <Card
@@ -809,16 +1045,17 @@ export function TrainingTab() {
                   <div className="stack" style={{ gap: 10 }}>
                     {discEntries.map(([disc, d]) => {
                       const pct = d.planned_hours > 0 ? Math.min(100, Math.round((d.actual_hours / d.planned_hours) * 100)) : 0;
+                      const sm = SPORT_META[disc] || { color: "var(--accent)", icon: "🏅", label: disc };
                       return (
                         <div key={disc}>
                           <div className="row between xs">
-                            <b style={{ textTransform: "capitalize" }}>{disc}</b>
+                            <b>{sm.icon} {sm.label}</b>
                             <span className="muted">
                               {d.actual_hours}h / {d.planned_hours}h · {d.completed_sessions}/{d.planned_sessions} sessions ({pct}%)
                             </span>
                           </div>
-                          <div style={{ height: 7, borderRadius: 4, background: "var(--border)", marginTop: 4, overflow: "hidden" }}>
-                            <div style={{ width: `${pct}%`, height: "100%", background: "var(--accent)", borderRadius: 4 }} />
+                          <div style={{ height: 8, borderRadius: 999, background: "var(--border)", marginTop: 4, overflow: "hidden" }}>
+                            <div style={{ width: `${pct}%`, height: "100%", background: sm.color, borderRadius: 999 }} />
                           </div>
                         </div>
                       );
@@ -872,21 +1109,40 @@ export function TrainingTab() {
                   <div className="stack" style={{ gap: 10 }}>
                     {(curWeek.sessions || []).map((s: any) => {
                       const sb = STATUS_BADGE[s.status] || STATUS_BADGE.planned;
+                      const sm =
+                        s.session_type === "recovery"
+                          ? SPORT_META.recovery
+                          : SPORT_META[s.sport] || { color: "var(--accent)", icon: "🏅", label: s.sport };
+                      const isSkipOpen = skipSessionId === s.id;
+                      const cls = [
+                        "tp-session",
+                        s.priority === "key" ? "key" : "",
+                        s.status === "completed" ? "done" : "",
+                        s.status === "skipped" ? "skipped" : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ");
+
                       return (
                         <div
                           key={s.id}
-                          style={{
-                            border: "1px solid var(--border)",
-                            borderRadius: 10,
-                            padding: "10px 12px",
-                            background: s.priority === "key" ? "var(--surface-2, var(--bg))" : "transparent",
-                          }}
+                          className={cls}
+                          style={{ "--sport-color": sm.color } as React.CSSProperties}
                         >
                           <div className="row between" style={{ gap: 8, flexWrap: "wrap" }}>
                             <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
                               <span className="mono xs muted">{s.scheduled_date}</span>
-                              <span className="badge">{s.sport.replace("_", " ")}</span>
-                              {s.priority === "key" && <span className="badge warn">KEY</span>}
+                              <span
+                                className="badge"
+                                style={{
+                                  background: `${sm.color}20`,
+                                  color: sm.color,
+                                  fontWeight: 700,
+                                }}
+                              >
+                                {sm.icon} {sm.label}
+                              </span>
+                              {s.priority === "key" && <span className="badge warn">★ KEY</span>}
                               <span className={`badge ${sb.cls}`}>{sb.label}</span>
                               <b>{s.title}</b>
                             </div>
@@ -914,10 +1170,19 @@ export function TrainingTab() {
                                     +1d
                                   </button>
                                   <button
-                                    className="sm ghost"
-                                    onClick={() => sessionMut.mutate({ id: s.id, body: { status: "skipped" } })}
+                                    className={isSkipOpen ? "sm primary" : "sm ghost"}
+                                    onClick={() => {
+                                      if (isSkipOpen) {
+                                        setSkipSessionId(null);
+                                      } else {
+                                        setSkipSessionId(s.id);
+                                        setSkipReason("time");
+                                        setSkipSeverity("moderate");
+                                        setSkipNote("");
+                                      }
+                                    }}
                                   >
-                                    Skip
+                                    {isSkipOpen ? "Cancel" : "Skip / Adapt"}
                                   </button>
                                 </>
                               )}
@@ -930,11 +1195,11 @@ export function TrainingTab() {
                             {s.target_elev_m > 0 && ` · +${int(s.target_elev_m)} m`}
                             {s.target_tss > 0 && ` · ${int(s.target_tss)} TSS`}
                             {s.scheduled_start && s.scheduled_end
-                              ? ` · ${s.scheduled_start.slice(11, 16)}–${s.scheduled_end.slice(11, 16)}`
+                              ? ` · 🕒 ${s.scheduled_start.slice(11, 16)}–${s.scheduled_end.slice(11, 16)}`
                               : s.scheduled_slot
                                 ? ` · ${s.scheduled_slot}`
                                 : ""}
-                            {s.gcal_event_id && " · Calendar synced"}
+                            {s.gcal_event_id && " · 📅 Calendar synced"}
                             {s.compliance_score != null && ` · Compliance ${Math.round(s.compliance_score)}%`}
                           </div>
 
@@ -949,8 +1214,70 @@ export function TrainingTab() {
                           )}
 
                           {s.adaptation_note && (
-                            <div className="xs mt8" style={{ color: "var(--warn)" }}>
-                              Adapted: {s.adaptation_note}
+                            <div className="xs mt8" style={{ color: "var(--warn)", fontWeight: 600 }}>
+                              ↻ {s.adaptation_note}
+                            </div>
+                          )}
+
+                          {isSkipOpen && (
+                            <div className="tp-skip-drawer">
+                              <div className="xs" style={{ fontWeight: 700, marginBottom: 8 }}>
+                                Why are you skipping or modifying this session? RoutePass will automatically adapt upcoming days & sync Google Calendar:
+                              </div>
+                              <div className="row" style={{ gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                                {SKIP_REASONS.map((r) => (
+                                  <button
+                                    key={r.id}
+                                    type="button"
+                                    className={`tp-reason-btn ${skipReason === r.id ? "active" : ""}`}
+                                    onClick={() => setSkipReason(r.id)}
+                                  >
+                                    <span>{r.icon}</span>
+                                    <span>{r.label}</span>
+                                  </button>
+                                ))}
+                              </div>
+
+                              {skipReason !== "time" && (
+                                <div className="row xs" style={{ gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                                  <span className="muted">Severity:</span>
+                                  {(["mild", "moderate", "severe"] as SkipSeverity[]).map((sev) => (
+                                    <button
+                                      key={sev}
+                                      type="button"
+                                      className={`tp-reason-btn ${skipSeverity === sev ? "active" : ""}`}
+                                      style={{ textTransform: "capitalize", padding: "4px 9px" }}
+                                      onClick={() => setSkipSeverity(sev)}
+                                    >
+                                      {sev}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+
+                              <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                                <input
+                                  style={{ flex: "1 1 200px" }}
+                                  placeholder="Optional note (e.g. 'Tight left calf', 'Mild cold')…"
+                                  value={skipNote}
+                                  onChange={(e) => setSkipNote(e.target.value)}
+                                />
+                                <button
+                                  type="button"
+                                  className="sm primary"
+                                  disabled={skipAdaptMut.isPending}
+                                  onClick={() =>
+                                    skipAdaptMut.mutate({
+                                      id: s.id,
+                                      reason: skipReason,
+                                      severity: skipSeverity,
+                                      note: skipNote,
+                                    })
+                                  }
+                                >
+                                  {skipAdaptMut.isPending ? "Adapting Plan…" : "Apply & Adapt Plan"}
+                                </button>
+                              </div>
                             </div>
                           )}
                         </div>
@@ -968,7 +1295,7 @@ export function TrainingTab() {
                       <div key={ad.id} style={{ borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
                         <div className="row between xs muted">
                           <span>
-                            <b>{ad.trigger.replace("_", " ")}</b> · <span className="mono">{ad.model_used}</span>
+                            <b>{ad.trigger.replaceAll("_", " ")}</b> · <span className="mono">{ad.model_used}</span>
                           </span>
                           <span>{ad.created_at?.slice(0, 16).replace("T", " ")} UTC</span>
                         </div>

@@ -34,6 +34,24 @@ export function GoogleCalendarCard() {
   const [autoSync, setAutoSync] = useState(true);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const gcalStatus = params.get("gcal");
+    if (gcalStatus === "connected") {
+      toast("Google Calendar connected! Select your dedicated training calendar below.");
+      qc.invalidateQueries({ queryKey: ["gcal-config"] });
+      qc.invalidateQueries({ queryKey: ["gcal-calendars"] });
+      params.delete("gcal");
+      const clean = `${window.location.pathname}${params.toString() ? "?" + params.toString() : ""}`;
+      window.history.replaceState({}, "", clean);
+    } else if (gcalStatus === "error") {
+      toast("Google Calendar authorization failed or was cancelled.", true);
+      params.delete("gcal");
+      const clean = `${window.location.pathname}${params.toString() ? "?" + params.toString() : ""}`;
+      window.history.replaceState({}, "", clean);
+    }
+  }, [qc, toast]);
+
+  useEffect(() => {
     if (!cfg) return;
     setTargetId(cfg.target_calendar_id || "");
     setBusyIds(cfg.busy_calendar_ids || []);
@@ -132,8 +150,20 @@ export function GoogleCalendarCard() {
               your dedicated training calendar automatically synced and moved when workouts are adapted.
             </p>
             {cfg?.redirect_uri && (
-              <div className="xs muted">
-                Authorized redirect URI: <span className="mono">{cfg.redirect_uri}</span>
+              <div className="row xs muted" style={{ gap: 6, flexWrap: "wrap" }}>
+                <span>
+                  Authorized redirect URI: <span className="mono">{cfg.redirect_uri}</span>
+                </span>
+                <button
+                  type="button"
+                  className="sm ghost"
+                  onClick={() => {
+                    navigator.clipboard?.writeText(cfg.redirect_uri);
+                    toast("Copied redirect URI");
+                  }}
+                >
+                  Copy
+                </button>
               </div>
             )}
             <div className="row" style={{ gap: 8 }}>

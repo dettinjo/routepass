@@ -37,7 +37,9 @@ GCAL_SCOPES = (
     "https://www.googleapis.com/auth/calendar.readonly "
     "https://www.googleapis.com/auth/calendar.events"
 )
-GCAL_CALLBACK_PATH = "/api/v1/connections/google-calendar/callback"
+# Reuse the same OAuth callback path already registered for Google Sign-In
+# (disambiguated by signed `state.kind == "gcal"`), preventing redirect_uri_mismatch.
+GCAL_CALLBACK_PATH = "/api/v1/auth/google/callback"
 
 _SECRET_KEY = "gcal.credentials"
 _CONFIG_KEY = "gcal.config"

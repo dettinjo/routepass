@@ -960,8 +960,22 @@ def google_start() -> RedirectResponse:
 
 
 @public.get("/auth/google/callback", tags=["auth"], include_in_schema=False)
-def google_callback(code: str = "", state: str = "", error: str = "") -> RedirectResponse:
-    """Arrives on the public URL; hands the identity to the private UI host with a one-time code."""
+def google_callback(
+    code: str = "", state: str = "", error: str = "", db: Session = Depends(get_session)
+) -> RedirectResponse:
+    """Arrives on the public URL; handles both Google Sign-In and Google Calendar OAuth."""
+    parsed_state = auth.unsign(state) if state else None
+    if parsed_state and parsed_state.get("kind") == "gcal":
+        from routepass.providers import gcal
+
+        if error or not code:
+            return RedirectResponse(_ui(f"/settings?gcal=error&reason={error or 'cancelled'}"))
+        try:
+            gcal.exchange_code(db, code, state)
+        except gcal.GCalError:
+            return RedirectResponse(_ui("/settings?gcal=error"))
+        return RedirectResponse(_ui("/settings?gcal=connected"))
+
     if error or not code:
         return RedirectResponse(_ui(f"/login?error={error or 'cancelled'}"))
     try:
@@ -1250,6 +1264,12 @@ def update_training_session(
     if body.adaptation_note is not None:
         s.adaptation_note = body.adaptation_note.strip()[:300]
     db.flush()
+    from routepass.analysis import training
+    from routepass.models import TrainingPlan
+
+    plan = db.get(TrainingPlan, s.plan_id)
+    if plan is not None:
+        training._maybe_sync_calendar(db, plan)
     return {
         "id": s.id,
         "scheduled_date": s.scheduled_date,
@@ -1258,6 +1278,37 @@ def update_training_session(
         "compliance_score": s.compliance_score,
         "adaptation_note": s.adaptation_note,
     }
+
+
+class SkipAdaptSessionBody(BaseModel):
+    reason: Literal["time", "sickness", "muscle_pain", "fatigue", "injury"]
+    severity: Literal["mild", "moderate", "severe"] = "moderate"
+    note: str = ""
+
+
+@router.post("/training/sessions/{session_id}/skip-adapt", tags=["training"])
+def skip_adapt_training_session(
+    session_id: int, body: SkipAdaptSessionBody, db: Session = Depends(get_session)
+) -> dict[str, Any]:
+    from routepass.analysis import training
+    from routepass.models import TrainingPlan, TrainingSession
+
+    s = db.get(TrainingSession, session_id)
+    if s is None:
+        raise HTTPException(404, "Training session not found")
+    plan = db.get(TrainingPlan, s.plan_id)
+    if plan is None:
+        raise HTTPException(404, "Training plan not found")
+    prefs = store.get_preferences(db)
+    result = training.skip_and_adapt_session(
+        db,
+        s,
+        prefs,
+        reason=body.reason,
+        severity=body.severity,
+        note=body.note,
+    )
+    return {"result": result, "plan": training.serialize_plan_detail(db, plan, prefs)}
 
 
 @router.get("/training/ai-config", tags=["training"])

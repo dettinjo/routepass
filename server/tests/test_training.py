@@ -183,3 +183,83 @@ def test_training_rest_api_and_mcp(tmp_path, monkeypatch):
     assert mcp_adapt["adapted"] is True
     with session_scope() as db:
         assert db.query(Activity).count() == 0
+
+
+def test_skip_adapt_recovery_and_simulated_race_activity(db, monkeypatch):
+    monkeypatch.setenv("ROUTEPASS_API_TOKEN", "test-token")
+
+    from routepass.providers import gcal
+
+    # Ensure Google Calendar reuses the registered Google Sign-In redirect URI
+    assert gcal.GCAL_CALLBACK_PATH == "/api/v1/auth/google/callback"
+
+    app = create_app()
+    event_date = (date.today() + timedelta(days=56)).isoformat()
+    with TestClient(app) as client:
+        r = client.post(
+            "/api/v1/training/plans",
+            headers=_auth_headers(),
+            json={
+                "name": "Dolomites 50k",
+                "plan_type": "trail_run",
+                "event_date": event_date,
+                "goal_spec": {"targets": {"run_km": 50, "run_elev_m": 2400}, "target_time_s": 25200},
+                "schedule_prefs": {"max_weekly_hours": 8, "preferred_slot": "evening"},
+                "use_ai": False,
+            },
+        )
+        assert r.status_code == 200
+        plan = r.json()
+
+        # Verify simulated completed race activity & gamification & recency baseline
+        sim = plan["analytics"]["prediction"]["simulated_activity"]
+        assert sim["name"] == "Dolomites 50k"
+        assert sim["sport"] == "TrailRun"
+        assert sim["predicted_time_s"] > 0
+        assert len(sim["splits"]) == 4
+        assert "confidence_pct" in sim
+
+        gam = plan["analytics"]["gamification"]
+        assert gam["level"] >= 1
+        assert "xp_progress_pct" in gam
+
+        base = plan["analytics"]["baseline"]
+        assert "detraining_factor" in base
+        assert "readiness_label" in base
+
+        # Find an upcoming session (>= today) to test muscle_pain conversion to recovery
+        all_sessions = [s for w in plan["weeks"] for s in w["sessions"]]
+        today_iso = date.today().isoformat()
+        upcoming = [s for s in all_sessions if s["scheduled_date"] >= today_iso]
+        assert len(upcoming) >= 3
+
+        s_pain = upcoming[0]
+        r_pain = client.post(
+            f"/api/v1/training/sessions/{s_pain['id']}/skip-adapt",
+            headers=_auth_headers(),
+            json={"reason": "muscle_pain", "severity": "moderate", "note": "Tight calves"},
+        )
+        assert r_pain.status_code == 200
+        body_pain = r_pain.json()
+        assert body_pain["result"]["recovery_planned"] is True
+        updated_s = next(
+            s for w in body_pain["plan"]["weeks"] for s in w["sessions"] if s["id"] == s_pain["id"]
+        )
+        assert updated_s["session_type"] == "recovery"
+        assert "Recovery" in updated_s["title"]
+
+        # Test sickness skip & protection
+        s_sick = upcoming[2]
+        r_sick = client.post(
+            f"/api/v1/training/sessions/{s_sick['id']}/skip-adapt",
+            headers=_auth_headers(),
+            json={"reason": "sickness", "severity": "moderate", "note": "Mild fever"},
+        )
+        assert r_sick.status_code == 200
+        body_sick = r_sick.json()
+        assert body_sick["result"]["reason"] == "sickness"
+        sick_s = next(
+            s for w in body_sick["plan"]["weeks"] for s in w["sessions"] if s["id"] == s_sick["id"]
+        )
+        assert sick_s["status"] == "skipped"
+

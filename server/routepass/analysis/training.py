@@ -107,22 +107,50 @@ def _activity_matches_sport(act: Activity, session_sport: str) -> bool:
     return act.family in allowed
 
 
+def _detraining_factor(days_since_last: int | None) -> float:
+    """Compute realistic aerobic sharpness factor based on days since last recorded workout."""
+    if days_since_last is None:
+        return 0.85
+    if days_since_last <= 5:
+        return 1.0
+    if days_since_last <= 14:
+        return round(1.0 - (days_since_last - 5) * 0.006, 3)  # up to ~5.4% decay
+    if days_since_last <= 30:
+        return round(0.946 - (days_since_last - 14) * 0.0045, 3)  # down to ~0.874
+    return round(max(0.78, 0.874 - (days_since_last - 30) * 0.0025), 3)
+
+
 def athlete_baseline(db: Session, prefs: dict[str, Any], today: date | None = None) -> dict[str, Any]:
-    """Compute current multi-sport fitness & threshold snapshot from recorded activities."""
+    """Compute dynamic multi-sport fitness, recency/detraining decay, and threshold snapshot."""
     today = today or date.today()
     load = insights.training_load(db, today)
     cur = load.get("current") or {}
+    series = load.get("series") or []
     ctl = float(cur.get("ctl") or 0.0)
     atl = float(cur.get("atl") or 0.0)
     tsb = float(cur.get("tsb") or 0.0)
     acwr = round(atl / ctl, 2) if ctl >= 5 else None
 
-    since = today - timedelta(days=28)
-    acts = list(
+    ctl_14d_ago = float(series[-15]["ctl"]) if len(series) >= 15 else ctl
+    ctl_ramp_per_week = round((ctl - ctl_14d_ago) / 2.0, 1)
+
+    since_90 = today - timedelta(days=90)
+    since_28 = today - timedelta(days=28)
+    since_14 = today - timedelta(days=14)
+    recent_acts = list(
         db.scalars(
-            select(Activity).where(Activity.start_time >= since.isoformat())
+            select(Activity)
+            .where(Activity.start_time >= since_90.isoformat())
+            .order_by(Activity.start_time.desc())
         )
     )
+
+    last_overall_date: date | None = None
+    last_by_disc: dict[str, date | None] = {"run": None, "bike": None, "swim": None}
+    acts_14d = 0
+    acts_42d = 0
+    since_42 = today - timedelta(days=42)
+
     disc_stats: dict[str, dict[str, float]] = {
         "run": {"hours": 0.0, "km": 0.0, "elev_m": 0.0, "count": 0},
         "bike": {"hours": 0.0, "km": 0.0, "elev_m": 0.0, "count": 0},
@@ -130,24 +158,70 @@ def athlete_baseline(db: Session, prefs: dict[str, Any], today: date | None = No
     }
     longest_run_km = 0.0
     longest_bike_km = 0.0
-    for a in acts:
+    for a in recent_acts:
+        a_date = (a.start_local or a.start_time).date()
+        if last_overall_date is None or a_date > last_overall_date:
+            last_overall_date = a_date
+        if a_date >= since_14:
+            acts_14d += 1
+        if a_date >= since_42:
+            acts_42d += 1
+
+        disc_key: str | None = None
+        if a.family == "run":
+            disc_key = "run"
+        elif a.family == "ride":
+            disc_key = "bike"
+        elif a.family == "water" or "swim" in (a.sport or "").lower():
+            disc_key = "swim"
+
+        if disc_key and (last_by_disc[disc_key] is None or a_date > last_by_disc[disc_key]):
+            last_by_disc[disc_key] = a_date
+
+        if a_date < since_28 or not disc_key:
+            continue
         hrs = float(a.moving_time_s or 0.0) / 3600.0
         km = float(a.distance_m or 0.0) / 1000.0
         elev = float(a.elevation_gain_m or 0.0)
-        if a.family == "run":
-            d = disc_stats["run"]
+        if disc_key == "run":
             longest_run_km = max(longest_run_km, km)
-        elif a.family == "ride":
-            d = disc_stats["bike"]
+        elif disc_key == "bike":
             longest_bike_km = max(longest_bike_km, km)
-        elif a.family == "water" or "swim" in (a.sport or "").lower():
-            d = disc_stats["swim"]
-        else:
-            continue
+        d = disc_stats[disc_key]
         d["hours"] += hrs
         d["km"] += km
         d["elev_m"] += elev
         d["count"] += 1
+
+    days_since_last = max(0, (today - last_overall_date).days) if last_overall_date else None
+    recency_by_disc = {
+        k: {
+            "last_date": _iso(v) if v else None,
+            "days_ago": max(0, (today - v).days) if v else None,
+        }
+        for k, v in last_by_disc.items()
+    }
+    detraining = _detraining_factor(days_since_last)
+
+    if days_since_last is None or days_since_last > 14:
+        readiness_label = "Detraining"
+        readiness_note = (
+            f"Last activity was {days_since_last} days ago — applying {round((1 - detraining) * 100, 1)}% recency decay and easing volume back in."
+            if days_since_last is not None
+            else "No activities recorded in the last 90 days — starting conservatively from base."
+        )
+    elif acwr and acwr > 1.35 or tsb < -22:
+        readiness_label = "Fatigued"
+        readiness_note = f"High acute load (TSB {tsb:+.0f}, ACWR {acwr or '—'}) — prioritize recovery and easy Z2."
+    elif tsb > 8 and ctl >= 25:
+        readiness_label = "Fresh & Sharp"
+        readiness_note = f"Well-rested (TSB {tsb:+.0f}) with solid base fitness (CTL {ctl:.0f}) — ready for key workouts."
+    elif ctl_ramp_per_week >= 1.5:
+        readiness_label = "Building"
+        readiness_note = f"Fitness rising +{ctl_ramp_per_week:.1f} CTL/wk ({acts_14d} sessions in last 14d)."
+    else:
+        readiness_label = "Steady"
+        readiness_note = f"Active {days_since_last}d ago · {acts_14d} sessions in the last 14 days."
 
     weekly_avg = {
         k: {
@@ -175,12 +249,36 @@ def athlete_baseline(db: Session, prefs: dict[str, Any], today: date | None = No
             ftp = round(float(best_20m) * 0.95)
 
     weight_kg = float(profile.get("weight_kg") or 72.0)
+    confidence_pct = min(
+        96,
+        max(
+            35,
+            int(
+                40
+                + min(30, acts_42d * 2.2)
+                + (12 if gap_ms or ftp else 0)
+                + (10 if days_since_last is not None and days_since_last <= 5 else 0)
+                - (15 if days_since_last is not None and days_since_last > 14 else 0)
+            ),
+        ),
+    )
+
     return {
         "as_of": _iso(today),
         "ctl": round(ctl, 1),
         "atl": round(atl, 1),
         "tsb": round(tsb, 1),
         "acwr": acwr,
+        "ctl_ramp_per_week": ctl_ramp_per_week,
+        "days_since_last_activity": days_since_last,
+        "last_activity_date": _iso(last_overall_date) if last_overall_date else None,
+        "recency_by_discipline": recency_by_disc,
+        "detraining_factor": detraining,
+        "readiness_label": readiness_label,
+        "readiness_note": readiness_note,
+        "activities_14d": acts_14d,
+        "activities_42d": acts_42d,
+        "confidence_pct": confidence_pct,
         "weekly_avg": weekly_avg,
         "total_weekly_hours": round(sum(v["hours"] for v in weekly_avg.values()), 2),
         "median_gap_ms": round(gap_ms, 3) if gap_ms else None,
@@ -703,25 +801,25 @@ def _predict_race_time_s(
     baseline: dict[str, Any],
     ctl_value: float,
     durability_factor: float = 1.0,
+    apply_detraining: bool = True,
 ) -> dict[str, Any]:
-    """Estimate race finish time in seconds for the given CTL & baseline."""
+    """Estimate race finish time in seconds for the given CTL, baseline, and recency/detraining."""
     targets = (plan.goal_spec or {}).get("targets") or {}
-    # Fitness scaling relative to current CTL (gentle Banister-style curve)
     cur_ctl = max(15.0, float(baseline.get("ctl") or 25.0))
     ctl_ratio = max(0.75, min(1.30, (ctl_value + 25.0) / (cur_ctl + 25.0)))
-    speed_gain = math.pow(ctl_ratio, 0.18) * durability_factor
+    detrain = float(baseline.get("detraining_factor") or 1.0) if apply_detraining else 1.0
+    speed_gain = math.pow(ctl_ratio, 0.18) * durability_factor * detrain
 
     if plan.plan_type in ("trail_run", "road_run"):
         dist_km = float(targets.get("run_km") or (50.0 if plan.plan_type == "trail_run" else 21.1))
         elev_m = float(targets.get("run_elev_m") or (2000.0 if plan.plan_type == "trail_run" else 150.0))
         gap_ms = float(baseline.get("median_gap_ms") or 2.85) * speed_gain
         vam = float(baseline.get("median_climb_vam_mh") or 650.0) * speed_gain
-        # Riegel distance fatigue for > 10km
         riegel = math.pow(max(1.0, dist_km / 10.0), 0.075 if plan.plan_type == "trail_run" else 0.06)
         flat_s = (dist_km * 1000.0) / max(1.2, gap_ms) * riegel
         climb_s = (elev_m / max(300.0, vam)) * 3600.0 * 0.55 if elev_m > 0 else 0.0
         total_s = round(flat_s + climb_s)
-        return {"total_s": total_s, "splits": {"run_s": total_s}}
+        return {"total_s": total_s, "splits": {"run_s": total_s}, "gap_ms": gap_ms, "vam": vam}
 
     if plan.plan_type == "cycling":
         dist_km = float(targets.get("bike_km") or 120.0)
@@ -734,7 +832,7 @@ def _predict_race_time_s(
         flat_s = (dist_km / flat_kmh) * 3600.0
         climb_s = (elev_m / climb_vam) * 3600.0 * 0.65
         total_s = round(flat_s + climb_s)
-        return {"total_s": total_s, "splits": {"bike_s": total_s}}
+        return {"total_s": total_s, "splits": {"bike_s": total_s}, "ftp_w": ftp, "avg_np": round(ftp * 0.78)}
 
     # Triathlon or Duathlon
     swim_km = float(targets.get("swim_km") or (1.9 if plan.plan_type == "triathlon" else 0.0))
@@ -743,7 +841,7 @@ def _predict_race_time_s(
     run_km = float(targets.get("run_km") or 21.1)
     run_elev = float(targets.get("run_elev_m") or 100.0)
 
-    css = float(baseline.get("swim_css_s_per_100m") or 125.0) / speed_gain
+    css = float(baseline.get("swim_css_s_per_100m") or 125.0) / max(0.7, speed_gain)
     swim_s = round(swim_km * 10.0 * css) if swim_km > 0 else 0
 
     ftp = float(baseline.get("ftp_w") or 210.0) * speed_gain
@@ -752,20 +850,279 @@ def _predict_race_time_s(
     bike_s = round((bike_km / bike_kmh) * 3600.0 + (bike_elev / 700.0) * 3600.0 * 0.5)
 
     gap_ms = float(baseline.get("median_gap_ms") or 2.85) * speed_gain
-    # Brick fatigue penalty (~7% slower run off the bike)
     run_s = round(((run_km * 1000.0) / max(1.2, gap_ms)) * 1.07 + (run_elev / 650.0) * 3600.0 * 0.5)
     transitions_s = 360 if plan.plan_type == "triathlon" else 240
     total_s = swim_s + bike_s + run_s + transitions_s
     return {
         "total_s": total_s,
         "splits": {"swim_s": swim_s, "bike_s": bike_s, "run_s": run_s, "transitions_s": transitions_s},
+        "css": css,
+        "avg_np": round(ftp * 0.76),
+    }
+
+
+def _build_simulated_race_activity(
+    plan: TrainingPlan,
+    baseline: dict[str, Any],
+    pred_race: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a completed-activity-style preview of Race Day with predicted times, speed/pace, and splits."""
+    targets = (plan.goal_spec or {}).get("targets") or {}
+    total_s = max(1, int(pred_race["total_s"]))
+    target_time_s = (plan.goal_spec or {}).get("target_time_s")
+    delta_s = (total_s - int(target_time_s)) if target_time_s else None
+    hrs = total_s / 3600.0
+    carbs_g = round(hrs * 70) if hrs >= 1.25 else round(hrs * 40)
+    calories = round(hrs * 680)
+    est_tss = round(hrs * 72)
+
+    if plan.plan_type in ("trail_run", "road_run"):
+        dist_km = float(targets.get("run_km") or (50.0 if plan.plan_type == "trail_run" else 21.1))
+        elev_m = float(targets.get("run_elev_m") or (2000.0 if plan.plan_type == "trail_run" else 150.0))
+        avg_speed_kmh = round(dist_km / max(0.01, hrs), 2)
+        avg_pace_s = round(total_s / max(0.1, dist_km))
+        gap_ms = float(pred_race.get("gap_ms") or baseline.get("median_gap_ms") or 2.85)
+        gap_s = round(1000.0 / max(1.0, gap_ms))
+        effort_km = round(dist_km + elev_m / 100.0, 1)
+        # Quarter-by-quarter pacing with slight realistic late-race fade
+        q_weights = [0.235, 0.245, 0.255, 0.265]
+        q_labels = ["Q1 · Controlled Start", "Q2 · Steady Rhythm", "Q3 · Aerobic Grind", "Q4 · Strong Finish"]
+        splits = []
+        cum_s = 0
+        for w, lbl in zip(q_weights, q_labels):
+            qs = round(total_s * w)
+            cum_s += qs
+            qkm = round(dist_km / 4.0, 1)
+            qelev = round(elev_m / 4.0)
+            splits.append(
+                {
+                    "label": lbl,
+                    "distance_km": qkm,
+                    "elev_m": qelev,
+                    "time_s": qs,
+                    "cumulative_s": cum_s,
+                    "pace_s_per_km": round(qs / max(0.1, qkm)),
+                    "speed_kmh": round(qkm / max(0.01, qs / 3600.0), 1),
+                    "note": f"~{round((qs / 3600.0) * 70)}g carbs" if hrs >= 1.5 else "Steady HR Z2-Z3",
+                }
+            )
+        return {
+            "name": plan.name,
+            "date": plan.event_date,
+            "sport": "TrailRun" if plan.plan_type == "trail_run" else "Run",
+            "distance_km": round(dist_km, 1),
+            "elevation_gain_m": round(elev_m),
+            "effort_km": effort_km,
+            "predicted_time_s": total_s,
+            "target_time_s": target_time_s,
+            "delta_s": delta_s,
+            "avg_speed_kmh": avg_speed_kmh,
+            "avg_pace_s_per_km": avg_pace_s,
+            "gap_s_per_km": gap_s,
+            "estimated_tss": est_tss,
+            "estimated_calories": calories,
+            "estimated_carbs_g": carbs_g,
+            "confidence_pct": baseline.get("confidence_pct", 70),
+            "splits": splits,
+        }
+
+    if plan.plan_type == "cycling":
+        dist_km = float(targets.get("bike_km") or 120.0)
+        elev_m = float(targets.get("bike_elev_m") or 1500.0)
+        avg_speed_kmh = round(dist_km / max(0.01, hrs), 1)
+        q_weights = [0.24, 0.25, 0.255, 0.255]
+        q_labels = ["Q1 · Warmup & Group", "Q2 · Climb Tempo", "Q3 · Endurance Fueling", "Q4 · Final Push"]
+        splits = []
+        cum_s = 0
+        for w, lbl in zip(q_weights, q_labels):
+            qs = round(total_s * w)
+            cum_s += qs
+            qkm = round(dist_km / 4.0, 1)
+            splits.append(
+                {
+                    "label": lbl,
+                    "distance_km": qkm,
+                    "elev_m": round(elev_m / 4.0),
+                    "time_s": qs,
+                    "cumulative_s": cum_s,
+                    "speed_kmh": round(qkm / max(0.01, qs / 3600.0), 1),
+                    "note": f"~{pred_race.get('avg_np', 175)}W NP",
+                }
+            )
+        return {
+            "name": plan.name,
+            "date": plan.event_date,
+            "sport": "Ride",
+            "distance_km": round(dist_km, 1),
+            "elevation_gain_m": round(elev_m),
+            "predicted_time_s": total_s,
+            "target_time_s": target_time_s,
+            "delta_s": delta_s,
+            "avg_speed_kmh": avg_speed_kmh,
+            "avg_np_w": pred_race.get("avg_np"),
+            "estimated_tss": est_tss,
+            "estimated_calories": calories,
+            "estimated_carbs_g": carbs_g,
+            "confidence_pct": baseline.get("confidence_pct", 70),
+            "splits": splits,
+        }
+
+    # Triathlon / Duathlon
+    swim_km = float(targets.get("swim_km") or (1.9 if plan.plan_type == "triathlon" else 0.0))
+    bike_km = float(targets.get("bike_km") or 90.0)
+    bike_elev = float(targets.get("bike_elev_m") or 700.0)
+    run_km = float(targets.get("run_km") or 21.1)
+    run_elev = float(targets.get("run_elev_m") or 100.0)
+    sp = pred_race.get("splits") or {}
+    legs = []
+    cum = 0
+    if sp.get("swim_s"):
+        cum += sp["swim_s"]
+        legs.append(
+            {
+                "label": "Swim",
+                "distance_km": swim_km,
+                "elev_m": 0,
+                "time_s": sp["swim_s"],
+                "cumulative_s": cum,
+                "speed_kmh": round(swim_km / max(0.01, sp["swim_s"] / 3600.0), 1),
+                "note": f"~{round(sp['swim_s'] / max(0.1, swim_km * 10))}s / 100m",
+            }
+        )
+    if sp.get("bike_s"):
+        cum += sp["bike_s"]
+        legs.append(
+            {
+                "label": "Bike",
+                "distance_km": bike_km,
+                "elev_m": round(bike_elev),
+                "time_s": sp["bike_s"],
+                "cumulative_s": cum,
+                "speed_kmh": round(bike_km / max(0.01, sp["bike_s"] / 3600.0), 1),
+                "note": f"~{pred_race.get('avg_np', 170)}W NP · 75g carbs/h",
+            }
+        )
+    if sp.get("run_s"):
+        cum += sp["run_s"]
+        legs.append(
+            {
+                "label": "Run (Off-the-Bike)",
+                "distance_km": run_km,
+                "elev_m": round(run_elev),
+                "time_s": sp["run_s"],
+                "cumulative_s": cum,
+                "pace_s_per_km": round(sp["run_s"] / max(0.1, run_km)),
+                "speed_kmh": round(run_km / max(0.01, sp["run_s"] / 3600.0), 1),
+                "note": "Includes 7% brick fatigue",
+            }
+        )
+    if sp.get("transitions_s"):
+        cum += sp["transitions_s"]
+        legs.append(
+            {
+                "label": "T1 + T2 Transitions",
+                "distance_km": 0,
+                "elev_m": 0,
+                "time_s": sp["transitions_s"],
+                "cumulative_s": cum,
+                "note": "Swim→Bike & Bike→Run",
+            }
+        )
+    total_km = round(swim_km + bike_km + run_km, 1)
+    return {
+        "name": plan.name,
+        "date": plan.event_date,
+        "sport": "Triathlon" if plan.plan_type == "triathlon" else "Duathlon",
+        "distance_km": total_km,
+        "elevation_gain_m": round(bike_elev + run_elev),
+        "predicted_time_s": total_s,
+        "target_time_s": target_time_s,
+        "delta_s": delta_s,
+        "avg_speed_kmh": round(total_km / max(0.01, hrs), 1),
+        "estimated_tss": est_tss,
+        "estimated_calories": calories,
+        "estimated_carbs_g": carbs_g,
+        "confidence_pct": baseline.get("confidence_pct", 70),
+        "splits": legs,
+    }
+
+
+def _compute_gamification(
+    sessions: list[TrainingSession],
+    alignment_overall: float,
+    baseline: dict[str, Any],
+    today: date,
+) -> dict[str, Any]:
+    """Compute XP, level, completion streak, and motivational badges."""
+    completed = [s for s in sessions if s.status == "completed"]
+    partial = [s for s in sessions if s.status == "partial"]
+    key_done = [s for s in completed if s.priority == "key"]
+    cal_synced = any(s.gcal_event_id for s in sessions)
+
+    # Streak of most recent due sessions completed/partial
+    due_past = [
+        s
+        for s in sessions
+        if s.sport != "rest" and _parse_date(s.scheduled_date, today) <= today
+    ]
+    streak = 0
+    for s in reversed(due_past):
+        if s.status in ("completed", "partial"):
+            streak += 1
+        elif s.status in ("missed",):
+            break
+
+    xp = (
+        len(completed) * 100
+        + len(partial) * 55
+        + len(key_done) * 60
+        + streak * 25
+        + int(baseline.get("activities_42d", 0)) * 15
+    )
+    level = max(1, (xp // 400) + 1)
+    titles = [
+        "Trail Rookie",
+        "Consistent Mover",
+        "Endurance Builder",
+        "Mountain Climber",
+        "Ultra Engine",
+        "Peak Performer",
+        "Apex Athlete",
+    ]
+    level_title = titles[min(len(titles) - 1, level - 1)]
+    xp_in_level = xp % 400
+    xp_progress_pct = round((xp_in_level / 400.0) * 100)
+
+    badges: list[dict[str, str]] = []
+    if streak >= 3:
+        badges.append({"id": "streak", "icon": "🔥", "label": f"{streak}-Session Streak", "tone": "good"})
+    if alignment_overall >= 85 and due_past:
+        badges.append({"id": "aligned", "icon": "🎯", "label": "85%+ Plan Alignment", "tone": "good"})
+    if len(key_done) >= 2:
+        badges.append({"id": "key_ace", "icon": "⚡", "label": f"{len(key_done)} Key Workouts Crushed", "tone": "warn"})
+    if (baseline.get("weekly_avg", {}).get("run", {}).get("elev_m") or 0) >= 800:
+        badges.append({"id": "vert", "icon": "⛰️", "label": "Vert Hunter", "tone": "good"})
+    if baseline.get("days_since_last_activity") is not None and baseline["days_since_last_activity"] <= 2:
+        badges.append({"id": "fresh", "icon": "💚", "label": "Active Momentum", "tone": "good"})
+    if cal_synced:
+        badges.append({"id": "calendar", "icon": "📅", "label": "Calendar Auto-Synced", "tone": ""})
+
+    return {
+        "xp": xp,
+        "level": level,
+        "level_title": level_title,
+        "xp_next_level": level * 400,
+        "xp_progress_pct": xp_progress_pct,
+        "streak_sessions": streak,
+        "completed_sessions": len(completed),
+        "badges": badges,
     }
 
 
 def compute_plan_analytics(
     db: Session, plan: TrainingPlan, prefs: dict[str, Any], *, today: date | None = None
 ) -> dict[str, Any]:
-    """Compute alignment score, discipline progress, race prediction, and trajectory graph."""
+    """Compute alignment score, discipline progress, race prediction, gamification, and trajectory graph."""
     today = today or date.today()
     baseline = athlete_baseline(db, prefs, today)
     weeks = list(
@@ -790,7 +1147,6 @@ def compute_plan_analytics(
         else {}
     )
 
-    # Alignment score over sessions up to today
     due = [s for s in sessions if s.sport != "rest" and _parse_date(s.scheduled_date, today) <= today]
     completed_weight = 0.0
     planned_tss_due = 0.0
@@ -849,8 +1205,7 @@ def compute_plan_analytics(
     else:
         s_comp = s_load = s_int = s_key = alignment_overall = 100.0
 
-    # Simulate Banister CTL trajectory from plan start -> today -> race day
-    load_series = (insights.training_load(db, today).get("series") or [])
+    load_series = insights.training_load(db, today).get("series") or []
     ctl_by_day = {pt["date"]: float(pt["ctl"]) for pt in load_series}
 
     start_ctl = float((plan.baseline or {}).get("ctl") or baseline["ctl"] or 25.0)
@@ -860,7 +1215,7 @@ def compute_plan_analytics(
     planned_ctl = start_ctl
     proj_opt_ctl = cur_ctl
     proj_trend_ctl = cur_ctl
-    decay = 1.0 - math.exp(-7.0 / 42.0)  # weekly CTL EWMA step
+    decay = 1.0 - math.exp(-7.0 / 42.0)
 
     trajectory: list[dict[str, Any]] = []
     for w in weeks:
@@ -881,7 +1236,7 @@ def compute_plan_analytics(
             proj_trend_ctl = proj_trend_ctl + (daily_tss * adherence_factor - proj_trend_ctl) * decay
 
         ref_ctl = actual_ctl_val if actual_ctl_val is not None else proj_trend_ctl
-        pred = _predict_race_time_s(plan, baseline, ref_ctl)
+        pred = _predict_race_time_s(plan, baseline, ref_ctl, apply_detraining=not is_future)
         trajectory.append(
             {
                 "week_index": w.week_index,
@@ -901,12 +1256,12 @@ def compute_plan_analytics(
     race_ctl_trend = trajectory[-1]["projected_ctl_trend"] if trajectory else cur_ctl
     race_ctl_planned = trajectory[-1]["planned_ctl"] if trajectory else cur_ctl
 
-    pred_now = _predict_race_time_s(plan, baseline, cur_ctl)
-    pred_race_optimal = _predict_race_time_s(plan, baseline, race_ctl_optimal)
-    pred_race_trend = _predict_race_time_s(plan, baseline, race_ctl_trend)
+    pred_now = _predict_race_time_s(plan, baseline, cur_ctl, apply_detraining=True)
+    pred_race_optimal = _predict_race_time_s(plan, baseline, race_ctl_optimal, apply_detraining=False)
+    pred_race_trend = _predict_race_time_s(plan, baseline, race_ctl_trend, apply_detraining=False)
+    simulated_activity = _build_simulated_race_activity(plan, baseline, pred_race_trend)
     target_time_s = (plan.goal_spec or {}).get("target_time_s")
 
-    # Determine on-track verdict & limiting factors
     limiting_factors: list[str] = []
     if target_time_s:
         gap_pct = (pred_race_trend["total_s"] - float(target_time_s)) / max(1.0, float(target_time_s)) * 100.0
@@ -929,6 +1284,10 @@ def compute_plan_analytics(
             verdict = "at_risk"
             limiting_factors.append("Recent missed sessions are pulling projected race fitness below plan.")
 
+    if baseline.get("days_since_last_activity") is not None and baseline["days_since_last_activity"] > 7:
+        limiting_factors.append(
+            f"Last recorded activity was {baseline['days_since_last_activity']} days ago — prediction includes recency decay."
+        )
     if baseline.get("acwr") and baseline["acwr"] > 1.35:
         limiting_factors.append(f"ACWR is elevated ({baseline['acwr']:.2f}) — prioritize sleep and easy-day discipline.")
     if due and s_key < 75:
@@ -936,7 +1295,11 @@ def compute_plan_analytics(
 
     event_d = _parse_date(plan.event_date, today)
     days_to_race = (event_d - today).days
-    current_week = next((w for w in weeks if _parse_date(w.start_date, today) <= today <= _parse_date(w.start_date, today) + timedelta(days=6)), weeks[0] if weeks else None)
+    current_week = next(
+        (w for w in weeks if _parse_date(w.start_date, today) <= today <= _parse_date(w.start_date, today) + timedelta(days=6)),
+        weeks[0] if weeks else None,
+    )
+    gamification = _compute_gamification(sessions, alignment_overall, baseline, today)
 
     return {
         "days_to_race": days_to_race,
@@ -953,12 +1316,14 @@ def compute_plan_analytics(
             "due_sessions": len(due),
         },
         "disciplines": disc_progress,
+        "gamification": gamification,
         "prediction": {
             "target_time_s": target_time_s,
             "current_predicted_s": pred_now["total_s"],
             "race_day_optimal_s": pred_race_optimal["total_s"],
             "race_day_trend_s": pred_race_trend["total_s"],
             "race_day_splits": pred_race_trend["splits"],
+            "simulated_activity": simulated_activity,
             "verdict": verdict,
             "limiting_factors": limiting_factors,
         },
@@ -1092,12 +1457,231 @@ def adapt_plan(
         )
     )
     db.flush()
+    cal_sync = _maybe_sync_calendar(db, plan)
     return {
         "adapted": True,
         "model_used": model_used,
         "summary": summary,
         "diff": diff,
         "match": match_stats,
+        "calendar_sync": cal_sync,
+    }
+
+
+def _maybe_sync_calendar(db: Session, plan: TrainingPlan) -> dict[str, Any] | None:
+    """Best-effort Google Calendar sync when connected and auto_sync is enabled."""
+    try:
+        from routepass.providers import gcal
+
+        cfg = gcal.get_config(db)
+        if cfg.get("connected") and cfg.get("target_calendar_id") and cfg.get("auto_sync", True):
+            return gcal.sync_plan_to_calendar(db, plan)
+    except Exception:  # noqa: BLE001
+        logger.exception("Auto Google Calendar sync failed for plan %s", plan.id)
+    return None
+
+
+def skip_and_adapt_session(
+    db: Session,
+    session: TrainingSession,
+    prefs: dict[str, Any],
+    *,
+    reason: str,
+    severity: str = "moderate",
+    note: str = "",
+    today: date | None = None,
+) -> dict[str, Any]:
+    """Skip or convert a session based on athlete feedback (time, sickness, muscle_pain, fatigue, injury),
+    schedule protective recovery/mobility sessions where appropriate, adapt upcoming days, and sync calendar.
+    """
+    today = today or date.today()
+    plan = db.get(TrainingPlan, session.plan_id)
+    if plan is None:
+        raise ValueError("Training plan not found for session")
+
+    s_date = _parse_date(session.scheduled_date, today)
+    reason_l = reason.strip().lower()
+    sev = severity.strip().lower() if severity in ("mild", "moderate", "severe") else "moderate"
+    user_extra = note.strip()[:250]
+
+    upcoming_sessions = list(
+        db.scalars(
+            select(TrainingSession)
+            .where(
+                TrainingSession.plan_id == plan.id,
+                TrainingSession.id != session.id,
+                TrainingSession.status.in_(("planned", "moved")),
+            )
+            .order_by(TrainingSession.scheduled_date.asc(), TrainingSession.id.asc())
+        )
+    )
+
+    immediate_actions: list[str] = []
+    recovery_planned = False
+
+    if reason_l == "time":
+        session.status = "skipped"
+        session.compliance_score = 0.0
+        session.adaptation_note = f"Skipped (no time){': ' + user_extra if user_extra else ''}"
+        immediate_actions.append(f"Marked '{session.title}' as skipped due to time constraints.")
+
+    elif reason_l in ("muscle_pain", "fatigue"):
+        if sev == "severe" or s_date < today:
+            session.status = "skipped"
+            session.compliance_score = 0.0
+            session.adaptation_note = f"Skipped ({reason_l.replace('_', ' ')}, {sev}){': ' + user_extra if user_extra else ''}"
+            immediate_actions.append(f"Skipped '{session.title}' for full rest ({reason_l.replace('_', ' ')}).")
+        else:
+            # Convert today's/upcoming session directly into a gentle recovery & mobility session
+            dur_s = 1500 if sev == "moderate" else 1800
+            session.sport = "strength"
+            session.session_type = "recovery"
+            session.priority = "supporting"
+            session.title = "Active Recovery & Mobility Flow"
+            session.description = (
+                "Low-impact foam rolling, hip/calf/hamstring mobility, and easy walking to flush soreness "
+                "without adding mechanical stress."
+            )
+            session.workout_steps = [
+                "10 min easy walk or gentle spin (Z1)",
+                "10 min dynamic mobility & hip/ankle opener",
+                "5-10 min foam rolling & light stretching on sore muscles",
+            ]
+            session.target_duration_s = dur_s
+            session.target_distance_km = 0.0
+            session.target_elev_m = 0.0
+            session.target_tss = 15.0
+            session.status = "moved"
+            session.adaptation_note = f"Converted to recovery ({reason_l.replace('_', ' ')}, {sev})"
+            recovery_planned = True
+            immediate_actions.append(
+                f"Converted '{session.title}' into a {dur_s // 60} min Recovery & Mobility session."
+            )
+
+        # Protect the next 2-3 days from intensity spikes
+        horizon = s_date + timedelta(days=3 if sev == "severe" else 2)
+        for nxt in upcoming_sessions:
+            nd = _parse_date(nxt.scheduled_date, today)
+            if not (s_date < nd <= horizon):
+                continue
+            if sev == "severe" and not recovery_planned:
+                nxt.sport = "strength"
+                nxt.session_type = "recovery"
+                nxt.priority = "supporting"
+                nxt.title = "Gentle Recovery & Mobility Check-in"
+                nxt.description = "Easy movement check-in before resuming normal training load."
+                nxt.target_duration_s = 1500
+                nxt.target_distance_km = 0.0
+                nxt.target_elev_m = 0.0
+                nxt.target_tss = 15.0
+                nxt.status = "moved"
+                nxt.adaptation_note = f"Recovery day inserted after severe {reason_l.replace('_', ' ')}"
+                recovery_planned = True
+                immediate_actions.append(f"Replaced {nxt.scheduled_date} with a 25 min Recovery Check-in.")
+            elif nxt.session_type in ("intervals", "threshold", "hills", "long", "brick"):
+                scale = 0.72 if sev == "severe" else 0.82
+                nxt.target_duration_s = round(nxt.target_duration_s * scale)
+                nxt.target_distance_km = round(nxt.target_distance_km * scale, 1)
+                nxt.target_elev_m = round(nxt.target_elev_m * scale, 0)
+                nxt.target_tss = round(nxt.target_tss * scale, 0)
+                nxt.adaptation_note = f"Volume trimmed {round((1 - scale) * 100)}% for recovery"
+                immediate_actions.append(f"Trimmed {nxt.title} on {nxt.scheduled_date} by {round((1 - scale) * 100)}%.")
+
+    elif reason_l == "sickness":
+        session.status = "skipped"
+        session.compliance_score = 0.0
+        session.adaptation_note = f"Skipped (sickness, {sev}){': ' + user_extra if user_extra else ''}"
+        days_off = 2 if sev == "mild" else (3 if sev == "moderate" else 5)
+        cutoff = s_date + timedelta(days=days_off)
+        immediate_actions.append(f"Skipped '{session.title}' and protected the next {days_off} days for illness recovery.")
+
+        window_sessions = [
+            nxt for nxt in upcoming_sessions if s_date < _parse_date(nxt.scheduled_date, today) <= cutoff
+        ]
+        for idx, nxt in enumerate(window_sessions):
+            is_last = idx == len(window_sessions) - 1
+            if is_last:
+                nxt.session_type = "recovery"
+                nxt.priority = "supporting"
+                nxt.title = "Easy Return-to-Training Shakeout"
+                nxt.description = (
+                    "Only complete if fever-free for 24h and resting HR is back to normal. Keep strictly Z1-Z2."
+                )
+                nxt.target_duration_s = 1500
+                nxt.target_distance_km = round(min(nxt.target_distance_km or 4.0, 4.0), 1)
+                nxt.target_elev_m = 0.0
+                nxt.target_tss = 18.0
+                nxt.status = "moved"
+                nxt.adaptation_note = "Gentle return shakeout after sickness"
+                recovery_planned = True
+                immediate_actions.append(f"Scheduled Easy Return Shakeout on {nxt.scheduled_date}.")
+            else:
+                nxt.status = "skipped"
+                nxt.compliance_score = 0.0
+                nxt.adaptation_note = f"Auto-cleared for sickness recovery ({sev})"
+                immediate_actions.append(f"Cleared {nxt.title} on {nxt.scheduled_date} for rest.")
+
+    elif reason_l == "injury":
+        session.status = "skipped"
+        session.compliance_score = 0.0
+        session.adaptation_note = f"Skipped (injury/pain, {sev}){': ' + user_extra if user_extra else ''}"
+        days_protect = 3 if sev == "mild" else (5 if sev == "moderate" else 7)
+        cutoff = s_date + timedelta(days=days_protect)
+        immediate_actions.append(
+            f"Skipped '{session.title}' and protected the next {days_protect} days against impact load."
+        )
+        for nxt in upcoming_sessions:
+            nd = _parse_date(nxt.scheduled_date, today)
+            if not (s_date < nd <= cutoff):
+                continue
+            if sev == "severe":
+                nxt.status = "skipped"
+                nxt.compliance_score = 0.0
+                nxt.adaptation_note = "Paused due to injury — consult physio before resuming"
+            elif nxt.sport in ("run", "trail_run", session.sport):
+                nxt.sport = "strength"
+                nxt.session_type = "recovery"
+                nxt.priority = "supporting"
+                nxt.title = "Low-Impact Rehab & Mobility"
+                nxt.description = "Pain-free mobility, core stability, and gentle non-impact work."
+                nxt.target_duration_s = 1800
+                nxt.target_distance_km = 0.0
+                nxt.target_elev_m = 0.0
+                nxt.target_tss = 16.0
+                nxt.status = "moved"
+                nxt.adaptation_note = f"Swapped to low-impact rehab ({sev} injury)"
+                recovery_planned = True
+                immediate_actions.append(f"Swapped {nxt.scheduled_date} to Low-Impact Rehab & Mobility.")
+
+    else:
+        session.status = "skipped"
+        session.compliance_score = 0.0
+        session.adaptation_note = f"Skipped ({reason_l}){': ' + user_extra if user_extra else ''}"
+
+    db.flush()
+
+    coach_note = (
+        f"Athlete reported '{reason_l}' (severity: {sev}) for session '{session.title}' on {session.scheduled_date}. "
+        f"{'Note: ' + user_extra + '. ' if user_extra else ''}"
+        f"Immediate actions already applied: {' '.join(immediate_actions)} "
+        "Adapt remaining upcoming sessions smoothly without overloading recovery."
+    )
+    adapt_res = adapt_plan(
+        db,
+        plan,
+        prefs,
+        trigger=f"skip_{reason_l}",
+        user_note=coach_note,
+        today=today,
+        force=True,
+    )
+    return {
+        "session_id": session.id,
+        "reason": reason_l,
+        "severity": sev,
+        "recovery_planned": recovery_planned,
+        "immediate_actions": immediate_actions,
+        "adaptation": adapt_res,
     }
 
 
@@ -1112,11 +1696,15 @@ def _deterministic_adapt(
     muts: list[dict[str, Any]] = []
     reasons: list[str] = []
 
-    tired = any(w in user_note.lower() for w in ("tired", "fatigue", "sore", "sick", "heavy"))
+    tired = any(
+        w in user_note.lower()
+        for w in ("tired", "fatigue", "sore", "sick", "heavy", "pain", "injury", "muscle_pain")
+    )
     high_acwr = (baseline.get("acwr") or 0.0) > 1.35 or (baseline.get("tsb") or 0.0) < -22
 
-    if (tired or high_acwr) and upcoming:
-        nxt = upcoming[0]
+    non_recovery = [s for s in upcoming if s.session_type != "recovery"]
+    if (tired or high_acwr) and non_recovery:
+        nxt = non_recovery[0]
         muts.append(
             {
                 "session_id": nxt.id,
@@ -1128,9 +1716,9 @@ def _deterministic_adapt(
         reasons.append(f"Trimmed {nxt.title} by 22% to protect recovery.")
 
     missed_keys = [s for s in recent if s.status == "missed" and s.priority == "key"]
-    if missed_keys and upcoming:
+    if missed_keys and non_recovery and not tired:
         mk = missed_keys[-1]
-        easy_slot = next((s for s in upcoming[:5] if s.priority != "key"), None)
+        easy_slot = next((s for s in non_recovery[:5] if s.priority != "key"), None)
         if easy_slot:
             muts.append(
                 {
