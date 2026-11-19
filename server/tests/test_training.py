@@ -79,21 +79,23 @@ def test_multi_sport_plan_lifecycle_and_predictions(db):
 
 
 def test_gemini_budget_guard_and_endpoint_detection(db):
-    urls_vertex = gemini._endpoints_for_key("AQ.testkey", "gemini-2.5-flash")
+    urls_vertex = gemini._endpoints_for_key("AQ.testkey", "gemini-4-hydrogen")
     assert "aiplatform.googleapis.com" in urls_vertex[0]
-    urls_studio = gemini._endpoints_for_key("AIzaTestKey", "gemini-2.5-flash")
-    assert "generativelanguage.googleapis.com" in urls_studio[0]
+    urls_studio = gemini._endpoints_for_key("AIzaTestKey", "gemini-4-hydrogen")
+    assert "generativelanguage.googleapis.com/v1/" in urls_studio[0]
 
     with session_scope() as s:
         cfg = gemini.save_ai_config(s, api_key="AQ.fake-key", monthly_budget_usd=1.0)
         assert cfg["configured"] is True
         assert cfg["key_source"] == "settings"
+        assert cfg["model_fast"] == "gemini-4-hydrogen"
+        assert cfg["model_pro"] == "gemini-4-hydrogen"
         assert cfg["monthly_budget_usd"] == 1.0
 
         s.add(
             AIUsageLog(
                 feature="test",
-                model="gemini-2.5-pro",
+                model="gemini-4-hydrogen",
                 input_tokens=100000,
                 output_tokens=100000,
                 estimated_cost_usd=1.25,

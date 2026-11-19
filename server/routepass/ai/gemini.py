@@ -28,10 +28,14 @@ logger = logging.getLogger(__name__)
 
 # Approximate USD per 1M tokens (input, output) for cost accounting
 MODEL_PRICING_USD_PER_M: dict[str, tuple[float, float]] = {
+    "gemini-4-hydrogen": (1.50, 7.50),
+    "gemini-4-argon": (2.00, 10.00),
+    "gemini-4-carbon": (4.00, 20.00),
+    "gemini-3.8-flash": (1.50, 7.50),
+    "gemini-3.5-flash-lite": (0.10, 0.40),
     "gemini-2.5-flash-lite": (0.075, 0.30),
     "gemini-2.5-flash": (0.15, 0.60),
     "gemini-2.5-pro": (1.25, 10.00),
-    "gemini-2.0-flash": (0.10, 0.40),
 }
 
 _SECRET_KEY = "gemini.credentials"
@@ -106,7 +110,7 @@ def save_ai_config(
 
 
 def estimate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
-    in_rate, out_rate = MODEL_PRICING_USD_PER_M.get(model, (0.30, 1.20))
+    in_rate, out_rate = MODEL_PRICING_USD_PER_M.get(model, (1.50, 7.50))
     return (input_tokens * in_rate + output_tokens * out_rate) / 1_000_000.0
 
 
@@ -136,14 +140,18 @@ def _endpoints_for_key(api_key: str, model: str) -> list[str]:
         f"https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent"
         f"?key={api_key}"
     )
-    aistudio_url = (
+    aistudio_v1 = (
+        f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent"
+        f"?key={api_key}"
+    )
+    aistudio_v1beta = (
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         f"?key={api_key}"
     )
     # Vertex AI Express keys start with "AQ."; AI Studio keys start with "AIza"
     if api_key.startswith("AQ."):
-        return [vertex_url, aistudio_url]
-    return [aistudio_url, vertex_url]
+        return [vertex_url, aistudio_v1, aistudio_v1beta]
+    return [aistudio_v1, aistudio_v1beta, vertex_url]
 
 
 def _extract_json_text(payload: dict[str, Any]) -> str:
@@ -175,6 +183,8 @@ def generate_json(
 ) -> tuple[dict[str, Any], str]:
     """Call Gemini with JSON output mode, enforcing monthly budget & logging token spend.
 
+    Uses Gemini 4 `thinkingConfig.thinkingLevel` (`low` for fast micro-adaptations,
+    `high` for deep plan generation) to optimize token spend & latency.
     Returns `(parsed_json, model_used)`.
     """
     api_key = get_api_key(db)
@@ -188,6 +198,14 @@ def generate_json(
         )
 
     model = cfg["model_pro"] if tier == "pro" else cfg["model_fast"]
+    gen_cfg: dict[str, Any] = {
+        "temperature": temperature,
+        "maxOutputTokens": max_output_tokens,
+        "responseMimeType": "application/json",
+    }
+    if model.startswith("gemini-4-"):
+        gen_cfg["thinkingConfig"] = {"thinkingLevel": "high" if tier == "pro" else "low"}
+
     body: dict[str, Any] = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": [
@@ -196,11 +214,7 @@ def generate_json(
                 "parts": [{"text": json.dumps(user_payload, separators=(",", ":"), default=str)}],
             }
         ],
-        "generationConfig": {
-            "temperature": temperature,
-            "maxOutputTokens": max_output_tokens,
-            "responseMimeType": "application/json",
-        },
+        "generationConfig": gen_cfg,
     }
 
     last_err: Exception | None = None

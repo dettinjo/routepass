@@ -51,8 +51,8 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("ROUTEPASS_GEMINI_API_KEY", "GEMINI_API_KEY"),
     )
     gemini_monthly_budget_usd: float = 8.0
-    gemini_model_fast: str = "gemini-2.5-flash"
-    gemini_model_pro: str = "gemini-2.5-pro"
+    gemini_model_fast: str = "gemini-4-hydrogen"
+    gemini_model_pro: str = "gemini-4-hydrogen"
 
     log_level: str = "INFO"
 

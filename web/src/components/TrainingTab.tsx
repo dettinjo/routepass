@@ -497,7 +497,7 @@ function CreatePlanWizard({
         <label className="row xs" style={{ gap: 8, cursor: "pointer" }}>
           <input type="checkbox" checked={useAi} onChange={(e) => setUseAi(e.target.checked)} />
           <span>
-            Enrich upcoming 4 weeks with <b>Gemini Pro</b>{" "}
+            Enrich upcoming 4 weeks with <b>Gemini 4 Hydrogen</b>{" "}
             {!aiConfigured && <span className="muted">(configure Gemini API key in Settings to enable)</span>}
           </span>
         </label>
