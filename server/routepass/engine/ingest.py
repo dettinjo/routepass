@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from routepass import store
@@ -213,6 +213,11 @@ def import_strava(
 
     if full:
         stats.deleted += _mark_missing(db, "strava", seen, history_start)
+        db.execute(
+            update(ProviderActivity)
+            .where(ProviderActivity.provider == "strava", ProviderActivity.track_status == "error")
+            .values(track_status="pending")
+        )
         state["last_full"] = utcnow().isoformat()
     state["watermark"] = newest
     state["last_import"] = utcnow().isoformat()
@@ -536,7 +541,7 @@ def _track_source(act: Activity) -> ProviderActivity | None:
     return live[0] if live else None
 
 
-WEB_TRACKS_PER_RUN = 20  # recordings fetched via the Strava website per sync run
+WEB_TRACKS_PER_RUN = 100  # recordings fetched via the Strava website per sync run
 
 
 def _uses_web(client) -> bool:
@@ -574,11 +579,14 @@ def fetch_tracks(db: Session, budget_s: float = 240.0, limit: int = 200) -> dict
                         src.track_status = "none"
                         continue
                     strava = strava or strava_client(db, background=True)
-                    if _uses_web(strava):
+                    is_web = _uses_web(strava)
+                    if is_web:
                         if web_fetches >= WEB_TRACKS_PER_RUN:
                             continue
                         web_fetches += 1
                     normalized = trk.from_strava_streams(strava.streams(src.external_id))
+                    if is_web:
+                        time.sleep(0.2)
                 else:
                     komoot = komoot or komoot_client(db)
                     normalized = trk.from_komoot_coordinates(komoot.coordinates(src.external_id))

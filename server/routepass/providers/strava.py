@@ -922,16 +922,24 @@ class StravaWebClient:
     def streams(self, activity_id: str) -> dict[str, Any]:
         """Fetch streams from `/activities/{id}/streams`, with fallback to `/export_original` and `/export_gpx`."""
         query: list[tuple[str, str]] = [("stream_types[]", t) for t in WEB_STREAM_TYPES]
+        headers = {
+            "X-Requested-With": "XMLHttpRequest",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Referer": f"{BASE}/activities/{activity_id}",
+        }
         resp = self._http.get(
             f"{BASE}/activities/{activity_id}/streams",
             params=query,
-            headers={
-                "X-Requested-With": "XMLHttpRequest",
-                "Accept": "application/json, text/javascript, */*; q=0.01",
-                "Referer": f"{BASE}/activities/{activity_id}",
-            },
+            headers=headers,
         )
         self._sync_cookies(resp)
+        if self._is_auth_failure(resp) and self._try_renew_from_remember_token():
+            resp = self._http.get(
+                f"{BASE}/activities/{activity_id}/streams",
+                params=query,
+                headers=headers,
+            )
+            self._sync_cookies(resp)
         if resp.status_code == 200:
             try:
                 raw = resp.json()

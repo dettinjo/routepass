@@ -9,7 +9,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from routepass import auth, services, store
@@ -30,7 +30,7 @@ from routepass.engine.clients import (
     strava_client,
 )
 from routepass.engine.rules import RuleError
-from routepass.models import SyncRun, Track
+from routepass.models import ProviderActivity, SyncRun, Track
 from routepass.providers import komoot, sports, strava, strava_userscript
 from routepass.providers.gpx import track_to_gpx
 from routepass.timeutil import utcnow
@@ -672,6 +672,11 @@ def _save_strava_web_session(db: Session, cookies: dict[str, str], athlete: dict
         },
     )
     store.delete_value(db, "strava.error")
+    db.execute(
+        update(ProviderActivity)
+        .where(ProviderActivity.provider == "strava", ProviderActivity.track_status == "error")
+        .values(track_status="pending")
+    )
     runner.trigger_soon()
 
 
