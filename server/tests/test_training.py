@@ -349,3 +349,71 @@ def test_data_quality_suggests_profile_values(db):
         assert q["level"] == "low"
         assert q["suggestions"]["hr_max"] == 188  # second-highest plausible value
         assert any(m["field"] == "hr_max" for m in q["missing"])
+
+
+def test_session_feedback_variants_and_rpe_load(client):
+    from routepass.models import TrainingSession
+
+    today = date(2026, 11, 19)
+    with session_scope() as s:
+        prefs = store.get_preferences(s)
+        plan = training.create_plan(
+            s,
+            prefs,
+            {"name": "50k", "plan_type": "trail_run", "event_date": "2027-07-08"},
+            use_ai=False,
+            today=today,
+        )
+        sessions = (
+            s.query(TrainingSession).filter_by(plan_id=plan.id).order_by(TrainingSession.scheduled_date).all()
+        )
+        first, second, third = sessions[0].id, sessions[1].id, sessions[2].id
+        act = Activity(
+            start_time=datetime(2026, 11, 19, 18),
+            name="Run",
+            sport="TrailRun",
+            family="run",
+            moving_time_s=3600,
+            distance_m=10000,
+            load=50.0,
+            load_method="estimate",
+        )
+        s.add(act)
+        s.flush()
+        sessions[0].matched_activity_id = act.id
+        act_id, plan_id = act.id, plan.id
+    h = _auth_headers()
+
+    # Effort replaces the duration estimate: RPE 7 for 1 h = 0.85² × 100 ≈ 72.
+    r = client.post(f"/api/v1/training/sessions/{first}/feedback", json={"rpe": 7, "feel": "hard"}, headers=h)
+    assert r.status_code == 200, r.text
+    with session_scope() as s:
+        a = s.get(Activity, act_id)
+        assert a.load_method == "rpe" and round(a.load) == 72
+
+    # Shorter, then undo.
+    full = client.get(f"/api/v1/training/plans/{plan_id}", headers=h).json()
+    target = next(x for w in full["weeks"] for x in w["sessions"] if x["id"] == second)
+    assert target["why"] and target["compliance_level"] == "planned" and "zone" in target
+    r = client.post(
+        f"/api/v1/training/sessions/{second}/variant", json={"kind": "shorter", "minutes": 30}, headers=h
+    ).json()
+    short = next(x for w in r["plan"]["weeks"] for x in w["sessions"] if x["id"] == second)
+    assert short["target_duration_s"] == 1800 and short["changed"] and short["status"] == "moved"
+    r = client.post(
+        f"/api/v1/training/sessions/{second}/variant", json={"kind": "original"}, headers=h
+    ).json()
+    back = next(x for w in r["plan"]["weeks"] for x in w["sessions"] if x["id"] == second)
+    assert back["target_duration_s"] == target["target_duration_s"] and not back["changed"]
+
+    # Swap exchanges the dates of the two next sessions.
+    r = client.post(f"/api/v1/training/sessions/{second}/variant", json={"kind": "swap"}, headers=h).json()
+    by_id = {x["id"]: x for w in r["plan"]["weeks"] for x in w["sessions"]}
+    assert by_id[second]["scheduled_date"] > by_id[third]["scheduled_date"]
+
+    # A second session that felt too hard eases the next sessions.
+    r = client.post(
+        f"/api/v1/training/sessions/{third}/feedback", json={"rpe": 9, "feel": "hard"}, headers=h
+    ).json()
+    assert r["result"]["adjusted"]
+    assert "zones" in r["plan"]

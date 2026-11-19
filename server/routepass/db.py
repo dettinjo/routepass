@@ -11,8 +11,16 @@ from routepass.config import get_settings
 from routepass.models import Base
 
 # Bump and append to _MIGRATIONS when the schema changes; create_all handles new tables.
-SCHEMA_VERSION = 1
-_MIGRATIONS: dict[int, list[str]] = {}
+SCHEMA_VERSION = 2
+_MIGRATIONS: dict[int, list[str]] = {
+    2: [
+        "ALTER TABLE activities ADD COLUMN rpe INTEGER",
+        "ALTER TABLE training_sessions ADD COLUMN rpe INTEGER",
+        "ALTER TABLE training_sessions ADD COLUMN feel VARCHAR(12)",
+        "ALTER TABLE training_sessions ADD COLUMN feedback_note TEXT",
+        "ALTER TABLE training_sessions ADD COLUMN original_target JSON",
+    ],
+}
 
 _engine: Engine | None = None
 _Session: sessionmaker[Session] | None = None
@@ -26,6 +34,14 @@ def _on_connect(dbapi_conn, _record) -> None:
     cur.execute("PRAGMA busy_timeout=10000")
     cur.execute("PRAGMA cache_size=-32000")
     cur.close()
+
+
+def _column_exists(conn, stmt: str) -> bool:
+    words = stmt.split()
+    if len(words) < 6 or [w.upper() for w in words[:2]] != ["ALTER", "TABLE"] or words[3].upper() != "ADD":
+        return False
+    table, column = words[2], words[5] if words[4].upper() == "COLUMN" else words[4]
+    return any(row[1] == column for row in conn.execute(text(f"PRAGMA table_info({table})")))
 
 
 def init_db(url: str | None = None) -> Engine:
@@ -44,6 +60,8 @@ def init_db(url: str | None = None) -> Engine:
         else:
             for version in range(current + 1, SCHEMA_VERSION + 1):
                 for stmt in _MIGRATIONS.get(version, []):
+                    if _column_exists(conn, stmt):
+                        continue  # table was created by create_all above with the column already
                     conn.execute(text(stmt))
                 conn.execute(text(f"PRAGMA user_version={version}"))
     _Session = sessionmaker(_engine, expire_on_commit=False)

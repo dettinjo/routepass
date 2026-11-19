@@ -715,6 +715,39 @@ def adapt_training_plan(plan_id: int | None = None, user_note: str = "") -> dict
 
 
 @mcp.tool()
+def rate_training_session(
+    session_id: int, rpe: int | None = None, feel: str | None = None, note: str = ""
+) -> dict[str, Any]:
+    """Record how a session felt: rpe 1–10 and feel 'easy' | 'right' | 'hard'. The effort becomes the
+    activity's load when nothing was measured; two 'hard' (or 'easy') in a row adjust the next sessions."""
+    from routepass.analysis import training_extras
+    from routepass.models import TrainingSession
+
+    with session_scope() as db:
+        s = db.get(TrainingSession, session_id)
+        if s is None:
+            return {"error": f"Session {session_id} not found"}
+        return training_extras.rate_session(db, s, rpe=rpe, feel=feel, note=note)
+
+
+@mcp.tool()
+def change_training_session(session_id: int, kind: str, minutes: int | None = None) -> dict[str, Any]:
+    """Change one session: kind 'shorter' (to `minutes`), 'easier', 'swap' (with the next session)
+    or 'original' (undo the change)."""
+    from routepass.analysis import training_extras
+    from routepass.models import TrainingSession
+
+    with session_scope() as db:
+        s = db.get(TrainingSession, session_id)
+        if s is None:
+            return {"error": f"Session {session_id} not found"}
+        try:
+            return training_extras.apply_variant(db, s, kind, minutes)
+        except ValueError as exc:
+            return {"error": str(exc)}
+
+
+@mcp.tool()
 def update_training_session(
     session_id: int,
     status: str | None = None,

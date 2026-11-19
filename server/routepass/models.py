@@ -52,6 +52,7 @@ class Activity(Base):
     max_speed_ms: Mapped[float | None] = mapped_column(Float)
     avg_hr: Mapped[float | None] = mapped_column(Float)
     max_hr: Mapped[float | None] = mapped_column(Float)
+    rpe: Mapped[int | None] = mapped_column(Integer)  # perceived effort 1–10 given by the athlete
     avg_power: Mapped[float | None] = mapped_column(Float)
     normalized_power: Mapped[float | None] = mapped_column(Float)
     max_power: Mapped[float | None] = mapped_column(Float)
@@ -294,6 +295,10 @@ class TrainingSession(Base):
     compliance_score: Mapped[float | None] = mapped_column(Float)
     gcal_event_id: Mapped[str | None] = mapped_column(String(160))
     adaptation_note: Mapped[str | None] = mapped_column(Text)
+    rpe: Mapped[int | None] = mapped_column(Integer)  # 1–10, "how hard was it"
+    feel: Mapped[str | None] = mapped_column(String(12))  # easy | right | hard
+    feedback_note: Mapped[str | None] = mapped_column(Text)
+    original_target: Mapped[dict | None] = mapped_column(JSON)  # before a shorter/easier/swap variant
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

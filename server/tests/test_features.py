@@ -5,6 +5,7 @@ import io
 from datetime import datetime, timedelta
 
 import httpx
+from sqlalchemy import func
 
 from routepass import store
 from routepass.db import session_scope
@@ -194,3 +195,26 @@ def test_rule_dry_run_counts_matches_and_earlier_rules(client):
         "/api/v1/rules/test", json={"direction": "komoot_to_strava", "conditions": {"nope": 1}}, headers=AUTH
     )
     assert bad.status_code == 422
+
+
+def test_merged_records_stay_merged_after_the_next_sync(client):
+    """Regression: merging left the moved records unlinked, so the next sync split them off again."""
+    from sqlalchemy import select
+
+    from routepass.engine import ingest
+
+    with session_scope() as db:
+        k = _activity(db, datetime(2026, 5, 13, 16, 17), km=20.0, provider="komoot", ext="k1", name="Garraf")
+        s = _activity(db, datetime(2026, 5, 13, 14, 8), km=20.3, provider="strava", ext="s1", name="Garraf")
+        kid, sid = k.id, s.id
+    assert (
+        client.post(f"/api/v1/activities/{kid}/merge", json={"other_id": sid}, headers=AUTH).status_code
+        == 200
+    )
+    with session_scope() as db:
+        recs = db.scalars(select(ProviderActivity)).all()
+        assert {r.activity_id for r in recs} == {kid}
+        ingest.match_unlinked(db)  # what every sync does
+        assert db.scalar(select(func.count(Activity.id))) == 1
+    dups = client.get("/api/v1/activities/duplicates", headers=AUTH).json()
+    assert dups == []

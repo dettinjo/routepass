@@ -458,6 +458,9 @@ def refresh_activity(db: Session, activity_id: int) -> Activity | None:
             hr_max=prefs["hr_max"],
             hr_rest=prefs["hr_rest"],
         )
+    from routepass.analysis.training_extras import apply_rpe
+
+    apply_rpe(act)
     db.flush()
     return act
 
