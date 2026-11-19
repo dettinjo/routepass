@@ -6,6 +6,7 @@ import {
   ICON, IconAdapt, IconAdapted, IconAttention, IconCalendarAdd, IconCalendarSynced, IconChevronDownSm, IconInjury, IconKeySession, IconLeft,
   IconPlus, IconRace, IconRight, IconSick, IconSore, IconStatusDone, IconStatusSkipped, IconStreak, IconSync, IconTime,
   IconTired, IconTraining, IconTrash, KEYED_ICON, MetricIcon, PlanSportIcon, SportIcon,
+  IconInfo, IconStatusFailed, IconStatusPlanned, IconUndo, IconCalendarStat,
 } from "../components/icons";
 import { Attention, Card, Empty, InfoTip, Menu, ProgressBar, Seg, Skeleton, Stat, StatusBadge, Tabs, useToast, type Severity } from "../components/ui";
 import { api } from "../lib/api";
@@ -113,6 +114,177 @@ function LinkedActivity({ a, compliance }: { a: any; compliance: number | null }
       {compliance != null && <span className="muted small">{Math.round(compliance)}% of target</span>}
       <IconRight size={ICON.button} className="muted" />
     </Link>
+  );
+}
+
+// ── compliance, targets, feedback ────────────────────────────────────────────
+/** TrainingPeaks-style session colours; always shown with an icon and a word. */
+const COMPLIANCE: Record<string, { label: string; color: string; icon: React.ComponentType<{ size?: number; style?: React.CSSProperties }> }> = {
+  on: { label: "On target", color: "var(--good)", icon: IconStatusDone },
+  partial: { label: "Partly done", color: "var(--warn)", icon: IconAttention },
+  off: { label: "Far off target", color: "var(--serious)", icon: IconAttention },
+  missed: { label: "Missed", color: "var(--bad)", icon: IconStatusFailed },
+  skipped: { label: "Skipped", color: "var(--neutral)", icon: IconStatusSkipped },
+  planned: { label: "Planned", color: "var(--border-strong)", icon: IconStatusPlanned },
+};
+
+function ComplianceMark({ level, sport }: { level: string; sport: string }) {
+  const c = COMPLIANCE[level] ?? COMPLIANCE.planned;
+  if (level === "planned") return <span className="status-dot" style={{ background: planSportColor(sport) }} title={`Planned · ${SPORT_LABEL[sport] ?? sport}`} />;
+  return <span title={c.label} style={{ display: "inline-flex" }}><c.icon size={13} style={{ color: c.color }} /></span>;
+}
+
+const RUN_SPORTS = new Set(["run", "trail_run", "brick"]);
+const BIKE_SPORTS = new Set(["bike", "ride", "cycling"]);
+
+/** "6:10–6:40 /km · 128–142 bpm" for a zone, in the units that fit the sport. */
+function zoneRange(zones: any, zone: string | null | undefined, sport: string): string | null {
+  if (!zones || !zone) return null;
+  const parts: string[] = [];
+  if (RUN_SPORTS.has(sport) && zones.pace?.[zone]) {
+    const [fast, slow] = zones.pace[zone];
+    parts.push(`${pace(fast).replace(" /km", "")}–${pace(slow)}`);
+  }
+  if (BIKE_SPORTS.has(sport) && zones.power?.[zone]) parts.push(`${zones.power[zone][0]}–${zones.power[zone][1]} W`);
+  if (zones.hr?.[zone]) parts.push(`${zones.hr[zone][0]}–${zones.hr[zone][1]} bpm`);
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/** Puts your numbers next to zone mentions in workout steps: "Z2" → "Z2 (6:10–6:40 /km · 128–142 bpm)". */
+function annotate(step: string, zones: any, sport: string): string {
+  return step.replace(/\bZ(\d)(?:\s*[–-]\s*Z?(\d))?\b/g, (m, a, b) => {
+    const lo = zoneRange(zones, a, sport);
+    const hi = b ? zoneRange(zones, b, sport) : null;
+    if (!lo) return m;
+    return hi && b !== a ? `${m} (${lo.split(" · ")[0]} → ${hi.split(" · ")[0]})` : `${m} (${lo})`;
+  });
+}
+
+function Targets({ s, zones }: { s: any; zones: any }) {
+  const range = zoneRange(zones, s.zone, s.sport);
+  if (!s.zone) return null;
+  return (
+    <div className="targets">
+      <span className="row nowrap" style={{ gap: 4 }}><MetricIcon.hr size={ICON.inline} />Mostly zone {s.zone}</span>
+      {range ? <b>{range}</b> : <Link to="/settings/profile" className="small">Add max heart rate for your numbers</Link>}
+    </div>
+  );
+}
+
+function WhyLine({ text }: { text?: string }) {
+  return text ? <p className="why"><IconInfo size={ICON.inline} />{text}</p> : null;
+}
+
+const FEEL_LABEL: Record<string, string> = { easy: "Too easy", right: "About right", hard: "Too hard" };
+
+/** "How did it feel?" — effort 1–10 plus too easy / right / too hard. */
+function Feedback({ s, busy, onSave }: { s: any; busy: boolean; onSave: (rpe: number | null, feel: string | null) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [feel, setFeel] = useState<string | null>(s.feel ?? null);
+  const [rpe, setRpe] = useState<number | null>(s.rpe ?? null);
+  if ((s.feel || s.rpe) && !editing) {
+    return (
+      <div className="feedback">
+        <span className="row between nowrap">
+          <span>Felt <b>{s.feel ? FEEL_LABEL[s.feel].toLowerCase() : "rated"}</b>{s.rpe ? ` · effort ${s.rpe}/10` : ""}</span>
+          <button className="sm ghost" onClick={() => setEditing(true)}>Change</button>
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="feedback">
+      <b>How did it feel?</b>
+      <Seg block value={(feel ?? "") as string} onChange={(v) => setFeel(v)} options={[{ value: "easy", label: "Too easy" }, { value: "right", label: "About right" }, { value: "hard", label: "Too hard" }]} />
+      <div>
+        <div className="rpe-scale" role="group" aria-label="Effort from 1 to 10">
+          {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+            <button key={n} type="button" className={rpe === n ? "on" : ""} onClick={() => setRpe(rpe === n ? null : n)} aria-label={`Effort ${n} of 10`}>{n}</button>
+          ))}
+        </div>
+        <div className="rpe-ends"><span>very easy</span><span>all out</span></div>
+      </div>
+      <span className="xs muted">Your effort counts as training load when no heart rate was recorded.</span>
+      <div className="row">
+        <button className="sm primary" disabled={busy || (!feel && !rpe)} onClick={() => { onSave(rpe, feel); setEditing(false); }}><IconStatusDone size={ICON.button} />Save</button>
+        {editing && <button className="sm ghost" onClick={() => setEditing(false)}>Cancel</button>}
+      </div>
+    </div>
+  );
+}
+
+/** Today's options: the plan as is, shorter, easier, swap, skip — or undo a change. */
+function SessionOptions({ s, busy, onVariant, onSkip, compact = false }: {
+  s: any; busy: boolean; onVariant: (kind: string, minutes?: number) => void; onSkip: () => void; compact?: boolean;
+}) {
+  const [short, setShort] = useState(false);
+  const full = Math.round((s.target_duration_s || 3600) / 60);
+  const choices = [20, 30, 45, 60, 75, 90].filter((m) => m < full);
+  return (
+    <div className="stack" style={{ gap: 8 }}>
+      <div className="option-row">
+        {s.changed && <button className="sm" disabled={busy} onClick={() => onVariant("original")}><IconUndo size={ICON.button} />Back to the plan</button>}
+        {choices.length > 0 && <button className={`sm ${short ? "primary" : ""}`} disabled={busy} onClick={() => setShort(!short)}><IconTime size={ICON.button} />Shorter</button>}
+        {s.session_type !== "easy" && s.session_type !== "recovery" && <button className="sm" disabled={busy} onClick={() => onVariant("easier")}><IconTired size={ICON.button} />Easier</button>}
+        <button className="sm" disabled={busy} onClick={() => onVariant("swap")}><IconSync size={ICON.button} />Swap with next</button>
+        {!compact && <button className="sm ghost" disabled={busy} onClick={onSkip}><IconStatusSkipped size={ICON.button} />Skip…</button>}
+      </div>
+      {short && (
+        <div className="row">
+          <span className="small secondary">I have</span>
+          {choices.map((m) => <button key={m} className="chip" disabled={busy} onClick={() => { setShort(false); onVariant("shorter", m); }}>{m} min</button>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Month overview: compliance per day and planned vs done hours per week. */
+function MonthView({ sessions, today, onPick }: { sessions: any[]; today: string; onPick: (date: string) => void }) {
+  const [anchor, setAnchor] = useState(today.slice(0, 7));
+  const first = asDate(`${anchor}-01`);
+  const start = addDays(`${anchor}-01`, -((first.getDay() + 6) % 7));
+  const byDate = useMemo(() => {
+    const m: Record<string, any[]> = {};
+    for (const s of sessions) if (s.sport !== "rest") (m[s.scheduled_date] ||= []).push(s);
+    return m;
+  }, [sessions]);
+  const weeks = Array.from({ length: 6 }, (_, w) => Array.from({ length: 7 }, (_, d) => addDays(start, w * 7 + d)))
+    .filter((wk) => wk.some((d) => d.startsWith(anchor)));
+  const shift = (n: number) => { const d = asDate(`${anchor}-01`); d.setMonth(d.getMonth() + n); setAnchor(localIso(d).slice(0, 7)); };
+  return (
+    <div className="stack" style={{ gap: 8 }}>
+      <div className="row between nowrap">
+        <button className="ghost icon sm" aria-label="Previous month" onClick={() => shift(-1)}><IconLeft size={ICON.button} /></button>
+        <b>{first.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</b>
+        <button className="ghost icon sm" aria-label="Next month" onClick={() => shift(1)}><IconRight size={ICON.button} /></button>
+      </div>
+      <div className="month-grid">
+        {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => <span key={i} className="hd">{d}</span>)}
+        <span className="hd">Week</span>
+        {weeks.map((wk) => {
+          const ss = wk.flatMap((d) => byDate[d] || []);
+          const planned = ss.reduce((t, s) => t + (s.target_duration_s || 0), 0);
+          const done = ss.reduce((t, s) => t + (s.matched_activity?.moving_time_s || 0), 0);
+          return [
+            ...wk.map((d) => (
+              <button key={d} className={`day ${d.startsWith(anchor) ? "" : "out"} ${d === today ? "today" : ""}`} onClick={() => onPick(d)}
+                aria-label={`${asDate(d).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}: ${(byDate[d] || []).map((s) => `${s.title}, ${(COMPLIANCE[s.compliance_level] ?? COMPLIANCE.planned).label}`).join("; ") || "rest"}`}>
+                {asDate(d).getDate()}
+                <span className="dots">{(byDate[d] || []).map((s) => <ComplianceMark key={s.id} level={s.compliance_level} sport={s.sport} />)}</span>
+              </button>
+            )),
+            <span key={`${wk[0]}-t`} className="wk" title={planned ? `${hm(done) === "–" ? "0m" : hm(done)} done of ${hm(planned)} planned` : undefined}>
+              {planned ? <><b>{(done / 3600).toFixed(1)}</b><span className="muted">/{(planned / 3600).toFixed(1)} h</span></> : null}
+            </span>,
+          ];
+        })}
+      </div>
+      <div className="compliance-legend">
+        {["on", "partial", "off", "missed", "skipped"].map((k) => { const c = COMPLIANCE[k]; return <span key={k}><c.icon size={13} style={{ color: c.color }} />{c.label}</span>; })}
+        <span><span className="status-dot" style={{ background: "var(--text-muted)" }} />Planned</span>
+      </div>
+    </div>
   );
 }
 
@@ -453,6 +625,7 @@ function PlanView() {
   const [skipId, setSkipId] = useState<number | null>(null);
   const [adaptOpen, setAdaptOpen] = useState(false);
   const [adaptNote, setAdaptNote] = useState("");
+  const [weekView, setWeekView] = useState<"week" | "month">("week");
 
   const listQ = useQuery<any>({ queryKey: ["training-plans"], queryFn: () => api("/training/plans") });
   const plans = listQ.data?.plans || [];
@@ -479,6 +652,24 @@ function PlanView() {
     mutationFn: ({ id, reason, severity, note }: { id: number; reason: SkipReason; severity: SkipSeverity; note: string }) =>
       api<any>(`/training/sessions/${id}/skip-adapt`, { method: "POST", body: { reason, severity, note } }),
     onSuccess: (r) => { setPlan(r); setSkipId(null); toast(r.result?.immediate_actions?.[0] || r.result?.adaptation?.summary || "Plan adapted"); },
+    onError: (e: Error) => toast(e.message, true),
+  });
+  const variantMut = useMutation({
+    mutationFn: ({ id, kind, minutes }: { id: number; kind: string; minutes?: number }) =>
+      api<any>(`/training/sessions/${id}/variant`, { method: "POST", body: { kind, minutes } }),
+    onSuccess: (r, v) => {
+      setPlan(r);
+      toast(v.kind === "original" ? "Back to the planned session" : v.kind === "shorter" ? `Shortened to ${v.minutes} min` : v.kind === "easier" ? "Made easier for today" : "Swapped with the next session");
+    },
+    onError: (e: Error) => toast(e.message, true),
+  });
+  const feedbackMut = useMutation({
+    mutationFn: ({ id, rpe, feel }: { id: number; rpe: number | null; feel: string | null }) =>
+      api<any>(`/training/sessions/${id}/feedback`, { method: "POST", body: { rpe, feel } }),
+    onSuccess: (r) => {
+      setPlan(r);
+      toast(r.result.adjusted?.length ? `Thanks — the next ${r.result.adjusted.length} sessions were adjusted` : "Thanks — saved");
+    },
     onError: (e: Error) => toast(e.message, true),
   });
   const deleteMut = useMutation({
@@ -544,15 +735,20 @@ function PlanView() {
     ) : undefined,
   }));
 
+  const openSession = (s: any) => ["planned", "moved", "missed"].includes(s.status) && !s.matched_activity;
   const sessionActions = (s: any) => (
     <Menu>
       {s.status !== "completed" && <button onClick={() => sessionMut.mutate({ id: s.id, body: { status: "completed" } })}><IconStatusDone size={ICON.button} />Mark as done</button>}
-      {s.status !== "completed" && s.status !== "skipped" && <>
-        <button onClick={() => sessionMut.mutate({ id: s.id, body: { scheduled_date: addDays(s.scheduled_date, 1) } })}><IconRight size={ICON.button} />Move to {dayLabel(addDays(s.scheduled_date, 1), today)}</button>
+      {openSession(s) && <>
+        {s.changed && <button onClick={() => variantMut.mutate({ id: s.id, kind: "original" })}><IconUndo size={ICON.button} />Back to the plan</button>}
+        <button onClick={() => variantMut.mutate({ id: s.id, kind: "shorter", minutes: Math.max(20, Math.round((s.target_duration_s || 3600) / 60 * 0.6)) })}><IconTime size={ICON.button} />Shorter (about 60%)</button>
+        {s.session_type !== "easy" && s.session_type !== "recovery" && <button onClick={() => variantMut.mutate({ id: s.id, kind: "easier" })}><IconTired size={ICON.button} />Easier</button>}
+        <button onClick={() => variantMut.mutate({ id: s.id, kind: "swap" })}><IconSync size={ICON.button} />Swap with next</button>
         <button onClick={() => setSkipId(s.id)}><IconStatusSkipped size={ICON.button} />Skip and adapt…</button>
       </>}
     </Menu>
   );
+  const zones = plan.zones;
 
   return (
     <div className="stack gap16">
@@ -657,6 +853,7 @@ function PlanView() {
               <div key={s.id} className="stack" style={{ gap: 6, marginBottom: 12 }}>
                 <span className="row small"><StatusBadge status="completed" label="Done today" />{s.title}</span>
                 {s.matched_activity && <LinkedActivity a={s.matched_activity} compliance={s.compliance_score} />}
+                <Feedback s={s} busy={feedbackMut.isPending} onSave={(rpe, feel) => feedbackMut.mutate({ id: s.id, rpe, feel })} />
               </div>
             ))}
             {next ? (
@@ -670,15 +867,15 @@ function PlanView() {
                   </div>
                   <h3 className="row" style={{ gap: 6 }}>{next.title}{next.priority === "key" && <span className="badge outline"><IconKeySession size={ICON.inline} />Key</span>}</h3>
                   <SessionMetrics s={next} />
+                  <Targets s={next} zones={zones} />
                   {next.description && <p className="small secondary mt8">{next.description}</p>}
-                  {next.workout_steps?.length > 0 && <ul className="steps-list small secondary" style={{ margin: "6px 0 0 18px", padding: 0 }}>{next.workout_steps.map((st: string, i: number) => <li key={i}>{st}</li>)}</ul>}
+                  {next.workout_steps?.length > 0 && <ul className="steps-list small secondary" style={{ margin: "6px 0 0 18px", padding: 0 }}>{next.workout_steps.map((st: string, i: number) => <li key={i}>{annotate(st, zones, next.sport)}</li>)}</ul>}
+                  <WhyLine text={next.why} />
                   {next.adaptation_note && <div className="note"><IconAdapted size={ICON.inline} />{next.adaptation_note}</div>}
                   <div className="today-actions">
-                    <button className="sm" onClick={() => sessionMut.mutate({ id: next.id, body: { status: "completed" } })}><IconStatusDone size={ICON.button} />Mark as done</button>
-                    <button className="sm" onClick={() => sessionMut.mutate({ id: next.id, body: { scheduled_date: addDays(next.scheduled_date, 1) } })}><IconRight size={ICON.button} />Move a day</button>
-                    <button className="sm ghost" onClick={() => setSkipId(skipId === next.id ? null : next.id)}><IconStatusSkipped size={ICON.button} />Skip…</button>
+                    <SessionOptions s={next} busy={variantMut.isPending} onVariant={(kind, minutes) => variantMut.mutate({ id: next.id, kind, minutes })} onSkip={() => setSkipId(skipId === next.id ? null : next.id)} />
                   </div>
-                  <p className="xs muted mt8">Recorded activities from Strava or Komoot are matched automatically.</p>
+                  <p className="xs muted mt8">Your recorded activity from Strava or Komoot is matched automatically — then tell us how it felt.</p>
                   {skipId === next.id && <SkipDrawer busy={skipMut.isPending} onCancel={() => setSkipId(null)} onApply={(reason, severity, note) => skipMut.mutate({ id: next.id, reason, severity, note })} />}
                 </div>
               </div>
@@ -687,15 +884,25 @@ function PlanView() {
 
           {/* 3. The week */}
           {curWeek && (
-            <Card title={`Week ${curWeek.week_index} · ${PHASE_LABEL[curWeek.phase] ?? curWeek.phase}`}
-              hint={curWeek.coach_focus}
+            <Card title={weekView === "month" ? "Calendar" : `Week ${curWeek.week_index} · ${PHASE_LABEL[curWeek.phase] ?? curWeek.phase}`}
+              icon={weekView === "month" ? IconCalendarStat : undefined}
+              hint={weekView === "month" ? "Planned vs done; tap a day to open its week" : curWeek.coach_focus}
               actions={
                 <div className="row nowrap" style={{ gap: 4 }}>
-                  <button className="ghost icon sm" aria-label="Previous week" disabled={curWeek.week_index <= 1} onClick={() => { setWeekIdx(curWeek.week_index - 1); setSelDay(null); }}><IconLeft size={ICON.button} /></button>
-                  {!isCurrentWeek && <button className="sm ghost" onClick={() => { setWeekIdx(a.current_week_index); setSelDay(null); }}>This week</button>}
-                  <button className="ghost icon sm" aria-label="Next week" disabled={curWeek.week_index >= weeks.length} onClick={() => { setWeekIdx(curWeek.week_index + 1); setSelDay(null); }}><IconRight size={ICON.button} /></button>
+                  {weekView === "week" && <>
+                    <button className="ghost icon sm" aria-label="Previous week" disabled={curWeek.week_index <= 1} onClick={() => { setWeekIdx(curWeek.week_index - 1); setSelDay(null); }}><IconLeft size={ICON.button} /></button>
+                    {!isCurrentWeek && <button className="sm ghost" onClick={() => { setWeekIdx(a.current_week_index); setSelDay(null); }}>Now</button>}
+                    <button className="ghost icon sm" aria-label="Next week" disabled={curWeek.week_index >= weeks.length} onClick={() => { setWeekIdx(curWeek.week_index + 1); setSelDay(null); }}><IconRight size={ICON.button} /></button>
+                  </>}
+                  <Seg value={weekView} onChange={setWeekView} options={[{ value: "week", label: "Week" }, { value: "month", label: "Month" }]} />
                 </div>
               }>
+              {weekView === "month" ? (
+                <MonthView sessions={allSessions} today={today} onPick={(d) => {
+                  const w = weeks.find((x) => x.start_date <= d && d <= addDays(x.start_date, 6));
+                  if (w) { setWeekIdx(w.week_index); setSelDay(d); setWeekView("week"); }
+                }} />
+              ) : (
               <div className="stack">
                 <div className="week-strip" role="group" aria-label="Days of the week">
                   {weekDays.map((d) => {
@@ -706,10 +913,7 @@ function PlanView() {
                         <span className="wd">{asDate(d).toLocaleDateString(undefined, { weekday: "narrow" })}</span>
                         <span className="dn">{asDate(d).getDate()}</span>
                         <span className="marks">
-                          {ss.map((s) => s.status === "completed" || s.status === "partial"
-                            ? <IconStatusDone key={s.id} size={ICON.inline} style={{ color: s.status === "completed" ? "var(--good)" : "var(--warn)" }} />
-                            : s.status === "missed" ? <span key={s.id} className="status-dot" style={{ background: "var(--warn)" }} />
-                              : <span key={s.id} className="status-dot" style={{ background: planSportColor(s.sport), opacity: s.status === "skipped" ? 0.35 : 1 }} />)}
+                          {ss.map((s) => <ComplianceMark key={s.id} level={s.compliance_level} sport={s.sport} />)}
                         </span>
                       </button>
                     );
@@ -721,25 +925,35 @@ function PlanView() {
                 <div className="stack" style={{ gap: 8 }}>
                   {shown.filter((s) => s.sport !== "rest").map((s) => {
                     const st = SESSION_STATUS[s.status] || SESSION_STATUS.planned;
+                    const cmp = COMPLIANCE[s.compliance_level] ?? COMPLIANCE.planned;
+                    const done = Boolean(s.matched_activity) || ["completed", "partial"].includes(s.status);
                     return (
-                      <div key={s.id} className={`session st-${s.status} ${s.scheduled_date === today ? "is-today" : ""}`}>
+                      <div key={s.id} className={`session ${s.scheduled_date === today ? "is-today" : ""}`} style={{ "--st": cmp.color } as React.CSSProperties}>
                         <div className="session-head">
                           <PlanSportBadge sport={s.session_type === "recovery" ? "recovery" : s.sport} size={36} />
                           <div className="grow">
                             <span className="session-when"><b>{dayLabel(s.scheduled_date, today)}</b>{timeSlot(s) && <span>· {timeSlot(s)}</span>}{s.gcal_event_id && <IconCalendarSynced size={ICON.inline} aria-label="In your calendar" />}</span>
                             <span className="session-title">{s.title}{s.priority === "key" && <span className="badge outline"><IconKeySession size={ICON.inline} />Key</span>}</span>
-                            <div className="row" style={{ gap: 6 }}><StatusBadge status={st.status} label={st.label} /><span className="xs muted">{SPORT_LABEL[s.sport] ?? s.sport}</span></div>
+                            <div className="row" style={{ gap: 6 }}>
+                              {s.compliance_level !== "planned"
+                                ? <span className="badge neutral" style={{ color: "var(--text-primary)" }}><cmp.icon size={ICON.inline} style={{ color: cmp.color }} />{cmp.label}</span>
+                                : <StatusBadge status={st.status} label={st.label} />}
+                              <span className="xs muted">{SPORT_LABEL[s.sport] ?? s.sport}</span>
+                            </div>
                           </div>
                           {sessionActions(s)}
                         </div>
                         <SessionMetrics s={s} />
+                        {!done && <Targets s={s} zones={zones} />}
                         {s.matched_activity && <LinkedActivity a={s.matched_activity} compliance={s.compliance_score} />}
+                        {done && <Feedback s={s} busy={feedbackMut.isPending} onSave={(rpe, feel) => feedbackMut.mutate({ id: s.id, rpe, feel })} />}
                         {s.adaptation_note && <div className="note"><IconAdapted size={ICON.inline} />{s.adaptation_note}</div>}
-                        {(s.description || s.workout_steps?.length > 0) && (
+                        {(s.description || s.workout_steps?.length > 0 || s.why) && (
                           <details className="more mt8">
                             <summary><IconRight size={ICON.button} />Workout</summary>
                             {s.description && <p className="small secondary mt8">{s.description}</p>}
-                            {s.workout_steps?.length > 0 && <ul className="steps-list">{s.workout_steps.map((x: string, i: number) => <li key={i}>{x}</li>)}</ul>}
+                            {s.workout_steps?.length > 0 && <ul className="steps-list">{s.workout_steps.map((x: string, i: number) => <li key={i}>{annotate(x, zones, s.sport)}</li>)}</ul>}
+                            <WhyLine text={s.why} />
                           </details>
                         )}
                         {skipId === s.id && s.id !== next?.id && <SkipDrawer busy={skipMut.isPending} onCancel={() => setSkipId(null)} onApply={(reason, severity, note) => skipMut.mutate({ id: s.id, reason, severity, note })} />}
@@ -749,6 +963,7 @@ function PlanView() {
                   {shown.filter((s) => s.sport !== "rest").length === 0 && <p className="small muted">Rest day.</p>}
                 </div>
               </div>
+              )}
             </Card>
           )}
         </div>

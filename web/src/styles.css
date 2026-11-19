@@ -18,6 +18,7 @@
   --good-soft: #e3f3e7;
   --warn-soft: #fbefd9;
   --bad-soft: #fbe3e3;
+  --serious: #d9622e;
   --strava: #fc4c02;
   --komoot: #6aa127;
   --series-1: #2a78d6;
@@ -86,6 +87,8 @@
     --good-soft: #17301e;
     --warn-soft: #33270f;
     --bad-soft: #3a1a1a;
+  --serious: #ec835a;
+    --serious: #ec835a;
     --series-1: #3987e5;
     --series-2: #d95926;
     --series-3: #199e70;
@@ -138,6 +141,7 @@
   --good-soft: #17301e;
   --warn-soft: #33270f;
   --bad-soft: #3a1a1a;
+  --serious: #ec835a;
   --series-1: #3987e5;
   --series-2: #d95926;
   --series-3: #199e70;
@@ -745,3 +749,38 @@ select.compact-select { width: auto; min-height: 36px; padding: 0 8px; border-ra
   .rule-block { grid-template-columns: minmax(0, 1fr); gap: 6px; }
   .rule-kw { padding-top: 0; }
 }
+
+/* ── training: compliance, feedback, month ───────────────────────────────── */
+.session { border-left-color: var(--st, var(--border-strong)); }
+.targets { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-top: 6px; font-size: 13px; color: var(--text-secondary); }
+.targets b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.why { display: flex; gap: 6px; align-items: flex-start; font-size: 13px; color: var(--text-secondary); margin-top: 8px; }
+.why svg { flex: none; margin-top: 2px; color: var(--text-muted); }
+.feedback { margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.rpe-scale { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 4px; }
+.rpe-scale button { min-height: 34px; padding: 0; font-size: 13px; border-radius: 8px; }
+.rpe-scale button.on { background: var(--selected-bg); color: var(--selected-ink); border-color: var(--selected-bg); }
+.rpe-ends { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); }
+.option-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.month-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)) minmax(44px, 0.9fr); gap: 3px; }
+.month-grid .hd { font-size: 11px; color: var(--text-muted); text-align: center; text-transform: uppercase; padding-bottom: 4px; }
+.month-grid .day { min-height: 54px; border-radius: 8px; background: var(--surface-2); padding: 4px; display: flex; flex-direction: column; gap: 3px; align-items: flex-start; border: 1px solid transparent; font-weight: 600; font-size: 12px; justify-content: flex-start; }
+.month-grid .day.out { opacity: 0.35; }
+.month-grid .day.today { border-color: var(--text-primary); }
+.month-grid .day .dots { display: flex; flex-wrap: wrap; gap: 3px; }
+.month-grid .wk { font-size: 11px; white-space: nowrap; color: var(--text-secondary); display: flex; flex-direction: column; justify-content: center; align-items: flex-end; font-variant-numeric: tabular-nums; }
+.compliance-legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--text-secondary); }
+.compliance-legend span { display: inline-flex; align-items: center; gap: 4px; }
+
+/* ── activity photos & visibility ────────────────────────────────────────── */
+.photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+.photo { position: relative; padding: 0; border: 0; border-radius: 10px; overflow: hidden; aspect-ratio: 1; min-height: 0; background: var(--surface-2); }
+.photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo .play { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; background: rgb(0 0 0 / 0.25); }
+.photo .src { position: absolute; right: 4px; bottom: 4px; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; background: rgb(255 255 255 / 0.9); }
+.photo-large { width: 100%; max-height: 70vh; object-fit: contain; border-radius: 10px; background: var(--surface-2); }
+.vis-rows { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.vis-row { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+@media (min-width: 640px) { .photo-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); } }
+.note { display: flex; gap: 6px; align-items: flex-start; margin-top: 8px; font-size: 13px; color: var(--text-secondary); }
+.note svg { flex: none; margin-top: 2px; }

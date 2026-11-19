@@ -6,6 +6,7 @@ import type { ActivityRow } from "../lib/types";
 import { RouteThumb } from "./charts";
 import { ICON, IconLock, IconRight, MetricIcon, SportIcon } from "./icons";
 import { ProviderBadges, SportBadge } from "./ui";
+import { VisibilityMark } from "./ActivityMedia";
 
 export type Metric = "distance_m" | "moving_time_s" | "elevation_m" | "count" | "load";
 export const METRICS: { value: Metric; label: string }[] = [
@@ -47,6 +48,7 @@ export function ActivityItem({ a, selectable = false, selected = false, onToggle
         <div className="row nowrap" style={{ gap: 6 }}>
           <span className="name ellipsis">{a.name}</span>
           {a.sync_locked && <IconLock size={ICON.inline} className="muted" />}
+          <VisibilityMark v={a.visibility} />
         </div>
         <span className="meta ellipsis">{a.sport_label} · {activityDate(a)}{a.trainer ? " · indoor" : ""}{a.commute ? " · commute" : ""}</span>
         <div className="metrics">

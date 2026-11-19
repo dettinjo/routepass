@@ -107,6 +107,10 @@ import {
   IconTrendingDown,
   IconWand,
   IconZzz,
+  IconWorld,
+  IconUsers,
+  IconEyeOff,
+  IconPhoto,
 } from "@tabler/icons-react";
 
 /** The only four icon sizes: inline (badges, metrics, tables), button/tab, card header/list, hero/empty. */
@@ -197,6 +201,10 @@ export const IconLogout2 = wrap(IconLogout);
 export const IconLocate = wrap(IconCurrentLocation);
 export const IconUndo = wrap(IconArrowBackUp);
 export const IconChecksI = wrap(IconChecks);
+export const IconVisPublic = wrap(IconWorld);
+export const IconVisFriends = wrap(IconUsers);
+export const IconVisPrivate = wrap(IconEyeOff);
+export const IconPhotos = wrap(IconPhoto);
 
 /** Icons referenced by key from API data (e.g. training badges) — never emoji. */
 export const KEYED_ICON: Record<string, ComponentType<P>> = {

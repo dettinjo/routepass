@@ -86,9 +86,11 @@ function DirectionCard({ dir, rules }: { dir: (typeof DIRS)[number]; rules: Rule
           <span className="small secondary">When no rule matches</span>
           <Seg block value={p.default_action} options={[{ value: "sync", label: "Copy it" }, { value: "skip", label: "Leave it" }]} onChange={(v) => patch({ default_action: v })} />
         </div>
+        <Switch checked={p.match_visibility ?? true} onChange={(v) => patch({ match_visibility: v })}
+          label={<span className="small">Copies get the same visibility as the original, and follow when you change it</span>} />
         {dir.key === "strava_to_komoot" ? (
           <div className="stack" style={{ gap: 6 }}>
-            <span className="small secondary">Visibility of copies on Komoot</span>
+            <span className="small secondary">{(p.match_visibility ?? true) ? "Visibility on Komoot when the Strava original's is unknown" : "Visibility of copies on Komoot"}</span>
             <Seg block value={p.defaults?.komoot?.visibility ?? "private"} options={[{ value: "private", label: "Private" }, { value: "friends", label: "Friends" }, { value: "public", label: "Public" }]}
               onChange={(v) => patch({ defaults: { ...p.defaults, komoot: { visibility: v } } })} />
           </div>
