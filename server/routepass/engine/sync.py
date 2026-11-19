@@ -181,6 +181,59 @@ def preview(db: Session, direction: str, limit: int = 200) -> list[dict[str, Any
     return out
 
 
+def test_rule(
+    db: Session, direction: str, conditions: dict[str, Any], rule_id: int | None = None, limit: int = 200
+) -> dict[str, Any]:
+    """Dry run for a draft rule: which recent activities its conditions match, and how many of those a
+    higher-priority rule already decides (first match wins), so the editor can show the real effect."""
+    rule_engine.validate(direction, conditions, {})
+    prefs = store.get_preferences(db)
+    places = prefs.get("places")
+    ordered = sorted(
+        (r for r in db.scalars(select(SyncRule).where(SyncRule.direction == direction)) if r.enabled),
+        key=lambda r: (r.priority, r.id or 0),
+    )
+    if rule_id is not None:
+        me = next((r for r in ordered if r.id == rule_id), None)
+        ahead = ordered[: ordered.index(me)] if me else ordered
+    else:
+        ahead = ordered  # a new rule is added at the end
+    considered = matched = 0
+    shadow: dict[int, dict[str, Any]] = {}
+    samples: list[dict[str, Any]] = []
+    for act in db.scalars(select(Activity).order_by(Activity.start_time.desc()).limit(limit)):
+        if _live_source(act, rule_engine.DIRECTION_SOURCE[direction]) is None:
+            continue
+        considered += 1
+        if not rule_engine.matches(conditions, act, places):
+            continue
+        matched += 1
+        first = next((r for r in ahead if rule_engine.matches(r.conditions or {}, act, places)), None)
+        if first is not None:
+            entry = shadow.setdefault(first.id, {"rule_id": first.id, "name": first.name, "count": 0})
+            entry["count"] += 1
+        if len(samples) < 8:
+            samples.append(
+                {
+                    "activity_id": act.id,
+                    "name": act.name,
+                    "sport": act.sport,
+                    "family": act.family,
+                    "start_time": act.start_time.isoformat() + "Z",
+                    "distance_m": act.distance_m,
+                    "decided_by": first.name if first is not None else None,
+                }
+            )
+    shadowed = sum(e["count"] for e in shadow.values())
+    return {
+        "considered": considered,
+        "matched": matched,
+        "effective": matched - shadowed,
+        "shadowed_by": sorted(shadow.values(), key=lambda e: -e["count"]),
+        "samples": samples,
+    }
+
+
 # ── execution ────────────────────────────────────────────────────────────────
 
 

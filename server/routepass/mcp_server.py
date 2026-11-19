@@ -485,6 +485,15 @@ def get_gear(start: str | None = None, end: str | None = None) -> dict:
 
 
 @mcp.tool()
+def test_rule(direction: str, conditions: dict, rule_id: int | None = None, limit: int = 200) -> dict:
+    """Dry-run rule conditions before saving: how many recent activities they match in a direction
+    ('komoot_to_strava' or 'strava_to_komoot'), how many an earlier rule already decides, and samples.
+    Same condition keys as create_rule."""
+    with session_scope() as db:
+        return sync.test_rule(db, direction, conditions, rule_id, limit)
+
+
+@mcp.tool()
 def get_data_quality() -> dict:
     """How much recent training load is measured (power / heart rate) rather than estimated, which profile
     values are missing, and values (max HR, FTP) suggested from the recorded data. Set them with

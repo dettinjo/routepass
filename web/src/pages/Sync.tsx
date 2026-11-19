@@ -5,9 +5,9 @@ import { ICON,
   BrandIcon, IconArrowDown, IconArrowUp, IconCheck, IconHistory, IconImport, IconList, IconPlay, IconPlus,
   IconRefresh, IconRight, IconSettings, IconSync, IconTrash, IconWarn, IconX, providerName,
 } from "../components/icons";
-import { Callout, Card, Empty, Modal, Seg, Skeleton, StatusBadge, Switch, useToast } from "../components/ui";
+import { Callout, Card, Empty, InfoTip, Menu, Modal, Seg, Skeleton, StatusBadge, Switch, useToast } from "../components/ui";
+import { presetsFor, RuleEditor, RuleSentence, type Preset } from "../components/RuleEditor";
 import { api } from "../lib/api";
-import { FAMILIES, FAMILY_LABEL } from "../lib/colors";
 import { activityDate, ago, dateTime, int, km } from "../lib/format";
 import { usePrefs, useRunSync, useSavePrefs, useSportMeta, useStatus } from "../lib/hooks";
 import type { Rule, SyncJob, SyncRun } from "../lib/types";
@@ -16,8 +16,6 @@ const DIRS = [
   { key: "komoot_to_strava", from: "komoot", to: "strava" },
   { key: "strava_to_komoot", from: "strava", to: "komoot" },
 ] as const;
-const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const TEMPLATE_HELP = "{name} {sport_label} {distance_km:.1f} {elevation_m} {duration_min} {moving_time} {date} {time} {weekday} {source}";
 const dirTitle = (d: { from: string; to: string }) => (
   <span className="row nowrap" style={{ gap: 6 }}><BrandIcon provider={d.from} size={18} />{providerName(d.from)}<IconRight size={ICON.button} /><BrandIcon provider={d.to} size={18} />{providerName(d.to)}</span>
 );
@@ -31,197 +29,6 @@ function useMut(path: (v: any) => string, method = "POST", invalidate: string[][
     onError: (e: Error) => toast(e.message, true),
   });
 }
-
-function summarize(r: Rule): string {
-  const c = r.conditions || {};
-  const parts: string[] = [];
-  if (c.sports?.length) parts.push(c.sports.join(", "));
-  if (c.families?.length) parts.push(c.families.map((f: string) => FAMILY_LABEL[f]).join(", "));
-  if (c.exclude_sports?.length) parts.push(`not ${c.exclude_sports.join(", ")}`);
-  const rng = (k: string, u: string) => {
-    const v = c[k];
-    if (!v) return;
-    if (v.min != null && v.max != null) parts.push(`${v.min}–${v.max} ${u}`);
-    else if (v.min != null) parts.push(`≥ ${v.min} ${u}`);
-    else if (v.max != null) parts.push(`≤ ${v.max} ${u}`);
-  };
-  rng("distance_km", "km"); rng("elevation_m", "m"); rng("duration_min", "min");
-  if (c.name_contains) parts.push(`name has “${c.name_contains}”`);
-  if (c.name_regex) parts.push(`name ~ /${c.name_regex}/`);
-  if (c.weekdays?.length) parts.push(c.weekdays.map((d: number) => WEEKDAYS[d]).join("/"));
-  for (const [k, word] of [["start_near", "starts"], ["end_near", "ends"]] as const) {
-    const g = c[k];
-    if (g) parts.push(`${word} within ${g.radius_km ?? 1} km of ${g.place ?? `${Number(g.lat).toFixed(3)}, ${Number(g.lng).toFixed(3)}`}`);
-  }
-  if (c.date?.from || c.date?.to) parts.push(`${c.date.from ?? "…"} → ${c.date.to ?? "…"}`);
-  for (const f of ["commute", "trainer", "has_heartrate", "has_power"]) if (c[f] != null) parts.push(`${c[f] ? "" : "not "}${f.replace("has_", "with ")}`);
-  const a = r.actions || {};
-  const act = a.skip ? "skip" : [
-    "sync",
-    a.name && `rename “${a.name}”`,
-    a.sport && `as ${a.sport}`,
-    a.komoot?.visibility && `${a.komoot.visibility}`,
-    a.strava?.hide_from_home && "muted in feed",
-  ].filter(Boolean).join(", ");
-  return `${parts.length ? "If " + parts.join(" · ") : "Every activity"} → ${act}`;
-}
-
-function TriState({ value, onChange, label }: { value: boolean | undefined; onChange: (v: boolean | undefined) => void; label: string }) {
-  return (
-    <label className="field">{label}
-      <select value={value === undefined ? "" : value ? "yes" : "no"} onChange={(e) => onChange(e.target.value === "" ? undefined : e.target.value === "yes")}>
-        <option value="">Any</option><option value="yes">Yes</option><option value="no">No</option>
-      </select>
-    </label>
-  );
-}
-
-function MultiChips({ options, value, onChange }: { options: { key: string; label: string }[]; value: string[]; onChange: (v: string[]) => void }) {
-  return (
-    <div className="row" style={{ gap: 6 }}>
-      {options.map((o) => (
-        <button type="button" key={o.key} className={`chip ${value.includes(o.key) ? "on" : ""}`}
-          onClick={() => onChange(value.includes(o.key) ? value.filter((x) => x !== o.key) : [...value, o.key])}>{o.label}</button>
-      ))}
-    </div>
-  );
-}
-
-function clean(o: Record<string, any>): Record<string, any> {
-  const out: Record<string, any> = {};
-  for (const [k, v] of Object.entries(o)) {
-    if (v === undefined || v === null || v === "" || (Array.isArray(v) && !v.length)) continue;
-    if (typeof v === "object" && !Array.isArray(v)) {
-      const inner = clean(v);
-      if (Object.keys(inner).length) out[k] = inner;
-    } else out[k] = v;
-  }
-  return out;
-}
-
-function RuleEditor({ rule, direction, onClose }: { rule: Partial<Rule> | null; direction: string; onClose: () => void }) {
-  const { data: meta } = useSportMeta();
-  const { data: prefs } = usePrefs();
-  const places = prefs?.places ?? [];
-  const qc = useQueryClient();
-  const toast = useToast();
-  const [name, setName] = useState(rule?.name ?? "");
-  const [enabled, setEnabled] = useState(rule?.enabled ?? true);
-  const [c, setC] = useState<Record<string, any>>(rule?.conditions ?? {});
-  const [a, setA] = useState<Record<string, any>>(rule?.actions ?? {});
-  const [showAllSports, setShowAllSports] = useState(false);
-  const toKomoot = direction === "strava_to_komoot";
-  const setCond = (k: string, v: any) => setC({ ...c, [k]: v });
-  const setRange = (k: string, side: "min" | "max", v: string) => setC({ ...c, [k]: { ...(c[k] || {}), [side]: v === "" ? undefined : Number(v) } });
-  const save = useMutation({
-    mutationFn: () => {
-      const body = { name, direction, enabled, conditions: clean(c), actions: clean(a), ...(rule?.id ? {} : { priority: 1000 }) };
-      return rule?.id ? api(`/rules/${rule.id}`, { method: "PUT", body }) : api("/rules", { method: "POST", body });
-    },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["rules"] }); toast("Rule saved"); onClose(); },
-    onError: (e: Error) => toast(e.message, true),
-  });
-  const sports = (meta?.strava || []).map((s) => ({ key: s.key, label: s.label }));
-  const shownSports = showAllSports ? sports : sports.slice(0, 14);
-  const range = (k: string, label: string) => (
-    <label className="field">{label}
-      <div className="row" style={{ flexWrap: "nowrap" }}>
-        <input type="number" placeholder="min" value={c[k]?.min ?? ""} onChange={(e) => setRange(k, "min", e.target.value)} />
-        <input type="number" placeholder="max" value={c[k]?.max ?? ""} onChange={(e) => setRange(k, "max", e.target.value)} />
-      </div>
-    </label>
-  );
-  return (
-    <Modal title={rule?.id ? "Edit rule" : "New rule"} onClose={onClose}
-      footer={<><button onClick={onClose}>Cancel</button><button className="primary" disabled={!name || save.isPending} onClick={() => save.mutate()}>Save rule</button></>}>
-      <div className="row" style={{ gap: 16 }}>
-        <label className="field" style={{ flex: 1 }}>Name<input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Long rides as private tours" autoFocus /></label>
-        <Switch checked={enabled} onChange={setEnabled} label="Enabled" />
-      </div>
-
-      <div className="section-label">When all of these match</div>
-      <label className="field">Sports (any of)
-        <MultiChips options={shownSports} value={c.sports || []} onChange={(v) => setCond("sports", v)} />
-        {sports.length > 14 && <button type="button" className="sm ghost" style={{ alignSelf: "flex-start" }} onClick={() => setShowAllSports(!showAllSports)}>{showAllSports ? "Fewer" : "All sports"}</button>}
-      </label>
-      <label className="field">Families (any of)
-        <MultiChips options={FAMILIES.map((f) => ({ key: f, label: FAMILY_LABEL[f] }))} value={c.families || []} onChange={(v) => setCond("families", v)} />
-      </label>
-      <div className="fields">
-        {range("distance_km", "Distance (km)")}
-        {range("elevation_m", "Elevation gain (m)")}
-        {range("duration_min", "Moving time (min)")}
-      </div>
-      <div className="fields">
-        <label className="field">Name contains<input value={c.name_contains ?? ""} onChange={(e) => setCond("name_contains", e.target.value || undefined)} /></label>
-        <label className="field">Name matches regex<input value={c.name_regex ?? ""} onChange={(e) => setCond("name_regex", e.target.value || undefined)} placeholder="^Commute" /></label>
-        <label className="field">From date<input type="date" value={c.date?.from ?? ""} onChange={(e) => setCond("date", { ...(c.date || {}), from: e.target.value || undefined })} /></label>
-        <label className="field">To date<input type="date" value={c.date?.to ?? ""} onChange={(e) => setCond("date", { ...(c.date || {}), to: e.target.value || undefined })} /></label>
-      </div>
-      <label className="field">Weekdays
-        <MultiChips options={WEEKDAYS.map((d, i) => ({ key: String(i), label: d }))} value={(c.weekdays || []).map(String)} onChange={(v) => setCond("weekdays", v.map(Number))} />
-      </label>
-      <div className="fields">
-        <TriState label="Commute" value={c.commute} onChange={(v) => setCond("commute", v)} />
-        <TriState label="Indoor / trainer" value={c.trainer} onChange={(v) => setCond("trainer", v)} />
-        <TriState label="Has heart rate" value={c.has_heartrate} onChange={(v) => setCond("has_heartrate", v)} />
-        <TriState label="Has power" value={c.has_power} onChange={(v) => setCond("has_power", v)} />
-      </div>
-      <div className="fields">
-        {(["start_near", "end_near"] as const).map((k) => (
-          <label key={k} className="field">{k === "start_near" ? "Starts near" : "Ends near"}
-            <div className="row nowrap">
-              <select value={c[k]?.place ?? ""} onChange={(e) => setCond(k, e.target.value ? { place: e.target.value, radius_km: c[k]?.radius_km ?? undefined } : undefined)}>
-                <option value="">Anywhere</option>
-                {places.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
-              </select>
-              {c[k]?.place && (
-                <input type="number" inputMode="decimal" step={0.1} min={0.1} style={{ width: 90 }} title="Radius in km (default: the place's radius)"
-                  placeholder={String(places.find((p) => p.name === c[k].place)?.radius_km ?? 1)} value={c[k]?.radius_km ?? ""}
-                  onChange={(e) => setCond(k, { ...c[k], radius_km: e.target.value ? Number(e.target.value) : undefined })} />
-              )}
-            </div>
-          </label>
-        ))}
-      </div>
-      {places.length === 0 && <p className="xs muted" style={{ margin: 0 }}>Save places like “Home” in Settings to use them here.</p>}
-
-      <div className="section-label">Then</div>
-      <div><Seg value={a.skip ? "skip" : "sync"} options={[{ value: "sync", label: `Copy to ${toKomoot ? "Komoot" : "Strava"}` }, { value: "skip", label: "Don't sync" }]}
-        onChange={(v) => setA(v === "skip" ? { skip: true } : { ...a, skip: undefined })} /></div>
-      {!a.skip && (
-        <>
-          <div className="fields">
-            <label className="field">Title template<input value={a.name ?? ""} onChange={(e) => setA({ ...a, name: e.target.value || undefined })} placeholder="{name}" /></label>
-            <label className="field">{toKomoot ? "Komoot sport" : "Strava sport type"}
-              <select value={a.sport ?? ""} onChange={(e) => setA({ ...a, sport: e.target.value || undefined })}>
-                <option value="">Map automatically</option>
-                {(toKomoot ? meta?.komoot : meta?.strava)?.map((s) => <option key={s.key} value={s.key}>{s.label} ({s.key})</option>)}
-              </select>
-            </label>
-          </div>
-          <label className="field">Description template (replaces)<input value={a.description ?? ""} onChange={(e) => setA({ ...a, description: e.target.value || undefined })} /></label>
-          <label className="field">Append to description<input value={a.append_description ?? ""} onChange={(e) => setA({ ...a, append_description: e.target.value || undefined })} placeholder="Synced from Komoot" /></label>
-          <p className="small muted" style={{ margin: 0 }}>Template fields: <span className="mono">{TEMPLATE_HELP}</span></p>
-          {toKomoot ? (
-            <label className="field" style={{ maxWidth: 240 }}>Komoot visibility
-              <select value={a.komoot?.visibility ?? ""} onChange={(e) => setA({ ...a, komoot: { visibility: e.target.value || undefined } })}>
-                <option value="">Direction default</option><option value="private">Private</option><option value="friends">Friends</option><option value="public">Public</option>
-              </select>
-            </label>
-          ) : (
-            <div className="fields">
-              <TriState label="Mute in followers' feeds" value={a.strava?.hide_from_home} onChange={(v) => setA({ ...a, strava: { ...(a.strava || {}), hide_from_home: v } })} />
-              <TriState label="Mark as commute" value={a.strava?.commute} onChange={(v) => setA({ ...a, strava: { ...(a.strava || {}), commute: v } })} />
-              <label className="field">Gear id<input value={a.strava?.gear_id ?? ""} onChange={(e) => setA({ ...a, strava: { ...(a.strava || {}), gear_id: e.target.value || undefined } })} placeholder="b1234567" /></label>
-            </div>
-          )}
-        </>
-      )}
-    </Modal>
-  );
-}
-
 
 function Preview({ direction, onClose }: { direction: string; onClose: () => void }) {
   const { data: prefs } = usePrefs();
@@ -253,6 +60,10 @@ function DirectionCard({ dir, rules }: { dir: (typeof DIRS)[number]; rules: Rule
   const { data: prefs } = usePrefs();
   const savePrefs = useSavePrefs();
   const [editing, setEditing] = useState<Partial<Rule> | null | undefined>(undefined);
+  const [preset, setPreset] = useState<Preset | null>(null);
+  const { data: meta } = useSportMeta();
+  const sportLabel = (k: string) => meta?.strava.find((x) => x.key === k)?.label ?? k;
+  const create = useMut(() => "/rules");
   const [preview, setPreview] = useState(false);
   const qc = useQueryClient();
   const reorder = useMut(() => "/rules/reorder");
@@ -290,37 +101,48 @@ function DirectionCard({ dir, rules }: { dir: (typeof DIRS)[number]; rules: Rule
           </div>
         )}
         <div className="row between mt8">
-          <span className="section-label">Rules · first match wins</span>
-          <div className="row">
-            <button className="sm" onClick={() => setPreview(true)}><IconList size={ICON.button} />Preview</button>
-            <button className="sm" onClick={() => setEditing(null)}><IconPlus size={ICON.button} />Rule</button>
+          <span className="section-label row nowrap" style={{ gap: 4 }}>Rules<InfoTip>Rules are checked from top to bottom; the first one that matches decides. Activities no rule matches follow “When no rule matches”.</InfoTip></span>
+          <div className="row nowrap">
+            <button className="sm ghost" onClick={() => setPreview(true)}><IconList size={ICON.button} />Preview</button>
+            <button className="sm" onClick={() => { setPreset(null); setEditing(null); }}><IconPlus size={ICON.button} />Add rule</button>
           </div>
         </div>
-        {mine.length === 0 ? <p className="small muted">No rules — every eligible activity follows the setting above.</p> : (
+        {mine.length === 0 ? (
           <div className="stack" style={{ gap: 8 }}>
-            {mine.map((r, i) => (
-              <div key={r.id} style={{ border: "1px solid var(--border)", borderRadius: 12, padding: "10px 12px", opacity: r.enabled ? 1 : 0.55 }}>
-                <div className="row between nowrap">
-                  <button className="ghost" style={{ minHeight: 0, padding: 0, fontWeight: 650, justifyContent: "flex-start" }} onClick={() => setEditing(r)}>
-                    <span className="badge">{i + 1}</span>&nbsp;<span className="ellipsis">{r.name}</span>
-                  </button>
-                  <Switch checked={r.enabled} onChange={(v) => update.mutate({ id: r.id, body: { enabled: v } })} />
-                </div>
-                <div className="xs muted" style={{ marginTop: 4 }}>{summarize(r)}</div>
-                <div className="row between" style={{ marginTop: 6 }}>
-                  <span className="xs muted">{r.actions?.skip ? <span className="badge warn">leave</span> : <span className="badge good">copy</span>} {r.match_count} matches{r.last_matched_at && ` · ${ago(r.last_matched_at)}`}</span>
-                  <div className="row nowrap" style={{ gap: 2 }}>
-                    <button className="sm ghost icon" disabled={i === 0} onClick={() => move(i, -1)} aria-label="Higher priority"><IconArrowUp size={ICON.button} /></button>
-                    <button className="sm ghost icon" disabled={i === mine.length - 1} onClick={() => move(i, 1)} aria-label="Lower priority"><IconArrowDown size={ICON.button} /></button>
-                    <button className="sm ghost icon danger" onClick={() => confirm(`Delete rule “${r.name}”?`) && del.mutate({ id: r.id })} aria-label="Delete"><IconTrash size={ICON.button} /></button>
-                  </div>
-                </div>
-              </div>
-            ))}
+            <p className="small muted">No rules yet — every activity follows the setting above. Common rules:</p>
+            <div className="chips" style={{ flexWrap: "wrap" }}>
+              {presetsFor(dir.key, prefs.places ?? []).slice(0, 4).map((pr) => (
+                <button key={pr.id} className="chip" onClick={() => { setPreset(pr); setEditing(null); }}><pr.icon size={ICON.button} />{pr.label}</button>
+              ))}
+            </div>
           </div>
+        ) : (
+          <ol className="rule-list">
+            {mine.map((r, i) => (
+              <li key={r.id} className={r.enabled ? "" : "off"}>
+                <span className="rule-num">{i + 1}</span>
+                <button className="rule-main" onClick={() => { setPreset(null); setEditing(r); }} aria-label={`Edit rule ${r.name}`}>
+                  <b className="ellipsis">{r.name}</b>
+                  <RuleSentence rule={r} target={dir.to} sportLabel={sportLabel} />
+                  <span className="xs muted">{r.match_count ? `${r.match_count} matched${r.last_matched_at ? `, last ${ago(r.last_matched_at)}` : ""}` : "Not matched yet"}{!r.enabled && " · paused"}</span>
+                </button>
+                <div className="row nowrap" style={{ gap: 2 }}>
+                  <Switch checked={r.enabled} onChange={(v) => update.mutate({ id: r.id, body: { enabled: v } })} />
+                  <Menu label={`Actions for ${r.name}`}>
+                    <button onClick={() => { setPreset(null); setEditing(r); }}><IconSettings size={ICON.button} />Edit</button>
+                    <button onClick={() => create.mutate({ body: { name: `${r.name} (copy)`, direction: r.direction, enabled: false, conditions: r.conditions, actions: r.actions, priority: 1000 } })}><IconPlus size={ICON.button} />Duplicate</button>
+                    <button disabled={i === 0} onClick={() => move(i, -1)}><IconArrowUp size={ICON.button} />Move up</button>
+                    <button disabled={i === mine.length - 1} onClick={() => move(i, 1)}><IconArrowDown size={ICON.button} />Move down</button>
+                    <div className="sep" />
+                    <button className="danger" onClick={() => confirm(`Delete rule “${r.name}”?`) && del.mutate({ id: r.id })}><IconTrash size={ICON.button} />Delete</button>
+                  </Menu>
+                </div>
+              </li>
+            ))}
+          </ol>
         )}
       </div>
-      {editing !== undefined && <RuleEditor rule={editing} direction={dir.key} onClose={() => setEditing(undefined)} />}
+      {editing !== undefined && <RuleEditor rule={editing} preset={preset} direction={dir.key} onClose={() => { setEditing(undefined); setPreset(null); }} />}
       {preview && <Preview direction={dir.key} onClose={() => setPreview(false)} />}
     </Card>
   );

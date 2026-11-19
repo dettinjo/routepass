@@ -183,6 +183,23 @@ def delete_rule(rule_id: int, db: Session = Depends(get_session)) -> dict[str, b
     return {"ok": True}
 
 
+class RuleTestBody(BaseModel):
+    direction: Direction
+    conditions: dict[str, Any] = Field(default_factory=dict)
+    rule_id: int | None = None
+    limit: int = Field(default=200, ge=10, le=2000)
+
+
+@router.post("/rules/test", tags=["rules"])
+def test_rule(body: RuleTestBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    """Which of your recent activities a draft rule's conditions match, and how many of those an
+    earlier rule already decides (first match wins). Nothing is saved."""
+    try:
+        return sync.test_rule(db, body.direction, body.conditions, body.rule_id, body.limit)
+    except RuleError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 class ReorderBody(BaseModel):
     ids: list[int]
 
