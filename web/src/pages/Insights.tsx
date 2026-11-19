@@ -6,10 +6,10 @@ import { DataQualityNote } from "../components/DataQuality";
 import { RoutesMap } from "../components/maps";
 import { GearTab, TilesTab, ZonesTab } from "../components/InsightsExtras";
 import {
-  ICON, IconCalendarStat, IconFitness, IconGear, IconLeft, IconMap, IconOverview, IconPerformance, IconPlaces, IconRight,
-  IconTime, IconTrophy, MetricIcon, SportIcon,
+  ICON, IconCalendarStat, IconCheck, IconChevronDownSm, IconFilter, IconFitness, IconGear, IconLeft, IconMap, IconOverview,
+  IconPerformance, IconPlaces, IconRight, IconTime, IconTrophy, MetricIcon, SportIcon,
 } from "../components/icons";
-import { Card, Empty, Seg, Skeleton, Stat, Tabs } from "../components/ui";
+import { Card, Empty, Modal, Seg, SegSelect, Skeleton, Stat, Tabs } from "../components/ui";
 import { api } from "../lib/api";
 import { FAMILIES, FAMILY_LABEL, familyColor, heatScale, yearColor } from "../lib/colors";
 import { duration, hours, int, km, num, speed } from "../lib/format";
@@ -29,6 +29,7 @@ const groupOf = (t: Tab) => GROUPS.find((g) => g.tabs.some((x) => x.value === t)
 /** Which shared filters a tab honours — controls that would do nothing are hidden. */
 const USES_RANGE = new Set<Tab>(["trends", "habits", "fitness", "zones", "records", "map", "tiles", "gear"]);
 const USES_SPORT = new Set<Tab>(["trends", "calendar", "habits", "fitness", "zones", "records", "map", "tiles", "gear"]);
+const SHORT_RANGE: Record<Range, string> = { all: "All time", "1y": "12 months", ytd: "This year", "90d": "90 days" };
 const RANGES: { value: Range; label: string }[] = [{ value: "all", label: "All time" }, { value: "1y", label: "12 months" }, { value: "ytd", label: "This year" }, { value: "90d", label: "90 days" }];
 
 function rangeStart(r: Range): string | undefined {
@@ -102,7 +103,7 @@ function Trends({ families, range, start }: F) {
         </Card>
       )}
       <Card title="Volume over time" icon={MetricIcon.count}
-        actions={<><Seg value={grain} options={[{ value: "week", label: "Week" }, { value: "month", label: "Month" }, { value: "year", label: "Year" }]} onChange={setGrain} /><Seg value={metric} options={METRICS} onChange={setMetric} /></>}>
+        actions={<><Seg value={grain} options={[{ value: "week", label: "Week" }, { value: "month", label: "Month" }, { value: "year", label: "Year" }]} onChange={setGrain} /><SegSelect label="Metric" value={metric} options={METRICS} onChange={setMetric} /></>}>
         {ts.isLoading ? <Skeleton h={260} /> : bars.length ? (
           <>
             <StackedBars data={bars} series={series} format={metricFormat(metric)} height={260} />
@@ -166,12 +167,13 @@ function CalendarTab({ families }: F) {
   const scale = heatFor(families);
   return (
     <div className="stack gap16">
-      <Card title={`${year}`} icon={IconCalendarStat} hint={`${data?.length ?? 0} active days · ${fmt(total)}`}
-        actions={<>
+      <Card icon={IconCalendarStat} hint={`${data?.length ?? 0} active days · ${fmt(total)}`}
+        title={<span className="row nowrap" style={{ gap: 2 }}>
           <button className="ghost icon sm" aria-label="Previous year" onClick={() => setYear(year - 1)}><IconLeft size={ICON.button} /></button>
+          {year}
           <button className="ghost icon sm" aria-label="Next year" disabled={year >= new Date().getFullYear()} onClick={() => setYear(year + 1)}><IconRight size={ICON.button} /></button>
-          <Seg value={metric} options={[{ value: "moving_time_s", label: "Time" }, { value: "distance_m", label: "Distance" }, { value: "elevation_m", label: "Climbing" }, { value: "load", label: "Load" }]} onChange={setMetric} />
-        </>}>
+        </span>}
+        actions={<SegSelect label="Metric" value={metric} options={[{ value: "moving_time_s", label: "Time" }, { value: "distance_m", label: "Distance" }, { value: "elevation_m", label: "Climbing" }, { value: "load", label: "Load" }]} onChange={setMetric} />}>
         <CalendarHeatmap year={year} days={days} metric={METRICS.find((m) => m.value === metric)!.label} format={fmt} scale={scale}
           onDay={(d) => nav(`/activities?start=${d}&end=${d}`)} />
         <div className="mt8"><HeatLegend scale={scale} /></div>
@@ -370,22 +372,77 @@ export default function Insights() {
   const f: F = { families, range, start: rangeStart(range) };
   const showSport = USES_SPORT.has(tab);
   const showRange = USES_RANGE.has(tab);
+  const [sheet, setSheet] = useState<"view" | "filter" | null>(null);
+  const tabLabel = group.tabs.find((t) => t.value === tab)!.label;
+  const filtered = (showSport && families.length > 0) || (showRange && range !== "all");
+  const filterSummary = [
+    showSport ? (families.length === 0 ? "All sports" : families.length === 1 ? FAMILY_LABEL[families[0]] : `${families.length} sports`) : null,
+    showRange ? SHORT_RANGE[range] : null,
+  ].filter(Boolean).join(" · ");
   return (
     <>
       <div className="page-head">
-        <div><h1>Insights</h1><div className="sub">Computed over deduplicated activities — nothing counts twice</div></div>
+        <div><h1>Insights</h1><div className="sub static">Computed over deduplicated activities — nothing counts twice</div></div>
       </div>
-      <Tabs value={group.value} onChange={(g) => go(GROUPS.find((x) => x.value === g)!.tabs[0].value)}
-        tabs={GROUPS.map((g) => ({ value: g.value, label: <><g.icon size={ICON.button} />{g.label}</> }))} />
-      {group.tabs.length > 1 && (
-        <div className="subtabs"><Seg value={tab} options={group.tabs} onChange={go} /></div>
+      {/* Phone: one row — the view you are on, and a summary of the filters. Each opens a sheet. */}
+      <div className="viewbar hide-desktop">
+        <button className="view" onClick={() => setSheet("view")} aria-label={`View: ${tabLabel}. Change view`}>
+          <group.icon size={ICON.button} /><span>{tabLabel}</span><IconChevronDownSm size={ICON.button} />
+        </button>
+        {(showSport || showRange) && (
+          <button className={`filter ${filtered ? "on" : ""}`} onClick={() => setSheet("filter")} aria-label={`Filters: ${filterSummary}`}>
+            <IconFilter size={ICON.button} /><span>{filterSummary}</span>
+          </button>
+        )}
+      </div>
+      {sheet === "view" && (
+        <Modal title="Insights" onClose={() => setSheet(null)}>
+          {GROUPS.map((g) => (
+            <div key={g.value} className="stack" style={{ gap: 4 }}>
+              <span className="section-label row nowrap" style={{ gap: 6 }}><g.icon size={ICON.inline} />{g.label}</span>
+              <div className="view-list">
+                {g.tabs.map((t) => (
+                  <button key={t.value} className={t.value === tab ? "on" : ""} onClick={() => { setSheet(null); go(t.value); }}>
+                    {t.label}{t.value === tab && <IconCheck size={ICON.button} className="check" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </Modal>
       )}
-      {(showSport || showRange) && (
-        <div className="filterbar">
-          {showSport && <FamilyChips value={families} onChange={(v) => setParam("sport", v.join(","))} />}
-          {showRange && <Seg value={range} options={RANGES} onChange={(v) => setParam("range", v === "all" ? "" : v)} />}
+      {sheet === "filter" && (
+        <Modal title="Filter" onClose={() => setSheet(null)}
+          footer={<><button onClick={() => { const n = new URLSearchParams(sp); n.delete("sport"); n.delete("range"); setSp(n, { replace: true }); }}>Reset</button><button className="primary" onClick={() => setSheet(null)}>Done</button></>}>
+          {showSport && (
+            <div className="stack" style={{ gap: 8 }}>
+              <span className="section-label">Sports</span>
+              <FamilyChips wrap value={families} onChange={(v) => setParam("sport", v.join(","))} />
+            </div>
+          )}
+          {showRange && (
+            <div className="stack" style={{ gap: 8 }}>
+              <span className="section-label">Period</span>
+              <Seg block value={range} options={RANGES} onChange={(v) => setParam("range", v === "all" ? "" : v)} />
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {/* Desktop: sections and sub-views on one row, filters on the next. */}
+      <div className="hide-mobile">
+        <div className="navrow">
+          <Tabs value={group.value} onChange={(g) => go(GROUPS.find((x) => x.value === g)!.tabs[0].value)}
+            tabs={GROUPS.map((g) => ({ value: g.value, label: <><g.icon size={ICON.button} />{g.label}</> }))} />
+          {group.tabs.length > 1 && <Seg value={tab} options={group.tabs} onChange={go} />}
         </div>
-      )}
+        {(showSport || showRange) && (
+          <div className="filterbar">
+            {showSport && <FamilyChips value={families} onChange={(v) => setParam("sport", v.join(","))} />}
+            {showRange && <Seg value={range} options={RANGES} onChange={(v) => setParam("range", v === "all" ? "" : v)} />}
+          </div>
+        )}
+      </div>
       {group.value === "performance" && tab !== "records" && <div style={{ marginBottom: 16 }}><DataQualityNote /></div>}
       {tab === "trends" && <Trends {...f} />}
       {tab === "calendar" && <CalendarTab {...f} />}

@@ -138,6 +138,21 @@ export function Seg<T extends string>({ value, options, onChange, block = false 
   );
 }
 
+/** Segmented control on wide screens, a compact native select on phones — for secondary choices
+ *  inside card headers, so a card never needs more than one row of controls. */
+export function SegSelect<T extends string>({ value, options, onChange, label }: {
+  value: T; options: { value: T; label: string }[]; onChange: (v: T) => void; label: string;
+}) {
+  return (
+    <>
+      <span className="hide-mobile"><Seg value={value} options={options} onChange={onChange} /></span>
+      <select className="hide-desktop compact-select" aria-label={label} value={value} onChange={(e) => onChange(e.target.value as T)}>
+        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </>
+  );
+}
+
 export function Switch({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label?: ReactNode }) {
   return (
     <label className="row nowrap" style={{ cursor: "pointer", gap: 10 }}>

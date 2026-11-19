@@ -18,9 +18,9 @@ export const METRICS: { value: Metric; label: string }[] = [
 export const metricFormat = (m: Metric) => (v: number) =>
   m === "distance_m" ? `${km(v, 0)} km` : m === "moving_time_s" ? `${hours(v)} h` : m === "elevation_m" ? `${int(v)} m` : int(v);
 
-export function FamilyChips({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+export function FamilyChips({ value, onChange, wrap = false }: { value: string[]; onChange: (v: string[]) => void; wrap?: boolean }) {
   return (
-    <div className="chips" role="group" aria-label="Sport filter">
+    <div className="chips" role="group" aria-label="Sport filter" style={wrap ? { flexWrap: "wrap" } : undefined}>
       <button className={`chip ${value.length === 0 ? "on" : ""}`} onClick={() => onChange([])}>All sports</button>
       {FAMILIES.map((f) => (
         <button key={f} className={`chip ${value.includes(f) ? "on" : ""}`}

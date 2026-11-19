@@ -30,7 +30,8 @@ function Polarization({ p }: { p: ZoneBlock["polarization"] }) {
   );
 }
 
-function ZoneCard({ title, block, zones, grain, onGrain }: { title: string; block: ZoneBlock; zones: number; grain: "month" | "year"; onGrain: (g: "month" | "year") => void }) {
+/** The month/year switch appears once (on the first zone card), never per card. */
+function ZoneCard({ title, block, zones, grain, onGrain }: { title: string; block: ZoneBlock; zones: number; grain: "month" | "year"; onGrain?: (g: "month" | "year") => void }) {
   const series = Array.from({ length: zones }, (_, i) => ({ key: `Z${i + 1}`, label: `Z${i + 1}`, color: ZONE_COLORS[Math.min(i + (zones === 5 ? 1 : 0), 6)] }));
   const bars = block.buckets.slice(-24).map((b) => ({
     label: new Date(b.start).toLocaleDateString(undefined, grain === "year" ? { year: "numeric" } : { month: "short", year: "numeric" }),
@@ -39,7 +40,7 @@ function ZoneCard({ title, block, zones, grain, onGrain }: { title: string; bloc
   return (
     <Card title={title} icon={title.startsWith("Heart") ? MetricIcon.hr : MetricIcon.power} hint={`${hours(block.total_s)} h with data`}
       info={<>Endurance training usually works best with about 80% easy, little threshold and some hard time. Zones come from your max heart rate and FTP (<Link to="/settings/profile">profile</Link>).</>}
-      actions={<Seg value={grain} onChange={onGrain} options={[{ value: "month", label: "Per month" }, { value: "year", label: "Per year" }]} />}>
+      actions={onGrain && <Seg value={grain} onChange={onGrain} options={[{ value: "month", label: "Per month" }, { value: "year", label: "Per year" }]} />}>
       <div className="stack gap16">
         <Polarization p={block.polarization} />
         <HBars format={(v) => duration(v)} rows={block.seconds.map((s, i) => ({ label: `Zone ${i + 1}`, value: s, color: series[i].color }))} />
@@ -72,7 +73,7 @@ export function ZonesTab({ families, start }: { families: string[]; start?: stri
       {!hasHr && !hasPw ? <Empty title="No heart-rate or power recordings yet" icon={MetricIcon.hr}>Recordings from Strava (API or data export) carry heart rate; Komoot tracks do not.</Empty> : (
         <div className={`grid ${hasHr && hasPw ? "g2" : ""}`}>
           {hasHr && <ZoneCard title="Heart-rate zones" block={zones.data.hr} zones={5} grain={grain} onGrain={setGrain} />}
-          {hasPw && <ZoneCard title="Power zones" block={zones.data.power} zones={7} grain={grain} onGrain={setGrain} />}
+          {hasPw && <ZoneCard title="Power zones" block={zones.data.power} zones={7} grain={grain} onGrain={hasHr ? undefined : setGrain} />}
         </div>
       )}
       <Card title="Aerobic efficiency" icon={MetricIcon.speed} hint="Output per heartbeat over time — rising means fitter at the same effort">

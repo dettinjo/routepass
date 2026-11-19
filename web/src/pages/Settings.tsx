@@ -352,7 +352,7 @@ export default function Settings() {
   return (
     <>
       <div className={`page-head ${section ? "hide-mobile" : ""}`}>
-        <div><h1>Settings</h1><div className="sub">Connections, profile, sync and access</div></div>
+        <div><h1>Settings</h1><div className="sub static">Connections, profile, sync and access</div></div>
       </div>
       <div className="settings-layout">
         <nav className={`settings-nav ${section ? "hide-mobile" : ""}`} aria-label="Settings sections">
