@@ -1682,7 +1682,7 @@ def compute_plan_analytics(
         text = f"Key session hit rate is {s_key:.0f}% — protect the weekend long sessions."
         limiting_factors.append(text)
         attention.append({"level": "warn", "text": text, "action": "adapt"})
-    if quality["level"] != "high":
+    if quality["level"] != "high" and quality["activities"] > 0 and quality["missing"]:
         attention.append(
             {
                 "level": "info",

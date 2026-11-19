@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import {
+import { ICON,
   BrandIcon, IconArrowDown, IconArrowUp, IconCheck, IconHistory, IconImport, IconList, IconPlay, IconPlus,
   IconRefresh, IconRight, IconSettings, IconSync, IconTrash, IconWarn, IconX, providerName,
 } from "../components/icons";
@@ -19,7 +19,7 @@ const DIRS = [
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const TEMPLATE_HELP = "{name} {sport_label} {distance_km:.1f} {elevation_m} {duration_min} {moving_time} {date} {time} {weekday} {source}";
 const dirTitle = (d: { from: string; to: string }) => (
-  <span className="row nowrap" style={{ gap: 6 }}><BrandIcon provider={d.from} size={18} />{providerName(d.from)}<IconRight size={15} /><BrandIcon provider={d.to} size={18} />{providerName(d.to)}</span>
+  <span className="row nowrap" style={{ gap: 6 }}><BrandIcon provider={d.from} size={18} />{providerName(d.from)}<IconRight size={ICON.button} /><BrandIcon provider={d.to} size={18} />{providerName(d.to)}</span>
 );
 
 function useMut(path: (v: any) => string, method = "POST", invalidate: string[][] = [["rules"], ["jobs"], ["status"]]) {
@@ -236,7 +236,7 @@ function Preview({ direction, onClose }: { direction: string; onClose: () => voi
         <div className="list">
           {data.map((p) => (
             <Link key={p.activity_id} to={`/activities/${p.activity_id}`} className="item">
-              <span className={`badge ${p.would_sync ? "good" : ""}`}>{p.would_sync ? <IconCheck size={13} /> : <IconX size={13} />}{p.would_sync ? "copy" : "no"}</span>
+              <span className={`badge ${p.would_sync ? "good" : ""}`}>{p.would_sync ? <IconCheck size={ICON.inline} /> : <IconX size={ICON.inline} />}{p.would_sync ? "copy" : "no"}</span>
               <div className="main-col">
                 <span className="name ellipsis small">{p.name}</span>
                 <span className="meta">{activityDate(p, false)} · {km(p.distance_m)} km · {p.blocked_by ?? p.reason}{p.would_sync && p.plan.name !== p.name ? ` · as “${p.plan.name}”` : ""}</span>
@@ -292,8 +292,8 @@ function DirectionCard({ dir, rules }: { dir: (typeof DIRS)[number]; rules: Rule
         <div className="row between mt8">
           <span className="section-label">Rules · first match wins</span>
           <div className="row">
-            <button className="sm" onClick={() => setPreview(true)}>Preview</button>
-            <button className="sm" onClick={() => setEditing(null)}><IconPlus size={16} />Rule</button>
+            <button className="sm" onClick={() => setPreview(true)}><IconList size={ICON.button} />Preview</button>
+            <button className="sm" onClick={() => setEditing(null)}><IconPlus size={ICON.button} />Rule</button>
           </div>
         </div>
         {mine.length === 0 ? <p className="small muted">No rules — every eligible activity follows the setting above.</p> : (
@@ -310,9 +310,9 @@ function DirectionCard({ dir, rules }: { dir: (typeof DIRS)[number]; rules: Rule
                 <div className="row between" style={{ marginTop: 6 }}>
                   <span className="xs muted">{r.actions?.skip ? <span className="badge warn">leave</span> : <span className="badge good">copy</span>} {r.match_count} matches{r.last_matched_at && ` · ${ago(r.last_matched_at)}`}</span>
                   <div className="row nowrap" style={{ gap: 2 }}>
-                    <button className="sm ghost icon" disabled={i === 0} onClick={() => move(i, -1)} aria-label="Higher priority"><IconArrowUp size={16} /></button>
-                    <button className="sm ghost icon" disabled={i === mine.length - 1} onClick={() => move(i, 1)} aria-label="Lower priority"><IconArrowDown size={16} /></button>
-                    <button className="sm ghost icon danger" onClick={() => confirm(`Delete rule “${r.name}”?`) && del.mutate({ id: r.id })} aria-label="Delete"><IconTrash size={16} /></button>
+                    <button className="sm ghost icon" disabled={i === 0} onClick={() => move(i, -1)} aria-label="Higher priority"><IconArrowUp size={ICON.button} /></button>
+                    <button className="sm ghost icon" disabled={i === mine.length - 1} onClick={() => move(i, 1)} aria-label="Lower priority"><IconArrowDown size={ICON.button} /></button>
+                    <button className="sm ghost icon danger" onClick={() => confirm(`Delete rule “${r.name}”?`) && del.mutate({ id: r.id })} aria-label="Delete"><IconTrash size={ICON.button} /></button>
                   </div>
                 </div>
               </div>
@@ -364,7 +364,7 @@ function FullHistory({ ready }: { ready: boolean }) {
               </div>
               <Switch checked={applyRules} onChange={setApplyRules} label={<span className="small">Respect my rules (skip what they skip)</span>} />
               <button className="primary" disabled={!dirs.length || call.isPending} onClick={() => call.mutate({ path: "/sync/full-history/analyse", body: { directions: dirs, apply_rules: applyRules } })}>
-                <IconImport size={18} />Analyse all-time history
+                <IconImport size={ICON.header} />Analyse all-time history
               </button>
               <p className="xs muted">Nothing is uploaded yet — you will see exactly what would be copied first.</p>
             </>
@@ -390,7 +390,7 @@ function FullHistory({ ready }: { ready: boolean }) {
               })}
               <div className="row">
                 <button className="primary grow" disabled={call.isPending} onClick={() => call.mutate({ path: "/sync/full-history/start" }, { onSuccess: () => toast("Copying started — it continues in the background") })}>
-                  <IconPlay size={18} />Start copying
+                  <IconPlay size={ICON.header} />Start copying
                 </button>
                 <button onClick={() => call.mutate({ path: "/sync/full-history/cancel" })}>Cancel</button>
               </div>
@@ -401,12 +401,12 @@ function FullHistory({ ready }: { ready: boolean }) {
             <>
               <div className="row between small"><span><b>{int(prog.done)}</b> of {int(total)} copied{prog.failed ? ` · ${prog.failed} failed` : ""}</span><span className="muted">{total ? Math.round(((prog.done + prog.failed) / total) * 100) : 0}%</span></div>
               <div className="progress">
-                <span style={{ width: `${total ? (prog.done / total) * 100 : 0}%`, background: "var(--good)" }} />
+                <span style={{ width: `${total ? (prog.done / total) * 100 : 0}%`, background: "var(--text-secondary)" }} />
                 <span style={{ width: `${total ? (prog.failed / total) * 100 : 0}%`, background: "var(--bad)" }} />
               </div>
               <div className="row">
                 <Link to="/sync#jobs" className="small">See the queue</Link>
-                <button className="sm ghost danger" onClick={() => confirm("Stop copying? Copies already made stay.") && call.mutate({ path: "/sync/full-history/cancel" })}>Stop</button>
+                <button className="sm ghost danger" onClick={() => confirm("Stop copying? Copies already made stay.") && call.mutate({ path: "/sync/full-history/cancel" })}><IconX size={ICON.button} />Stop</button>
               </div>
             </>
           )}
@@ -442,8 +442,8 @@ function Duplicates() {
               <span className="xs muted">{d.time_diff_min} min apart{d.distance_diff_pct != null ? ` · ${d.distance_diff_pct} % distance difference` : ""}</span>
             </div>
             <div className="row nowrap">
-              <button className="sm primary" onClick={() => act.mutate({ path: `/activities/${d.activity.id}/merge`, body: { other_id: d.candidate.id } }, { onSuccess: () => toast("Merged into one activity") })}>Same — merge</button>
-              <button className="sm ghost" onClick={() => act.mutate({ path: `/activities/${d.activity.id}/dismiss-duplicate`, body: { other_id: d.candidate.id } })}>Not the same</button>
+              <button className="sm primary" onClick={() => act.mutate({ path: `/activities/${d.activity.id}/merge`, body: { other_id: d.candidate.id } }, { onSuccess: () => toast("Merged into one activity") })}><IconCheck size={ICON.button} />Same — merge</button>
+              <button className="sm ghost" onClick={() => act.mutate({ path: `/activities/${d.activity.id}/dismiss-duplicate`, body: { other_id: d.candidate.id } })}><IconX size={ICON.button} />Not the same</button>
             </div>
           </div>
         ))}
@@ -464,7 +464,7 @@ function Jobs() {
         <div className="list" style={{ maxHeight: 560, overflowY: "auto" }}>
           {data.items.map((j) => (
             <div key={j.id} className="item" style={{ cursor: "default", alignItems: "flex-start" }}>
-              <span className="row nowrap" style={{ gap: 3, marginTop: 2 }}><BrandIcon provider={j.source_provider} size={16} /><IconRight size={13} /><BrandIcon provider={j.target_provider} size={16} /></span>
+              <span className="row nowrap" style={{ gap: 3, marginTop: 2 }}><BrandIcon provider={j.source_provider} size={16} /><IconRight size={ICON.inline} /><BrandIcon provider={j.target_provider} size={16} /></span>
               <div className="main-col">
                 <Link to={`/activities/${j.activity_id}`} className="name ellipsis small">{j.plan?.name || j.activity?.name}</Link>
                 <span className="meta">{j.activity && `${activityDate(j.activity, false)} · ${km(j.activity.distance_m)} km · `}{j.reason}</span>
@@ -475,8 +475,8 @@ function Jobs() {
                 <StatusBadge status={j.status} />
                 <div className="row nowrap" style={{ gap: 2 }}>
                   {j.target_url && <a href={j.target_url} target="_blank" rel="noreferrer" className="xs">open</a>}
-                  {(j.status === "failed" || j.status === "skipped") && <button className="sm ghost icon" onClick={() => retry.mutate({ id: j.id })} aria-label={j.status === "skipped" ? "Check again" : "Retry"}><IconRefresh size={16} /></button>}
-                  {j.status !== "done" && j.status !== "running" && <button className="sm ghost icon" onClick={() => remove.mutate({ id: j.id })} aria-label="Remove"><IconTrash size={16} /></button>}
+                  {(j.status === "failed" || j.status === "skipped") && <button className="sm ghost icon" onClick={() => retry.mutate({ id: j.id })} aria-label={j.status === "skipped" ? "Check again" : "Retry"}><IconRefresh size={ICON.button} /></button>}
+                  {j.status !== "done" && j.status !== "running" && <button className="sm ghost icon" onClick={() => remove.mutate({ id: j.id })} aria-label="Remove"><IconTrash size={ICON.button} /></button>}
                 </div>
               </div>
             </div>
@@ -525,7 +525,7 @@ export default function SyncPage() {
     <>
       <div className="page-head">
         <div><h1>Sync</h1><div className="sub">An activity that already exists on the other platform is never copied again.</div></div>
-        <button className="primary sm" onClick={() => run.mutate(false)} disabled={status?.running}><IconRefresh size={16} className={status?.running ? "spin" : ""} />{status?.running ? "Running…" : "Sync now"}</button>
+        <button className="primary sm" onClick={() => run.mutate(false)} disabled={status?.running}><IconRefresh size={ICON.button} className={status?.running ? "spin" : ""} />{status?.running ? "Running…" : "Sync now"}</button>
       </div>
       {status && !ready && <div style={{ marginBottom: 16 }}><Callout kind="warn">Both Strava and Komoot must be connected to sync. <Link to="/settings">Connect in Settings</Link></Callout></div>}
 
@@ -539,7 +539,7 @@ export default function SyncPage() {
             </div>
             <div className="row mt16" style={{ justifyContent: "center", gap: 6 }}>
               {(jobs.queued ?? 0) > 0 && <span className="badge info">{jobs.queued} waiting</span>}
-              {(jobs.failed ?? 0) > 0 && <span className="badge bad"><IconWarn size={13} />{jobs.failed} failed</span>}
+              {(jobs.failed ?? 0) > 0 && <span className="badge bad"><IconWarn size={ICON.inline} />{jobs.failed} failed</span>}
               {(jobs.done ?? 0) > 0 && <span className="badge good">{jobs.done} copied</span>}
               {status?.last_run && <span className="badge">last run {ago(status.last_run.started_at)}</span>}
             </div>
@@ -562,17 +562,11 @@ export default function SyncPage() {
                 <label className="field">Wait before copying (min)
                   <input key={`delay-${prefs.sync.delay_minutes}`} type="number" inputMode="numeric" min={0} defaultValue={prefs.sync.delay_minutes} onBlur={(e) => savePrefs.mutate({ sync: { delay_minutes: Math.max(0, Number(e.target.value)) } })} />
                 </label>
-                <label className="field">Poll every (min, min 1)
-                  <input key={`poll-${prefs.poll_interval_minutes ?? ""}`} type="number" inputMode="numeric" min={1} placeholder="30" defaultValue={prefs.poll_interval_minutes ?? ""} onBlur={(e) => savePrefs.mutate({ poll_interval_minutes: e.target.value === "" ? null : Math.max(1, Number(e.target.value)) })} />
-                </label>
               </div>
               <Switch checked={prefs.sync.auto} onChange={(v) => savePrefs.mutate({ sync: { auto: v } })} label={<span className="small">Copy automatically after every sync</span>} />
-              <p className="xs muted">The wait lets devices that upload to both platforms arrive first, so they are merged instead of copied. If your device only uploads to one platform, set wait to <b>0 min</b> and poll to <b>1 min</b> for near-instant sync.</p>
+              <p className="xs muted">The wait lets devices that upload to both platforms arrive first, so they are merged instead of copied. If your device only uploads to one platform, a wait of 0 min copies on the next check. How often RoutePass checks is set in <Link to="/settings/sync">Settings → Sync & matching</Link> (every 30 min or manually; instantly with the Strava webhook).</p>
               <div className="row">
-                <button className="sm" onClick={() => savePrefs.mutate({ poll_interval_minutes: 1, sync: { delay_minutes: 0, auto: true } }, { onSuccess: () => toast("Instant sync enabled: polling every 1 min with 0 min delay") })}>
-                  Enable instant sync (1 min poll · 0 min wait)
-                </button>
-                <button className="sm" onClick={() => reeval.mutate(undefined, { onSuccess: (r: any) => toast(`Rules re-applied: ${r.queued} to copy, ${r.skipped} left out`) })}>Re-apply rules to left-out activities</button>
+                <button className="sm" onClick={() => reeval.mutate(undefined, { onSuccess: (r: any) => toast(`Rules re-applied: ${r.queued} to copy, ${r.skipped} left out`) })}><IconRefresh size={ICON.button} />Re-apply rules to left-out activities</button>
               </div>
             </div>
           )}

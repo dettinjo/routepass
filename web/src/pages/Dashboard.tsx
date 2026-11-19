@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Legend, LineChart, StackedBars } from "../components/charts";
-import { BrandIcon, IconArrowRight, IconCheck, IconList, IconSparkles, IconSync, IconTarget, IconTimeline, IconTrophy, MetricIcon } from "../components/icons";
+import { ICON, BrandIcon, IconArrowRight, IconCheck, IconList, IconRight, IconSparkles, IconSync, IconTarget, IconTimeline, IconTrophy, MetricIcon } from "../components/icons";
 import { ActivityList, FamilyChips, METRICS, metricFormat, type Metric } from "../components/shared";
 import { Callout, Card, Seg, Skeleton, Stat } from "../components/ui";
 import { api } from "../lib/api";
@@ -33,7 +33,7 @@ function SetupCard({ strava, komoot }: { strava: boolean; komoot: boolean }) {
       <div className="steps">
         {steps.map((s, i) => (
           <div key={i} className={`step ${s.done ? "done" : ""}`}>
-            <span className="n">{s.done ? <IconCheck size={16} /> : i + 1}</span>
+            <span className="n">{s.done ? <IconCheck size={ICON.button} /> : i + 1}</span>
             {s.icon && <BrandIcon provider={s.icon} size={18} />}
             <span className="grow">{s.label}</span>
           </div>
@@ -41,7 +41,7 @@ function SetupCard({ strava, komoot }: { strava: boolean; komoot: boolean }) {
       </div>
       <div className="row mt16">
         <Link to={strava && komoot ? "/sync" : "/settings"} className="btn primary" style={{ background: "var(--accent)", color: "var(--accent-ink)", borderColor: "var(--accent)" }}>
-          {strava && komoot ? "Set up sync" : "Connect accounts"}<IconArrowRight size={16} />
+          {strava && komoot ? "Set up sync" : "Connect accounts"}<IconArrowRight size={ICON.button} />
         </Link>
       </div>
     </Card>
@@ -119,8 +119,8 @@ export default function Dashboard() {
     return {
       x: load.series.map((p: any) => new Date(p.date).getTime() / 1000),
       series: [
-        { label: "Fitness", color: "var(--series-1)", values: load.series.map((p: any) => p.ctl), fill: true },
-        { label: "Fatigue", color: "var(--series-2)", values: load.series.map((p: any) => p.atl) },
+        { label: "Fitness", color: "var(--line-1)", values: load.series.map((p: any) => p.ctl), fill: true, width: 2.2 },
+        { label: "Fatigue", color: "var(--line-2)", values: load.series.map((p: any) => p.atl), width: 1.5 },
       ],
     };
   }, [load]);
@@ -165,7 +165,7 @@ export default function Dashboard() {
                 <span className="xs muted">only on Strava</span>
               </button>
               <button className="ghost" style={{ flexDirection: "column", height: "auto", padding: 8 }} onClick={() => nav("/activities?presence=both")}>
-                <span className="row nowrap" style={{ gap: 4 }}><BrandIcon provider="strava" size={18} /><IconSync size={16} /><BrandIcon provider="komoot" size={18} /></span>
+                <span className="row nowrap" style={{ gap: 4 }}><BrandIcon provider="strava" size={18} /><IconSync size={ICON.button} /><BrandIcon provider="komoot" size={18} /></span>
                 <span className="big-num">{int(cov.both)}</span>
                 <span className="xs muted">on both</span>
               </button>
@@ -245,7 +245,7 @@ export default function Dashboard() {
                   <Stat icon="count" label="Week streak" value={data.streaks.current_weeks} unit="wk" />
                   <Stat icon="count" label="Best week streak" value={data.streaks.longest_weeks} unit="wk" />
                 </div>
-                <div className="mt16"><Link to="/insights/records" className="small">Records & best efforts →</Link></div>
+                <div className="mt16"><Link to="/insights/records" className="small row nowrap" style={{ gap: 4 }}>Records & best efforts<IconRight size={ICON.inline} /></Link></div>
               </Card>
             </div>
           </>

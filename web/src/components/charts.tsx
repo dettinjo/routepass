@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import { cssVar, SEQ } from "../lib/colors";
+import { cssVar, heatScale } from "../lib/colors";
 
 function useWidth<T extends HTMLElement>(): [React.RefObject<T>, number] {
   const ref = useRef<T>(null);
@@ -135,7 +135,7 @@ export function Legend({ items, line = false }: { items: Series[]; line?: boolea
 }
 
 /** Horizontal bars with labels (zones, rankings). */
-export function HBars({ rows, format, color = "var(--series-1)" }: {
+export function HBars({ rows, format, color = "var(--text-secondary)" }: {
   rows: { label: ReactNode; value: number; sub?: ReactNode; color?: string }[]; format: (v: number) => string; color?: string;
 }) {
   const max = Math.max(...rows.map((r) => r.value), 1);
@@ -152,15 +152,22 @@ export function HBars({ rows, format, color = "var(--series-1)" }: {
   );
 }
 
-function seqColor(v: number, max: number): string {
-  if (!v) return SEQ[0];
-  const idx = Math.min(SEQ.length - 1, 1 + Math.floor((v / max) * (SEQ.length - 1.0001)));
-  return SEQ[idx];
+function seqColor(v: number, max: number, scale: string[]): string {
+  if (!v) return scale[0];
+  const idx = Math.min(scale.length - 1, 1 + Math.floor((v / max) * (scale.length - 1.0001)));
+  return scale[idx];
+}
+
+/** "Less ▢▢▢▢ More" key for a heat scale. */
+export function HeatLegend({ scale = heatScale() }: { scale?: string[] }) {
+  return (
+    <div className="row small muted" style={{ gap: 4 }}>Less {scale.map((c, i) => <i key={i} style={{ width: 11, height: 11, borderRadius: 2, background: c, display: "inline-block" }} />)} More</div>
+  );
 }
 
 /** GitHub-style year calendar. Sequential single hue; tooltip per day. */
-export function CalendarHeatmap({ year, days, metric, format, onDay }: {
-  year: number; days: Record<string, number>; metric: string; format: (v: number) => string; onDay?: (d: string) => void;
+export function CalendarHeatmap({ year, days, metric, format, onDay, scale = heatScale() }: {
+  year: number; days: Record<string, number>; metric: string; format: (v: number) => string; onDay?: (d: string) => void; scale?: string[];
 }) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const [tip, setTip] = useState<TipState | null>(null);
@@ -181,7 +188,7 @@ export function CalendarHeatmap({ year, days, metric, format, onDay }: {
     const v = days[key] || 0;
     cells.push(
       <rect key={key} x={30 + Math.floor(pos / 7) * step} y={16 + (pos % 7) * step} width={cell} height={cell} rx={2}
-        fill={seqColor(v, max)} style={{ cursor: onDay && v ? "pointer" : "default" }}
+        style={{ fill: seqColor(v, max, scale), cursor: onDay && v ? "pointer" : "default" }}
         onClick={() => v && onDay?.(key)}
         onMouseMove={(e) => {
           const box = (e.currentTarget.ownerSVGElement as SVGSVGElement).getBoundingClientRect();
@@ -208,7 +215,7 @@ export function CalendarHeatmap({ year, days, metric, format, onDay }: {
 }
 
 /** Weekday × hour grid (habits). */
-export function GridHeatmap({ grid }: { grid: number[][] }) {
+export function GridHeatmap({ grid, scale = heatScale() }: { grid: number[][]; scale?: string[] }) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const [tip, setTip] = useState<TipState | null>(null);
   const max = Math.max(1, ...grid.flat());
@@ -223,7 +230,7 @@ export function GridHeatmap({ grid }: { grid: number[][] }) {
             <g key={d}>
               <text x={0} y={d * (ch + 2) + 13}>{days[d]}</text>
               {row.map((v, h) => (
-                <rect key={h} x={36 + h * (cw + 2)} y={d * (ch + 2)} width={cw} height={ch} rx={2} fill={seqColor(v, max)}
+                <rect key={h} x={36 + h * (cw + 2)} y={d * (ch + 2)} width={cw} height={ch} rx={2} style={{ fill: seqColor(v, max, scale) }}
                   onMouseMove={(e) => {
                     const box = (e.currentTarget.ownerSVGElement as SVGSVGElement).getBoundingClientRect();
                     setTip({ x: e.clientX - box.left, y: e.clientY - box.top, content: <><div className="tt-title">{days[d]} {h}:00–{h + 1}:00</div><div className="tt-row"><span>Activities</span><span>{v}</span></div></> });
@@ -244,7 +251,7 @@ export function GridHeatmap({ grid }: { grid: number[][] }) {
  *  over the plot area, with mouse or touch. */
 export function LineChart({
   x, series, height = 240, xTime = false, xFormat, yFormat, onCursor, syncKey, logX = false, fill = false, yRange,
-  invertY = false, showXAxis = true, tooltip = true, yAxisFormat,
+  invertY = false, showXAxis = true, tooltip = true, yAxisFormat, bands,
 }: {
   x: number[];
   series: { label: string; color: string; values: (number | null)[]; dash?: boolean; fill?: boolean; width?: number }[];
@@ -261,6 +268,8 @@ export function LineChart({
   showXAxis?: boolean;
   tooltip?: boolean;
   yAxisFormat?: (v: number) => string;
+  /** Shaded value ranges behind the lines, e.g. form zones. `color` is a token name, `alpha` a 2-digit hex. */
+  bands?: { from: number | null; to: number | null; color: string; alpha?: string }[];
 }) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const plotRef = useRef<uPlot | null>(null);
@@ -269,7 +278,8 @@ export function LineChart({
   latest.current = { xFormat, yFormat, onCursor, series, xTime, tooltip, yAxisFormat };
 
   const configKey = [width, height, xTime, logX, syncKey, invertY, showXAxis, fill, yRange?.join(":"),
-    series.map((s) => `${s.label}|${s.color}|${s.dash}|${s.fill}|${s.width}`).join(",")].join("/");
+    series.map((s) => `${s.label}|${s.color}|${s.dash}|${s.fill}|${s.width}`).join(","),
+    (bands || []).map((b) => `${b.from}:${b.to}:${b.color}`).join(",")].join("/");
 
   useEffect(() => {
     if (!ref.current || width === 0) return;
@@ -305,6 +315,21 @@ export function LineChart({
         }),
       ],
       hooks: {
+        drawClear: [
+          (u) => {
+            if (!bands?.length) return;
+            const { ctx, bbox } = u;
+            ctx.save();
+            for (const b of bands) {
+              const top = b.to == null ? bbox.top : Math.max(bbox.top, u.valToPos(b.to, "y", true));
+              const bottom = b.from == null ? bbox.top + bbox.height : Math.min(bbox.top + bbox.height, u.valToPos(b.from, "y", true));
+              if (bottom <= top) continue;
+              ctx.fillStyle = cssVar(b.color) + (b.alpha ?? "1f");
+              ctx.fillRect(bbox.left, top, bbox.width, bottom - top);
+            }
+            ctx.restore();
+          },
+        ],
         setCursor: [
           (u) => {
             const idx = u.cursor.idx;

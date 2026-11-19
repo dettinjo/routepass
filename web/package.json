@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
-    "typecheck": "tsc -b"
+    "build": "node scripts/check-icons.mjs && tsc -b && vite build",
+    "typecheck": "tsc -b",
+    "lint:icons": "node scripts/check-icons.mjs"
   },
   "dependencies": {
     "@tabler/icons-react": "^3.41.1",

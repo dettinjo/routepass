@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Link, NavLink, Route, Routes } from "react-router-dom";
+import { Link, Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { Logo } from "./components/Logo";
-import { IconChart, IconHome, IconList, IconRefresh, IconSettings, IconSync } from "./components/icons";
+import { Callout } from "./components/ui";
+import { ICON, IconChart, IconHome, IconList, IconMore, IconRefresh, IconSettings, IconSync, IconTraining } from "./components/icons";
 import { useRunSync, useStatus } from "./lib/hooks";
 import { useOnlineStatus } from "./lib/pwa";
 import { ago } from "./lib/format";
@@ -12,16 +13,35 @@ import Dashboard from "./pages/Dashboard";
 import Activities from "./pages/Activities";
 import ActivityPage from "./pages/Activity";
 import Insights from "./pages/Insights";
+import Training from "./pages/Training";
 import SyncPage from "./pages/Sync";
 import Settings from "./pages/Settings";
 
 const NAV = [
   { to: "/", label: "Home", icon: IconHome, end: true },
   { to: "/activities", label: "Activities", icon: IconList },
+  { to: "/training", label: "Training", icon: IconTraining },
   { to: "/insights", label: "Insights", icon: IconChart },
   { to: "/sync", label: "Sync", icon: IconSync },
   { to: "/settings", label: "Settings", icon: IconSettings },
 ];
+// Phone: four destinations + More (Sync rules and all settings live there).
+const BOTTOM_NAV = [...NAV.slice(0, 4), { to: "/settings", label: "More", icon: IconMore, end: false }];
+
+function BottomNav() {
+  const { pathname } = useLocation();
+  const moreActive = pathname.startsWith("/settings") || pathname.startsWith("/sync");
+  return (
+    <nav className="bottom-nav" aria-label="Main">
+      {BOTTOM_NAV.map(({ to, label, icon: Icon, end }) => (
+        <NavLink key={label} to={to} end={end} className={({ isActive }) => (isActive || (label === "More" && moreActive) ? "active" : "")}>
+          <span className="tab-ico"><Icon size={22} /></span>
+          {label}
+        </NavLink>
+      ))}
+    </nav>
+  );
+}
 
 function SyncButton({ compact = false }: { compact?: boolean }) {
   const { data } = useStatus();
@@ -39,10 +59,10 @@ function SyncButton({ compact = false }: { compact?: boolean }) {
   return (
     <div className="stack" style={{ gap: 6 }}>
       <button className="primary" onClick={() => run.mutate(false)} disabled={busy}>
-        <IconRefresh className={busy ? "spin" : ""} />{busy ? "Syncing…" : "Sync now"}
+        <IconRefresh size={ICON.button} className={busy ? "spin" : ""} />{busy ? "Syncing…" : "Sync now"}
       </button>
       <div className="xs muted" style={{ textAlign: "center" }}>
-        {last ? <>Last sync {ago(last.started_at)}{last.status !== "ok" && last.status !== "running" && <> · <span style={{ color: "var(--warn)" }}>{last.status}</span></>}</> : "Not synced yet"}
+        {last ? <>Last sync {ago(last.started_at)}{last.status !== "ok" && last.status !== "running" && <> · <span style={{ color: last.status === "failed" || last.status === "error" ? "var(--bad)" : "var(--warn)" }}>{last.status}</span></>}</> : "Not synced yet"}
       </div>
     </div>
   );
@@ -51,7 +71,7 @@ function SyncButton({ compact = false }: { compact?: boolean }) {
 function OfflineBanner() {
   const online = useOnlineStatus();
   if (online) return null;
-  return <div className="callout warn" style={{ marginBottom: 12 }}>You are offline — showing the last data this device loaded.</div>;
+  return <div style={{ marginBottom: 12 }}><Callout kind="warn">You are offline — showing the last data this device loaded.</Callout></div>;
 }
 
 export default function App() {
@@ -73,7 +93,7 @@ export default function App() {
         <Link to="/" className="brand"><Logo />RoutePass</Link>
         <nav className="nav stack" style={{ gap: 2 }}>
           {NAV.map(({ to, label, icon: Icon, end }) => (
-            <NavLink key={to} to={to} end={end}><Icon size={19} />{label}</NavLink>
+            <NavLink key={to} to={to} end={end}><Icon size={ICON.header} />{label}</NavLink>
           ))}
         </nav>
         <div className="sidebar-foot"><SyncButton /></div>
@@ -88,21 +108,19 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/activities" element={<Activities />} />
           <Route path="/activities/:id" element={<ActivityPage />} />
+          <Route path="/training" element={<Training />} />
+          <Route path="/training/:view" element={<Training />} />
+          <Route path="/insights/training" element={<Navigate to="/training" replace />} />
+          <Route path="/insights/trail" element={<Navigate to="/training/race" replace />} />
           <Route path="/insights" element={<Insights />} />
           <Route path="/insights/:tab" element={<Insights />} />
           <Route path="/sync" element={<SyncPage />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/settings/:section" element={<Settings />} />
           <Route path="*" element={<div className="empty"><h3>Not found</h3></div>} />
         </Routes>
       </main>
-      <nav className="bottom-nav" aria-label="Main">
-        {NAV.map(({ to, label, icon: Icon, end }) => (
-          <NavLink key={to} to={to} end={end}>
-            <span className="tab-ico"><Icon size={21} /></span>
-            {label}
-          </NavLink>
-        ))}
-      </nav>
+      <BottomNav />
     </div>
   );
 }

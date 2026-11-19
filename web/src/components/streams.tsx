@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { duration } from "../lib/format";
 import type { TrackPoint } from "../lib/types";
 import { LineChart } from "./charts";
-import { MetricIcon, type MetricKey } from "./icons";
+import { ICON, MetricIcon, type MetricKey } from "./icons";
 
 interface Channel {
   key: string;
@@ -55,13 +55,13 @@ export function StreamStack({ points, family, onHover }: { points: TrackPoint[];
       gapPace = rawGap.map((v) => (v != null && v <= capGap ? v : null));
     }
     const all: Channel[] = [
-      { key: "ele", label: "Elevation", unit: "m", icon: "elevation", color: "var(--series-6)", values: points.map((p) => p.ele), fmt: (v) => `${Math.round(v)} m`, axis: (v) => `${Math.round(v)}`, fill: true, height: 150 },
-      { key: "v", icon: "speed", color: "var(--series-1)", values: speed, height: 120, ...speedCh },
-      ...(gapPace ? [{ key: "gap", label: "GAP", unit: "min/km", icon: "climb" as MetricKey, color: "var(--series-3)", values: gapPace, fmt: paceFmt, invert: true, height: 115 }] : []),
-      { key: "hr", label: "Heart rate", unit: "bpm", icon: "hr", color: "var(--series-8)", values: points.map((p) => p.hr), fmt: (v) => `${Math.round(v)} bpm`, axis: (v) => `${Math.round(v)}`, height: 120 },
-      { key: "pw", label: "Power", unit: "W", icon: "power", color: "var(--series-7)", values: points.map((p) => p.pw), fmt: (v) => `${Math.round(v)} W`, axis: (v) => `${Math.round(v)}`, height: 120 },
-      { key: "cad", label: "Cadence", unit: "rpm", icon: "count", color: "var(--series-4)", values: points.map((p) => p.cad), fmt: (v) => `${Math.round(v)}`, height: 100 },
-      { key: "temp", label: "Temperature", unit: "°C", icon: "temp", color: "var(--series-2)", values: points.map((p) => p.temp), fmt: (v) => `${v.toFixed(1)} °C`, axis: (v) => `${Math.round(v)}`, height: 100 },
+      { key: "ele", label: "Elevation", unit: "m", icon: "elevation", color: "var(--metric-ele)", values: points.map((p) => p.ele), fmt: (v) => `${Math.round(v)} m`, axis: (v) => `${Math.round(v)}`, fill: true, height: 150 },
+      { key: "v", icon: "speed", color: "var(--metric-speed)", values: speed, height: 120, ...speedCh },
+      ...(gapPace ? [{ key: "gap", label: "GAP", unit: "min/km", icon: "climb" as MetricKey, color: "var(--metric-gap)", values: gapPace, fmt: paceFmt, invert: true, height: 115 }] : []),
+      { key: "hr", label: "Heart rate", unit: "bpm", icon: "hr", color: "var(--metric-hr)", values: points.map((p) => p.hr), fmt: (v) => `${Math.round(v)} bpm`, axis: (v) => `${Math.round(v)}`, height: 120 },
+      { key: "pw", label: "Power", unit: "W", icon: "power", color: "var(--metric-power)", values: points.map((p) => p.pw), fmt: (v) => `${Math.round(v)} W`, axis: (v) => `${Math.round(v)}`, height: 120 },
+      { key: "cad", label: "Cadence", unit: "rpm", icon: "count", color: "var(--metric-cad)", values: points.map((p) => p.cad), fmt: (v) => `${Math.round(v)}`, height: 100 },
+      { key: "temp", label: "Temperature", unit: "°C", icon: "temp", color: "var(--metric-temp)", values: points.map((p) => p.temp), fmt: (v) => `${v.toFixed(1)} °C`, axis: (v) => `${Math.round(v)}`, height: 100 },
     ];
     return all.filter((c) => c.values.some((v) => v != null && v !== 0));
   }, [points, family]);
@@ -84,11 +84,11 @@ export function StreamStack({ points, family, onHover }: { points: TrackPoint[];
     <div>
       <div className="readout" aria-live="polite">
         <div>
-          <div className="r-label"><MetricIcon.distance size={13} />{byDistance ? "Distance" : "Time"}</div>
+          <div className="r-label"><MetricIcon.distance size={ICON.inline} />{byDistance ? "Distance" : "Time"}</div>
           <div className="r-value">{p ? xFormat(x[idx!]) : "–"}</div>
         </div>
         <div>
-          <div className="r-label"><MetricIcon.time size={13} />Elapsed</div>
+          <div className="r-label"><MetricIcon.time size={ICON.inline} />Elapsed</div>
           <div className="r-value">{p ? duration(p.t, true) : "–"}</div>
         </div>
         {channels.map((c) => {
@@ -96,7 +96,7 @@ export function StreamStack({ points, family, onHover }: { points: TrackPoint[];
           const v = idx != null ? c.values[idx] : null;
           return (
             <div key={c.key}>
-              <div className="r-label"><Icon size={13} />{c.label}</div>
+              <div className="r-label"><Icon size={ICON.inline} />{c.label}</div>
               <div className="r-value" style={{ color: v != null ? c.color : undefined }}>{v != null ? c.fmt(v) : "–"}</div>
             </div>
           );
@@ -107,7 +107,7 @@ export function StreamStack({ points, family, onHover }: { points: TrackPoint[];
         const Icon = MetricIcon[c.icon];
         return (
           <div key={c.key}>
-            <div className="stream-title"><Icon size={14} />{c.label}{c.unit && <span className="muted" style={{ fontWeight: 500 }}>({c.unit})</span>}</div>
+            <div className="stream-title"><Icon size={ICON.inline} />{c.label}{c.unit && <span className="muted" style={{ fontWeight: 500 }}>({c.unit})</span>}</div>
             <LineChart
               x={x}
               series={series[i]}

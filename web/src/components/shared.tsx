@@ -4,7 +4,7 @@ import { activityDate, duration, hours, int, km, speed } from "../lib/format";
 import { decodePolyline } from "../lib/polyline";
 import type { ActivityRow } from "../lib/types";
 import { RouteThumb } from "./charts";
-import { IconLock, IconRight, MetricIcon, SportIcon } from "./icons";
+import { ICON, IconLock, IconRight, MetricIcon, SportIcon } from "./icons";
 import { ProviderBadges, SportBadge } from "./ui";
 
 export type Metric = "distance_m" | "moving_time_s" | "elevation_m" | "count" | "load";
@@ -46,23 +46,23 @@ export function ActivityItem({ a, selectable = false, selected = false, onToggle
       <div className="main-col">
         <div className="row nowrap" style={{ gap: 6 }}>
           <span className="name ellipsis">{a.name}</span>
-          {a.sync_locked && <IconLock size={14} className="muted" />}
+          {a.sync_locked && <IconLock size={ICON.inline} className="muted" />}
         </div>
         <span className="meta ellipsis">{a.sport_label} · {activityDate(a)}{a.trainer ? " · indoor" : ""}{a.commute ? " · commute" : ""}</span>
         <div className="metrics">
-          {a.distance_m ? <span><MetricIcon.distance size={14} />{km(a.distance_m)} km</span> : null}
-          <span><MetricIcon.time size={14} />{duration(a.moving_time_s)}</span>
-          {a.elevation_gain_m ? <span><MetricIcon.elevation size={14} />{int(a.elevation_gain_m)} m</span> : null}
-          {a.avg_speed_ms ? <span className="extra"><MetricIcon.speed size={14} />{speed(a.avg_speed_ms, a.family)}</span> : null}
-          {a.avg_hr ? <span className="extra"><MetricIcon.hr size={14} />{int(a.avg_hr)}</span> : null}
-          {a.avg_power ? <span className="extra"><MetricIcon.power size={14} />{int(a.avg_power)} W</span> : null}
+          {a.distance_m ? <span><MetricIcon.distance size={ICON.inline} />{km(a.distance_m)} km</span> : null}
+          <span><MetricIcon.time size={ICON.inline} />{duration(a.moving_time_s)}</span>
+          {a.elevation_gain_m ? <span><MetricIcon.elevation size={ICON.inline} />{int(a.elevation_gain_m)} m</span> : null}
+          {a.avg_speed_ms ? <span className="extra"><MetricIcon.speed size={ICON.inline} />{speed(a.avg_speed_ms, a.family)}</span> : null}
+          {a.avg_hr ? <span className="extra"><MetricIcon.hr size={ICON.inline} />{int(a.avg_hr)}</span> : null}
+          {a.avg_power ? <span className="extra"><MetricIcon.power size={ICON.inline} />{int(a.avg_power)} W</span> : null}
         </div>
       </div>
       <div className="side">
         <ProviderBadges providers={a.providers} copies={a.copies} />
         <span className="route-thumb"><RouteThumb points={a.polyline ? decodePolyline(a.polyline) : []} color={familyColor(a.family)} size={34} /></span>
       </div>
-      {!selectable && <IconRight size={18} className="muted hide-mobile" />}
+      {!selectable && <IconRight size={ICON.header} className="muted hide-mobile" />}
     </>
   );
   if (selectable) {
