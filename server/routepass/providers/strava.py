@@ -358,6 +358,33 @@ class StravaClient:
             **fields,
         )
 
+    def upload_photo(
+        self,
+        activity_id: str,
+        image_bytes: bytes,
+        *,
+        filename: str = "photo.jpg",
+        content_type: str = "image/jpeg",
+        caption: str = "",
+    ) -> dict[str, Any]:
+        """Upload a photo to a Strava activity via the connected Strava Web Session.
+
+        Strava's official REST API v3 does not support photo uploads; this requires
+        a Strava Web Session (`web_fallback`).
+        """
+        if self.web_fallback is None:
+            raise StravaError(
+                "Strava photo upload requires a connected Strava Web Session "
+                "(Strava's official API does not support photo uploads)."
+            )
+        return self.web_fallback.upload_photo(
+            activity_id,
+            image_bytes,
+            filename=filename,
+            content_type=content_type,
+            caption=caption,
+        )
+
 
 # ── Strava Web Session Client (zero-cost browser cookie client) ──────────────
 
@@ -1143,6 +1170,72 @@ class StravaWebClient:
             return resp.json()
         except ValueError:
             return {"id": activity_id, **payload}
+
+    def upload_photo(
+        self,
+        activity_id: str,
+        image_bytes: bytes,
+        *,
+        filename: str = "photo.jpg",
+        content_type: str = "image/jpeg",
+        caption: str = "",
+    ) -> dict[str, Any]:
+        """Upload a photo to a Strava activity via the authenticated web session."""
+        if not image_bytes:
+            raise StravaError("Empty image payload")
+        csrf = self._ensure_csrf()
+        headers = {
+            "X-CSRF-Token": csrf,
+            "X-Requested-With": "XMLHttpRequest",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Referer": f"{BASE}/activities/{activity_id}/edit",
+        }
+        data_fields = {"caption": caption} if caption else {}
+        endpoints = (
+            (f"{BASE}/activities/{activity_id}/photos", "file"),
+            (f"{BASE}/frontend/activities/{activity_id}/media", "file"),
+        )
+        last_err = ""
+        for url, field_name in endpoints:
+            resp = self._http.post(
+                url,
+                headers=headers,
+                data=data_fields,
+                files={field_name: (filename, io.BytesIO(image_bytes), content_type)},
+            )
+            self._sync_cookies(resp)
+            if self._is_auth_failure(resp) and self._try_renew_from_remember_token():
+                csrf = self._ensure_csrf()
+                headers["X-CSRF-Token"] = csrf
+                resp = self._http.post(
+                    url,
+                    headers=headers,
+                    data=data_fields,
+                    files={field_name: (filename, io.BytesIO(image_bytes), content_type)},
+                )
+                self._sync_cookies(resp)
+            if resp.status_code in (401, 403):
+                raise StravaAuthError("Strava web session rejected photo upload — reconnect Strava Web Session")
+            if 200 <= resp.status_code < 300:
+                try:
+                    out = resp.json()
+                except ValueError:
+                    out = {"uploaded": True}
+                photo_id = out.get("id") or out.get("unique_id") if isinstance(out, dict) else None
+                if caption and photo_id:
+                    try:
+                        self._http.patch(
+                            f"{BASE}/activities/{activity_id}/photos/{photo_id}",
+                            headers=headers,
+                            json={"caption": caption},
+                        )
+                    except httpx.HTTPError:
+                        pass
+                return out if isinstance(out, dict) else {"uploaded": True, "response": out}
+            last_err = f"{url} → {resp.status_code}: {resp.text[:200]}"
+            if resp.status_code not in (404, 405, 422):
+                break
+        raise StravaError(f"Strava web photo upload failed ({last_err})")
 
 
 def list_push_subscriptions(client_id: str, client_secret: str) -> list[dict[str, Any]]:

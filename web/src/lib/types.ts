@@ -77,7 +77,7 @@ export interface Preferences {
   places: Place[];
   trail_race?: TrailRaceGoal;
 }
-export interface DirectionPrefs { enabled: boolean; default_action: "sync" | "skip"; defaults: Record<string, any> }
+export interface DirectionPrefs { enabled: boolean; default_action: "sync" | "skip"; sync_photos?: boolean; defaults: Record<string, any> }
 
 export interface SyncRun { id: number; trigger: string; status: string; started_at: string; finished_at: string | null; stats: Record<string, any>; log: string[] }
 

@@ -352,6 +352,31 @@ def sync_activity(activity_id: int, body: SyncBody, db: Session = Depends(get_se
     return _call(services.sync_activity, db, activity_id, body.direction)
 
 
+class SyncKomootMediaBody(BaseModel):
+    sync_title: bool = True
+    sync_description: bool = True
+    sync_photos: bool = True
+
+
+@router.post("/activities/{activity_id}/sync-komoot-media", tags=["activities"])
+def sync_komoot_media(
+    activity_id: int, body: SyncKomootMediaBody, db: Session = Depends(get_session)
+) -> dict[str, Any]:
+    act = _call(services.get_activity, db, activity_id)
+    try:
+        return sync.sync_komoot_media_to_strava(
+            db,
+            act,
+            sync_title=body.sync_title,
+            sync_description=body.sync_description,
+            sync_photos=body.sync_photos,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except (komoot.KomootError, strava.StravaError) as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
 class UnlinkBody(BaseModel):
     source_id: int
 

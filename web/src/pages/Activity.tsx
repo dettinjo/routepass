@@ -149,7 +149,12 @@ function SyncTab({ a }: { a: ActivityDetail }) {
   const action = useAction();
   const toast = useToast();
   const [mergeId, setMergeId] = useState("");
+  const [syncTitle, setSyncTitle] = useState(true);
+  const [syncDesc, setSyncDesc] = useState(true);
+  const [syncPhotos, setSyncPhotos] = useState(true);
   const live = a.sources.filter((s) => !s.deleted);
+  const hasKomoot = live.some((s) => s.provider === "komoot");
+  const hasStrava = live.some((s) => s.provider === "strava");
   return (
     <div className="stack gap16">
       <Card title="Platforms" icon={IconSync} hint="This activity and its record on each platform" flush>
@@ -192,6 +197,63 @@ function SyncTab({ a }: { a: ActivityDetail }) {
           })}
         </div>
       </Card>
+
+      {hasKomoot && hasStrava && (
+        <Card
+          title="Sync Title, Description & Photos (Komoot → Strava)"
+          icon={IconRefresh}
+          hint="Push updated Komoot metadata and tour photos to the linked Strava activity (photos require Strava Web Session)"
+        >
+          <div className="stack" style={{ gap: 10 }}>
+            <div className="row" style={{ gap: 16, flexWrap: "wrap" }}>
+              <label className="row xs" style={{ gap: 6, cursor: "pointer" }}>
+                <input type="checkbox" checked={syncTitle} onChange={(e) => setSyncTitle(e.target.checked)} />
+                <span>Title</span>
+              </label>
+              <label className="row xs" style={{ gap: 6, cursor: "pointer" }}>
+                <input type="checkbox" checked={syncDesc} onChange={(e) => setSyncDesc(e.target.checked)} />
+                <span>Description</span>
+              </label>
+              <label className="row xs" style={{ gap: 6, cursor: "pointer" }}>
+                <input type="checkbox" checked={syncPhotos} onChange={(e) => setSyncPhotos(e.target.checked)} />
+                <span>Photos (via Strava Web Session)</span>
+              </label>
+            </div>
+            <div className="row">
+              <button
+                className="sm primary"
+                disabled={action.isPending || (!syncTitle && !syncDesc && !syncPhotos)}
+                onClick={() =>
+                  action.mutate(
+                    {
+                      path: `/activities/${a.id}/sync-komoot-media`,
+                      body: { sync_title: syncTitle, sync_description: syncDesc, sync_photos: syncPhotos },
+                    },
+                    {
+                      onSuccess: (r: any) => {
+                        const parts: string[] = [];
+                        if (r.title_synced) parts.push("title");
+                        if (r.description_synced) parts.push("description");
+                        if (r.photos_uploaded > 0) parts.push(`${r.photos_uploaded} photo(s)`);
+                        const msg = parts.length
+                          ? `Synced ${parts.join(", ")} to Strava`
+                          : r.warnings?.length
+                            ? r.warnings[0]
+                            : r.photos_skipped_existing > 0
+                              ? `Already up to date (${r.photos_skipped_existing} photo(s) already synced)`
+                              : "Nothing new to sync";
+                        toast(msg, Boolean(r.warnings?.length && !parts.length));
+                      },
+                    },
+                  )
+                }
+              >
+                {action.isPending ? "Syncing to Strava…" : "Push Komoot Details & Photos to Strava"}
+              </button>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <Card title={a.sync_locked ? "Locked from automatic sync" : "Automatic sync"} icon={a.sync_locked ? IconLock : IconUnlock}
         actions={<button className="sm" onClick={() => action.mutate({ path: `/activities/${a.id}`, method: "PATCH", body: { sync_locked: !a.sync_locked } })}>{a.sync_locked ? "Unlock" : "Lock"}</button>}>

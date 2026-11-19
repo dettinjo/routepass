@@ -282,8 +282,12 @@ function DirectionCard({ dir, rules }: { dir: (typeof DIRS)[number]; rules: Rule
               onChange={(v) => patch({ defaults: { ...p.defaults, komoot: { visibility: v } } })} />
           </div>
         ) : (
-          <Switch checked={!!p.defaults?.strava?.hide_from_home} onChange={(v) => patch({ defaults: { ...p.defaults, strava: { ...(p.defaults?.strava || {}), hide_from_home: v } } })}
-            label={<span className="small">Hide copies from followers' feeds</span>} />
+          <div className="stack" style={{ gap: 8 }}>
+            <Switch checked={!!p.defaults?.strava?.hide_from_home} onChange={(v) => patch({ defaults: { ...p.defaults, strava: { ...(p.defaults?.strava || {}), hide_from_home: v } } })}
+              label={<span className="small">Hide copies from followers' feeds</span>} />
+            <Switch checked={p.sync_photos ?? true} onChange={(v) => patch({ sync_photos: v })}
+              label={<span className="small">Copy tour photos to Strava (uses Strava Web Session)</span>} />
+          </div>
         )}
         <div className="row between mt8">
           <span className="section-label">Rules · first match wins</span>

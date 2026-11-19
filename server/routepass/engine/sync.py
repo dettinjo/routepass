@@ -184,11 +184,71 @@ def preview(db: Session, direction: str, limit: int = 200) -> list[dict[str, Any
 # ── execution ────────────────────────────────────────────────────────────────
 
 
+def _upload_komoot_photos(
+    komoot: KomootClient,
+    strava: StravaClient,
+    tour_id: str,
+    strava_activity_id: str,
+    already_synced_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    """Download photos from a Komoot tour and upload unseen ones to a Strava activity."""
+    seen = set(already_synced_ids or ())
+    photos = komoot.tour_photos(tour_id)
+    uploaded_ids: list[str] = []
+    skipped_existing = 0
+    errors: list[str] = []
+
+    for idx, ph in enumerate(photos, start=1):
+        pid = ph["id"]
+        if pid in seen:
+            skipped_existing += 1
+            continue
+        try:
+            img_bytes, ctype = komoot.download_photo(ph["url"])
+            ext = "png" if "png" in ctype else ("webp" if "webp" in ctype else "jpg")
+            strava.upload_photo(
+                strava_activity_id,
+                img_bytes,
+                filename=f"komoot-{tour_id}-{idx}.{ext}",
+                content_type=ctype,
+                caption=ph.get("caption") or "",
+            )
+            uploaded_ids.append(pid)
+            seen.add(pid)
+        except (KomootError, StravaError) as exc:
+            errors.append(str(exc))
+            # If Strava Web Session is missing or rejected auth, stop trying remaining photos.
+            if "Web Session" in str(exc) or isinstance(exc, StravaAuthError):
+                break
+
+    return {
+        "photos_found": len(photos),
+        "photos_uploaded": len(uploaded_ids),
+        "photos_skipped_existing": skipped_existing,
+        "uploaded_ids": uploaded_ids,
+        "errors": errors,
+    }
+
+
 def _komoot_to_strava(db: Session, job: SyncJob, komoot: KomootClient, strava: StravaClient) -> str:
     gpx = komoot.gpx(job.source_id)
     p = job.plan
+    name = p["name"]
+    description = p.get("description", "") or ""
+
+    # Komoot's tour list often omits full descriptions; fetch tour details if description is empty.
+    if not description:
+        try:
+            details = komoot.tour_details(job.source_id)
+            if details.get("description"):
+                description = details["description"]
+            if not name and details.get("name"):
+                name = details["name"]
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Could not fetch Komoot tour details for %s: %s", job.source_id, exc)
+
     external_id = f"{SYNC_EXTERNAL_PREFIX}komoot-{job.source_id}"
-    upload_id = strava.upload_gpx(gpx, p["name"], p.get("description", ""), p["sport"], external_id)
+    upload_id = strava.upload_gpx(gpx, name, description, p["sport"], external_id)
     try:
         activity_id = strava.wait_for_upload(upload_id)
     except StravaError as exc:
@@ -198,9 +258,121 @@ def _komoot_to_strava(db: Session, job: SyncJob, komoot: KomootClient, strava: S
         # Strava already has this recording: link instead of failing.
         job.reason = f"{job.reason}; Strava already had it"
         return dup.group(1)
-    if updates := {k: v for k, v in (p.get("strava") or {}).items() if v is not None}:
-        strava.update_activity(activity_id, **updates)
+
+    updates = {k: v for k, v in (p.get("strava") or {}).items() if v is not None}
+    if description:
+        updates.setdefault("description", description)
+    if updates:
+        try:
+            strava.update_activity(activity_id, **updates)
+        except StravaError as exc:
+            logger.warning("Could not apply post-upload updates on Strava %s: %s", activity_id, exc)
+
+    prefs = store.get_preferences(db)
+    if prefs.get("sync", {}).get("komoot_to_strava", {}).get("sync_photos", True):
+        try:
+            ph_res = _upload_komoot_photos(komoot, strava, job.source_id, activity_id)
+            if ph_res["photos_uploaded"]:
+                job.reason = f"{job.reason}; {ph_res['photos_uploaded']} photo(s) synced"
+            elif ph_res["errors"]:
+                logger.info(
+                    "Skipped Komoot→Strava photo sync for %s: %s", job.source_id, ph_res["errors"][0]
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Komoot→Strava photo sync failed for %s: %s", job.source_id, exc)
+
     return activity_id
+
+
+def sync_komoot_media_to_strava(
+    db: Session,
+    act: Activity,
+    *,
+    sync_title: bool = True,
+    sync_description: bool = True,
+    sync_photos: bool = True,
+) -> dict[str, Any]:
+    """Push title, description, and/or photos from Komoot to the linked Strava activity."""
+    komoot_src = _live_source(act, "komoot")
+    strava_src = _live_source(act, "strava")
+    if komoot_src is None:
+        raise ValueError("This activity has no Komoot record")
+    if strava_src is None:
+        raise ValueError("This activity is not on Strava yet — copy it to Strava first")
+
+    komoot = komoot_client(db)
+    strava = strava_client(db)
+    if komoot is None:
+        raise ValueError("Komoot is not connected")
+    if strava is None:
+        raise ValueError("Strava is not connected")
+
+    title_synced = False
+    description_synced = False
+    warnings: list[str] = []
+    photo_stats: dict[str, Any] = {
+        "photos_found": 0,
+        "photos_uploaded": 0,
+        "photos_skipped_existing": 0,
+        "errors": [],
+    }
+
+    with komoot, strava:
+        details = komoot.tour_details(komoot_src.external_id)
+        k_title = details.get("name") or komoot_src.name or act.name or ""
+        k_desc = details.get("description") or (komoot_src.raw or {}).get("description") or ""
+
+        updates: dict[str, Any] = {}
+        if sync_title and k_title:
+            updates["name"] = k_title[:250]
+        if sync_description and k_desc:
+            updates["description"] = k_desc
+
+        if updates:
+            strava.update_activity(strava_src.external_id, **updates)
+            if "name" in updates:
+                title_synced = True
+                strava_src.name = updates["name"]
+                act.name = updates["name"]
+            if "description" in updates:
+                description_synced = True
+                k_raw = dict(komoot_src.raw or {})
+                k_raw["description"] = k_desc
+                komoot_src.raw = k_raw
+                s_raw = dict(strava_src.raw or {})
+                s_raw["description"] = k_desc
+                strava_src.raw = s_raw
+        elif sync_description and not k_desc and not sync_title:
+            warnings.append("No description found on this Komoot tour.")
+
+        if sync_photos:
+            existing_ids = set((strava_src.raw or {}).get("synced_komoot_photo_ids") or [])
+            photo_stats = _upload_komoot_photos(
+                komoot,
+                strava,
+                komoot_src.external_id,
+                strava_src.external_id,
+                already_synced_ids=existing_ids,
+            )
+            if photo_stats["uploaded_ids"]:
+                s_raw = dict(strava_src.raw or {})
+                s_raw["synced_komoot_photo_ids"] = sorted(existing_ids | set(photo_stats["uploaded_ids"]))
+                strava_src.raw = s_raw
+            if photo_stats["errors"]:
+                warnings.extend(photo_stats["errors"])
+
+    db.flush()
+    return {
+        "activity_id": act.id,
+        "komoot_id": komoot_src.external_id,
+        "strava_id": strava_src.external_id,
+        "title_synced": title_synced,
+        "description_synced": description_synced,
+        "photos_found": photo_stats["photos_found"],
+        "photos_uploaded": photo_stats["photos_uploaded"],
+        "photos_skipped_existing": photo_stats["photos_skipped_existing"],
+        "warnings": warnings,
+    }
 
 
 def _strava_to_komoot(db: Session, job: SyncJob, strava_getter, komoot: KomootClient) -> str:

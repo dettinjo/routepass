@@ -26,6 +26,7 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
         "komoot_to_strava": {
             "enabled": False,
             "default_action": "sync",
+            "sync_photos": True,
             "defaults": {},
         },
     },
