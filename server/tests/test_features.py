@@ -155,3 +155,42 @@ def test_geofence_rule_with_saved_place():
         raise AssertionError("expected RuleError")
     except rule_engine.RuleError:
         pass
+
+
+def test_rule_dry_run_counts_matches_and_earlier_rules(client):
+    with session_scope() as db:
+        for i, (sport, fam, km) in enumerate(
+            [("Ride", "ride", 40), ("Ride", "ride", 5), ("Run", "run", 10), ("VirtualRide", "ride", 30)]
+        ):
+            _activity(db, datetime(2026, 5, 1 + i, 8), sport=sport, family=fam, km=km, provider="komoot")
+    body = {"direction": "komoot_to_strava", "conditions": {"families": ["ride"]}}
+    r = client.post("/api/v1/rules/test", json=body, headers=AUTH).json()
+    assert (r["considered"], r["matched"], r["effective"]) == (4, 3, 3)
+    assert len(r["samples"]) == 3 and r["shadowed_by"] == []
+
+    # An earlier rule that catches indoor rides takes one of them (first match wins).
+    first = client.post(
+        "/api/v1/rules",
+        json={
+            "name": "Indoor",
+            "direction": "komoot_to_strava",
+            "conditions": {"sports": ["VirtualRide"]},
+            "actions": {"skip": True},
+        },
+        headers=AUTH,
+    ).json()
+    r = client.post("/api/v1/rules/test", json=body, headers=AUTH).json()
+    assert r["matched"] == 3 and r["effective"] == 2
+    assert r["shadowed_by"] == [{"rule_id": first["id"], "name": "Indoor", "count": 1}]
+    # Testing the first rule itself: nothing is ahead of it.
+    r = client.post(
+        "/api/v1/rules/test",
+        json={**body, "conditions": {"sports": ["VirtualRide"]}, "rule_id": first["id"]},
+        headers=AUTH,
+    ).json()
+    assert r["effective"] == 1
+
+    bad = client.post(
+        "/api/v1/rules/test", json={"direction": "komoot_to_strava", "conditions": {"nope": 1}}, headers=AUTH
+    )
+    assert bad.status_code == 422
