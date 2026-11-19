@@ -732,10 +732,34 @@ def _zones(values: np.ndarray, dt: np.ndarray, bounds: list[float]) -> list[floa
     return [round(float(np.sum(dt[(idx == z) & (v >= 0)])), 0) for z in range(len(bounds) + 1)]
 
 
-def _splits(track: NormalizedTrack, split_m: float) -> list[dict[str, Any]]:
+def minetti_gap_factor(grade: np.ndarray | float) -> np.ndarray | float:
+    """Minetti (2002) energy cost of running on slope normalized to flat (0% grade = 1.0)."""
+    g = np.clip(grade, -0.35, 0.35)
+    cost = 155.4 * g**5 - 30.4 * g**4 - 43.3 * g**3 + 46.3 * g**2 + 19.5 * g + 3.6
+    return np.clip(cost / 3.6, 0.78, 4.2)
+
+
+def _gap_speed(track: NormalizedTrack, speed: np.ndarray | None) -> np.ndarray | None:
+    if speed is None or track.elevation_m is None or track.distance_m is None or track.n < 3:
+        return None
+    d = np.maximum.accumulate(_fill_nan(track.distance_m))
+    ele = _smooth_by_distance(_fill_nan(track.elevation_m), d, 60.0)
+    dd = np.gradient(d)
+    de = np.gradient(ele)
+    grade = np.where(dd > 0.5, de / np.maximum(dd, 0.5), 0.0)
+    factor = minetti_gap_factor(grade)
+    return speed * factor
+
+
+def _splits(track: NormalizedTrack, split_m: float, *, compute_gap: bool = False) -> list[dict[str, Any]]:
     if track.distance_m is None or track.n < 2:
         return []
     d = track.distance_m
+    ele_smooth = (
+        _smooth_by_distance(_fill_nan(track.elevation_m), d, 60.0)
+        if compute_gap and track.elevation_m is not None
+        else None
+    )
     out = []
     prev = 0
     boundary = d[0] + split_m
@@ -754,18 +778,24 @@ def _splits(track: NormalizedTrack, split_m: float) -> list[dict[str, Any]]:
             gain, loss = elevation_gain_loss(
                 track.elevation_m[seg], track.distance_m[seg] if track.distance_m is not None else None
             )
-        out.append(
-            {
-                "index": len(out) + 1,
-                "distance_m": round(dd, 0),
-                "duration_s": round(dt, 0),
-                "speed_ms": round(dd / dt, 3) if dt > 0 else None,
-                "hr": _stat(track.hr[seg] if track.hr is not None else None, np.mean),
-                "power": _stat(track.power[seg] if track.power is not None else None, np.mean),
-                "gain_m": round(gain, 0),
-                "loss_m": round(loss, 0),
-            }
-        )
+        raw_speed = round(dd / dt, 3) if dt > 0 else None
+        gap_speed: float | None = None
+        if compute_gap and raw_speed and ele_smooth is not None and dd > 10:
+            net_grade = float(ele_smooth[i] - ele_smooth[prev]) / dd
+            gap_speed = round(raw_speed * float(minetti_gap_factor(net_grade)), 3)
+        row: dict[str, Any] = {
+            "index": len(out) + 1,
+            "distance_m": round(dd, 0),
+            "duration_s": round(dt, 0),
+            "speed_ms": raw_speed,
+            "hr": _stat(track.hr[seg] if track.hr is not None else None, np.mean),
+            "power": _stat(track.power[seg] if track.power is not None else None, np.mean),
+            "gain_m": round(gain, 0),
+            "loss_m": round(loss, 0),
+        }
+        if gap_speed is not None:
+            row["gap_speed_ms"] = gap_speed
+        out.append(row)
         prev = i
         boundary += split_m
     return out
@@ -796,7 +826,9 @@ def _decoupling(track: NormalizedTrack, moving: np.ndarray, speed: np.ndarray | 
     }
 
 
-def _downsample(track: NormalizedTrack, speed: np.ndarray | None) -> list[dict[str, Any]]:
+def _downsample(
+    track: NormalizedTrack, speed: np.ndarray | None, gap_speed: np.ndarray | None = None
+) -> list[dict[str, Any]]:
     x = track.distance_m if track.distance_m is not None else track.time_s
     y = track.elevation_m if track.elevation_m is not None else (track.hr if track.hr is not None else x)
     idx = _lttb(x.astype("float64"), np.nan_to_num(y).astype("float64"), CHART_POINTS)
@@ -816,6 +848,7 @@ def _downsample(track: NormalizedTrack, speed: np.ndarray | None) -> list[dict[s
             "pw": at(track.power, i, 0),
             "cad": at(track.cadence, i, 0),
             "v": at(speed, i, 2),
+            "gap": at(gap_speed, i, 2),
             "temp": at(track.temp, i, 1),
             "lat": at(track.lat, i, 5),
             "lon": at(track.lon, i, 5),
@@ -944,7 +977,19 @@ def compute(
         summary["avg_temp"] = _stat(track.temp, np.mean)
         detail["temp_range"] = [_stat(track.temp, np.min), _stat(track.temp, np.max)]
 
-    if (dec := _decoupling(track, moving, speed)) is not None:
+    is_foot = family in ("run", "walk")
+    gap_speed = _gap_speed(track, speed) if is_foot else None
+    if gap_speed is not None:
+        valid_gap = gap_speed[moving] if moving.any() else gap_speed
+        valid_gap = valid_gap[~np.isnan(valid_gap) & (valid_gap > 0.3)]
+        if valid_gap.size:
+            summary["gap_speed_ms"] = round(float(np.mean(valid_gap)), 3)
+    if summary.get("distance_m"):
+        summary["effort_km"] = round(
+            summary["distance_m"] / 1000.0 + (summary.get("elevation_gain_m") or 0.0) / 100.0, 2
+        )
+
+    if (dec := _decoupling(track, moving, gap_speed if gap_speed is not None else speed)) is not None:
         detail["decoupling"] = dec
 
     distances = BEST_DISTANCES_M.get(family)
@@ -953,7 +998,7 @@ def compute(
         detail["best_times"] = best
         efforts += [("time", k, v) for k, v in best.items()]
 
-    detail["splits"] = _splits(track, 5000.0 if family == "ride" else 1000.0)
+    detail["splits"] = _splits(track, 5000.0 if family == "ride" else 1000.0, compute_gap=is_foot)
     detail["split_m"] = 5000 if family == "ride" else 1000
 
     if track.has_gps:
@@ -963,4 +1008,4 @@ def compute(
             summary["start_lat"], summary["start_lng"] = float(track.lat[first]), float(track.lon[first])
             summary["end_lat"], summary["end_lng"] = float(track.lat[last]), float(track.lon[last])
 
-    return TrackResult(summary, detail, _downsample(track, speed), efforts, track.channels())
+    return TrackResult(summary, detail, _downsample(track, speed, gap_speed), efforts, track.channels())

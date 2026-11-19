@@ -13,7 +13,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from routepass import auth, services, store
-from routepass.analysis import insights
+from routepass.analysis import insights, trail
 from routepass.analysis import track as trk
 from routepass.api import serialize
 from routepass.config import get_settings
@@ -516,6 +516,38 @@ def gear(f: insights.Filters = Depends(_filters), db: Session = Depends(get_sess
 @router.get("/insights/coverage", tags=["insights"])
 def coverage(db: Session = Depends(get_session)) -> dict[str, Any]:
     return insights.coverage(db)
+
+
+@router.get("/insights/trail", tags=["insights"])
+def trail_overview(weeks: int = Query(8, ge=4, le=26), db: Session = Depends(get_session)) -> dict[str, Any]:
+    """50k / ultra trail-running readiness: race countdown, weekly vertical/effort-km, ACWR, durability."""
+    return trail.trail_readiness(db, store.get_preferences(db), weeks=weeks)
+
+
+class TrailRacePlanBody(BaseModel):
+    gpx: str
+    aid_stations_km: list[float] | None = None
+    fade_pct: float = Field(default=8.0, ge=0.0, le=35.0)
+    carbs_g_per_h: float = Field(default=70.0, ge=20.0, le=120.0)
+    fluid_ml_per_h: float = Field(default=600.0, ge=200.0, le=1500.0)
+    base_gap_speed_ms: float | None = None
+
+
+@router.post("/insights/trail/race-plan", tags=["insights"])
+def trail_race_plan(body: TrailRacePlanBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    """Estimate split times, climbs, and nutrition for an uploaded GPX trail race route."""
+    try:
+        return trail.plan_gpx_race(
+            db,
+            body.gpx.encode("utf-8"),
+            aid_stations_km=body.aid_stations_km,
+            fade_pct=body.fade_pct,
+            carbs_g_per_h=body.carbs_g_per_h,
+            fluid_ml_per_h=body.fluid_ml_per_h,
+            base_gap_speed_ms=body.base_gap_speed_ms,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 # ── settings ─────────────────────────────────────────────────────────────────

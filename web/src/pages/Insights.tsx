@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { CalendarHeatmap, GridHeatmap, HBars, Legend, LineChart, StackedBars } from "../components/charts";
 import { RoutesMap } from "../components/maps";
 import { ZonesTab, TilesTab, GearTab } from "../components/InsightsExtras";
+import { TrailTab } from "../components/TrailTab";
 import { Card, Empty, Seg, Skeleton, SportDot, Stat, Tabs } from "../components/ui";
 import { api } from "../lib/api";
 import { FAMILIES, FAMILY_LABEL, familyColor } from "../lib/colors";
@@ -11,9 +12,10 @@ import { duration, hours, int, km, num, speed } from "../lib/format";
 import { FamilyChips, METRICS, metricFormat, type Metric } from "../components/shared";
 import { SportIcon } from "../components/icons";
 
-type Tab = "trends" | "calendar" | "fitness" | "zones" | "records" | "power" | "habits" | "map" | "tiles" | "gear";
+type Tab = "trends" | "trail" | "calendar" | "fitness" | "zones" | "records" | "power" | "habits" | "map" | "tiles" | "gear";
 const TABS: { value: Tab; label: string }[] = [
   { value: "trends", label: "Trends" },
+  { value: "trail", label: "50k Trail" },
   { value: "calendar", label: "Calendar" },
   { value: "fitness", label: "Fitness & form" },
   { value: "zones", label: "Zones & efficiency" },
@@ -345,10 +347,11 @@ export default function Insights() {
     <>
       <div className="page-head">
         <div><h1>Insights</h1><div className="sub">Computed over deduplicated activities — nothing counts twice</div></div>
-        {t !== "power" && <FamilyChips value={families} onChange={setFamilies} />}
+        {t !== "power" && t !== "trail" && <FamilyChips value={families} onChange={setFamilies} />}
       </div>
       <Tabs value={t} tabs={TABS} onChange={(v) => nav(`/insights/${v}`)} />
       {t === "trends" && <Trends families={families} />}
+      {t === "trail" && <TrailTab />}
       {t === "calendar" && <CalendarTab families={families} />}
       {t === "fitness" && <Fitness families={families} />}
       {t === "records" && <Records families={families} />}

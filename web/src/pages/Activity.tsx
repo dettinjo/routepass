@@ -40,13 +40,14 @@ function useAction() {
   });
 }
 
-function Analysis({ a }: { a: ActivityDetail }) {
+function Analysis({ a, onSelectClimb }: { a: ActivityDetail; onSelectClimb?: (idx: number) => void }) {
   const an = a.analysis;
   const { data: similar } = useQuery<ActivityRow[]>({ queryKey: ["activity", String(a.id), "similar"], queryFn: () => api(`/activities/${a.id}/similar`) });
   if (!an) return <Empty title="No recording analysed yet" icon={IconMap}>The track is downloaded in the background.</Empty>;
   const foot = a.family === "run" || a.family === "walk";
   const hasHr = an.splits?.some((s) => s.hr != null);
   const hasPw = an.splits?.some((s) => s.power != null);
+  const hasGap = foot && an.splits?.some((s) => s.gap_speed_ms != null);
   return (
     <div className="stack gap16">
       <div className="grid g2">
@@ -90,7 +91,7 @@ function Analysis({ a }: { a: ActivityDetail }) {
         <Card title="Splits" icon={MetricIcon.length} hint={`Every ${km(an.split_m ?? 1000, 0)} km`} flush>
           <div className="table-wrap" style={{ maxHeight: 440 }}>
             <table>
-              <thead><tr><th>km</th><th className="r">{foot ? "Pace" : "Speed"}</th><th style={{ width: "34%" }} /><th className="r">Time</th><th className="r hide-mobile">+m</th>{hasHr && <th className="r">HR</th>}{hasPw && <th className="r hide-mobile">W</th>}</tr></thead>
+              <thead><tr><th>km</th><th className="r">{foot ? "Pace" : "Speed"}</th>{hasGap && <th className="r">GAP</th>}<th className="hide-mobile" style={{ width: "28%" }} /><th className="r">Time</th><th className="r">+m</th>{hasHr && <th className="r">HR</th>}{hasPw && <th className="r hide-mobile">W</th>}</tr></thead>
               <tbody>
                 {(() => {
                   const maxV = Math.max(...an.splits!.map((s) => s.speed_ms || 0));
@@ -101,9 +102,10 @@ function Analysis({ a }: { a: ActivityDetail }) {
                       <tr key={s.index}>
                         <td className="num">{km(cum, cum < 10000 ? 1 : 0)}</td>
                         <td className="r" style={{ whiteSpace: "nowrap" }}>{speed(s.speed_ms, a.family)}</td>
-                        <td><div className="bar-track"><div className="bar-fill" style={{ width: `${((s.speed_ms || 0) / maxV) * 100}%`, background: familyColor(a.family) }} /></div></td>
+                        {hasGap && <td className="r muted" style={{ whiteSpace: "nowrap" }}>{s.gap_speed_ms ? speed(s.gap_speed_ms, a.family) : "–"}</td>}
+                        <td className="hide-mobile"><div className="bar-track"><div className="bar-fill" style={{ width: `${((s.speed_ms || 0) / maxV) * 100}%`, background: familyColor(a.family) }} /></div></td>
                         <td className="r">{duration(s.duration_s, true)}</td>
-                        <td className="r hide-mobile">{int(s.gain_m)}</td>
+                        <td className="r">{int(s.gain_m)}</td>
                         {hasHr && <td className="r">{int(s.hr)}</td>}
                         {hasPw && <td className="r hide-mobile">{int(s.power)}</td>}
                       </tr>
@@ -117,10 +119,10 @@ function Analysis({ a }: { a: ActivityDetail }) {
       )}
 
       {an.climbs && an.climbs.length > 0 && (
-        <Card title="Climbs" icon={MetricIcon.climb} hint="Continuous ascents of at least 30 m — highlighted on the map" flush>
+        <Card title="Climbs" icon={MetricIcon.climb} hint="Tap any climb to zoom on the Topo map" flush>
           <div className="list">
             {an.climbs.map((c, i) => (
-              <div key={i} className="item" style={{ cursor: "default" }}>
+              <div key={i} className="item" onClick={() => onSelectClimb?.(i)} style={{ cursor: onSelectClimb ? "pointer" : "default" }}>
                 <span className="sport-badge" style={{ width: 36, height: 36, background: "var(--warn-soft)", color: "var(--warn)" }}><MetricIcon.climb size={18} /></span>
                 <div className="main-col">
                   <b className="small">{int(c.gain_m)} m up · {num(c.grade_pct)} %</b>
@@ -230,6 +232,7 @@ export default function ActivityPage() {
   const action = useAction();
   const [tab, setTab] = useState<Tab>("overview");
   const [hover, setHover] = useState<number | null>(null);
+  const [focusClimbIdx, setFocusClimbIdx] = useState<number | null>(null);
   const { data: a, isLoading, error } = useQuery<ActivityDetail>({ queryKey: ["activity", id], queryFn: () => api(`/activities/${id}`) });
   const { data: track } = useQuery<{ points: TrackPoint[]; channels: string[]; provider: string | null }>({
     queryKey: ["activity", id, "track"], queryFn: () => api(`/activities/${id}/track`),
@@ -245,17 +248,24 @@ export default function ActivityPage() {
       track.points.filter((p) => p.d != null && p.d >= c.start_m && p.d <= c.end_m && p.lat != null).map((p) => [p.lat!, p.lon!] as [number, number]),
     );
   }, [track, a]);
+  const focusClimb = focusClimbIdx != null ? (climbSegs[focusClimbIdx] ?? null) : null;
   const highlight = useMemo(() => {
     if (hover == null || !track) return null;
     const p = track.points[hover];
     return p?.lat != null && p?.lon != null ? ([p.lat, p.lon] as [number, number]) : null;
   }, [hover, track]);
   const onHover = useCallback((i: number | null) => setHover(i), []);
+  const onSelectClimb = useCallback((idx: number) => {
+    setFocusClimbIdx(idx);
+    setTab("overview");
+  }, []);
 
   if (isLoading) return <Skeleton h={500} />;
   if (error || !a) return <Empty title="Activity not found"><Link to="/activities">Back to activities</Link></Empty>;
   const an = a.analysis;
   const foot = a.family === "run" || a.family === "walk";
+  const effortKm = a.distance_m ? (a.distance_m / 1000 + (a.elevation_gain_m ?? 0) / 100) : null;
+  const gapSpeed = an?.summary?.gap_speed_ms ?? null;
 
   return (
     <>
@@ -272,7 +282,7 @@ export default function ActivityPage() {
         <SportBadge sport={a.sport} family={a.family} size={48} />
         <div className="grow">
           <h1 className="clamp2" style={{ fontSize: 21, lineHeight: 1.25 }} title={a.name}>{a.name}{a.sync_locked && <IconLock size={16} className="muted" style={{ marginLeft: 6 }} />}</h1>
-          <div className="small muted" style={{ marginTop: 3 }}>{a.sport_label} · {activityDate(a)}{a.trainer ? " · indoor" : ""}{a.commute ? " · commute" : ""}{a.device ? ` · ${a.device}` : ""}</div>
+          <div className="small muted" style={{ marginTop: 3 }}>{a.sport_label} · {activityDate(a)}{a.trainer ? " · indoor" : ""}{a.commute ? " · commute" : ""}{a.gear ? ` · ${a.gear}` : ""}{a.device ? ` · ${a.device}` : ""}</div>
         </div>
       </div>
 
@@ -290,6 +300,8 @@ export default function ActivityPage() {
               <Stat icon="time" label="Moving time" value={duration(a.moving_time_s, true)} />
               <Stat icon="elevation" label="Climbing" value={int(a.elevation_gain_m)} unit="m" />
               <Stat icon="speed" label={foot ? "Avg pace" : "Avg speed"} value={speed(a.avg_speed_ms, a.family)} />
+              {foot && gapSpeed != null && <Stat icon="climb" label="GAP" value={speed(gapSpeed, a.family)} title="Grade-Adjusted Pace (Minetti gradient cost)" />}
+              {foot && effortKm != null && (a.elevation_gain_m ?? 0) >= 100 && <Stat icon="climb" label="Effort-km" value={num(effortKm, 1)} unit="e-km" title="ITRA Effort-km: distance (km) + elevation gain (m) / 100" />}
               {a.avg_hr != null && <Stat icon="hr" label="Avg heart rate" value={int(a.avg_hr)} unit={a.max_hr ? `bpm · max ${int(a.max_hr)}` : "bpm"} />}
               {a.avg_power != null && <Stat icon="power" label="Avg power" value={int(a.avg_power)} unit={a.normalized_power ? `W · NP ${int(a.normalized_power)}` : "W"} />}
               {a.load != null && <Stat icon="load" label="Training load" value={int(a.load)} unit={a.load_method === "estimate" ? "est." : undefined} title={`Method: ${a.load_method}`} />}
@@ -306,7 +318,7 @@ export default function ActivityPage() {
           {a.load_method === "estimate" && <Callout>Training load is estimated from duration. Add your max heart rate or FTP in <Link to="/settings">Settings</Link> for real values.</Callout>}
           <div className="grid g2">
             <Card title="Route" icon={IconMap} hint={climbSegs.length ? "Climbs in orange" : undefined}>
-              <TrackMap points={latlng} highlight={highlight} climbs={climbSegs} />
+              <TrackMap points={latlng} highlight={highlight} climbs={climbSegs} focusClimb={focusClimb} />
             </Card>
             <Card title="Streams" icon={MetricIcon.speed} hint={track?.provider ? `Recorded data from ${providerName(track.provider)}` : undefined}>
               {track?.points.length ? <StreamStack points={track.points} family={a.family} onHover={onHover} /> : (
@@ -320,7 +332,7 @@ export default function ActivityPage() {
           </div>
         </div>
       )}
-      {tab === "analysis" && <Analysis a={a} />}
+      {tab === "analysis" && <Analysis a={a} onSelectClimb={onSelectClimb} />}
       {tab === "sync" && <SyncTab a={a} />}
     </>
   );

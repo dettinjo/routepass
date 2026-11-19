@@ -1,37 +1,122 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { cssVar, familyColor } from "../lib/colors";
 
-const TILES = {
-  url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+type MapStyle = "topo" | "osm" | "sat";
+
+const LAYERS: Record<MapStyle, { label: string; url: string; attribution: string; maxZoom: number; invertDark: boolean }> = {
+  topo: {
+    label: "Topo",
+    url: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+    attribution: '&copy; <a href="https://opentopomap.org">OpenTopoMap</a> (<a href="https://openstreetmap.org">OSM</a>)',
+    maxZoom: 17,
+    invertDark: true,
+  },
+  osm: {
+    label: "Street",
+    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    maxZoom: 18,
+    invertDark: true,
+  },
+  sat: {
+    label: "Satellite",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    attribution: "Tiles &copy; Esri",
+    maxZoom: 18,
+    invertDark: false,
+  },
 };
+
+const STYLE_KEY = "rp_map_style";
+function loadStyle(): MapStyle {
+  try {
+    const v = localStorage.getItem(STYLE_KEY);
+    if (v === "topo" || v === "osm" || v === "sat") return v;
+  } catch { /* ignore */ }
+  return "topo";
+}
 function isDark() {
   const t = document.documentElement.dataset.theme;
   return t === "dark" || (t !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
 }
-
-function baseMap(el: HTMLElement): L.Map {
-  const map = L.map(el, { zoomControl: true, attributionControl: true, preferCanvas: true });
-  L.tileLayer(TILES.url, { attribution: TILES.attribution, maxZoom: 18, className: isDark() ? "dark-tiles" : "" }).addTo(map);
-  return map;
+function isTouchDevice() {
+  return typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
 }
 
-/** One activity track with an optional hover marker driven by the charts. */
-export function TrackMap({ points, highlight, climbs }: {
+function createMap(el: HTMLElement, style: MapStyle, interactive: boolean): { map: L.Map; tile: L.TileLayer } {
+  const cfg = LAYERS[style];
+  const map = L.map(el, {
+    zoomControl: true,
+    attributionControl: true,
+    preferCanvas: true,
+    dragging: interactive,
+    scrollWheelZoom: false,
+  });
+  const tile = L.tileLayer(cfg.url, {
+    attribution: cfg.attribution,
+    maxZoom: cfg.maxZoom,
+    className: cfg.invertDark && isDark() ? "dark-tiles" : "",
+  }).addTo(map);
+  return { map, tile };
+}
+
+function MapControls({ style, setStyle, touch, unlocked, setUnlocked }: {
+  style: MapStyle;
+  setStyle: (s: MapStyle) => void;
+  touch: boolean;
+  unlocked: boolean;
+  setUnlocked: (u: boolean) => void;
+}) {
+  return (
+    <div className="map-controls">
+      {(Object.keys(LAYERS) as MapStyle[]).map((k) => (
+        <button
+          key={k}
+          type="button"
+          className={`map-pill ${style === k ? "on" : ""}`}
+          onClick={() => {
+            setStyle(k);
+            try { localStorage.setItem(STYLE_KEY, k); } catch { /* ignore */ }
+          }}
+        >
+          {LAYERS[k].label}
+        </button>
+      ))}
+      {touch && (
+        <button
+          type="button"
+          className={`map-pill ${unlocked ? "on" : ""}`}
+          onClick={() => setUnlocked(!unlocked)}
+        >
+          {unlocked ? "Lock map" : "Pan map"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** One activity track with optional hover marker and climb zoom. */
+export function TrackMap({ points, highlight, climbs, focusClimb }: {
   points: [number, number][];
   highlight?: [number, number] | null;
   climbs?: [number, number][][];
+  focusClimb?: [number, number][] | null;
 }) {
   const el = useRef<HTMLDivElement>(null);
   const map = useRef<L.Map | null>(null);
+  const tile = useRef<L.TileLayer | null>(null);
   const marker = useRef<L.CircleMarker | null>(null);
+  const touch = isTouchDevice();
+  const [style, setStyle] = useState<MapStyle>(loadStyle);
+  const [unlocked, setUnlocked] = useState(!touch);
 
   useEffect(() => {
     if (!el.current || points.length < 2) return;
-    const m = baseMap(el.current);
+    const { map: m, tile: tl } = createMap(el.current, style, unlocked);
     map.current = m;
+    tile.current = tl;
     const accent = cssVar("--accent");
     const line = L.polyline(points, { color: accent, weight: 3.5, opacity: 0.95 }).addTo(m);
     (climbs || []).forEach((seg) => L.polyline(seg, { color: cssVar("--series-2"), weight: 5, opacity: 0.9 }).addTo(m));
@@ -39,8 +124,31 @@ export function TrackMap({ points, highlight, climbs }: {
     L.circleMarker(points[points.length - 1], { radius: 6, color: "#fff", weight: 2, fillColor: cssVar("--bad"), fillOpacity: 1 }).addTo(m).bindTooltip("Finish");
     marker.current = L.circleMarker(points[0], { radius: 7, color: "#fff", weight: 2, fillColor: accent, opacity: 0, fillOpacity: 0 }).addTo(m);
     m.fitBounds(line.getBounds(), { padding: [20, 20] });
-    return () => { m.remove(); map.current = null; };
-  }, [points, climbs]);
+    return () => { m.remove(); map.current = null; tile.current = null; };
+  }, [points, climbs]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!map.current) return;
+    const cfg = LAYERS[style];
+    if (tile.current) tile.current.remove();
+    tile.current = L.tileLayer(cfg.url, {
+      attribution: cfg.attribution,
+      maxZoom: cfg.maxZoom,
+      className: cfg.invertDark && isDark() ? "dark-tiles" : "",
+    }).addTo(map.current);
+    tile.current.bringToBack();
+  }, [style]);
+
+  useEffect(() => {
+    if (!map.current) return;
+    if (unlocked) map.current.dragging.enable();
+    else map.current.dragging.disable();
+  }, [unlocked]);
+
+  useEffect(() => {
+    if (!map.current || !focusClimb || focusClimb.length < 2) return;
+    map.current.fitBounds(L.latLngBounds(focusClimb), { padding: [32, 32], maxZoom: 16 });
+  }, [focusClimb]);
 
   useEffect(() => {
     if (!marker.current) return;
@@ -53,7 +161,12 @@ export function TrackMap({ points, highlight, climbs }: {
   }, [highlight]);
 
   if (points.length < 2) return <div className="map empty">No GPS track</div>;
-  return <div className="map" ref={el} />;
+  return (
+    <div className="map-wrap">
+      <MapControls style={style} setStyle={setStyle} touch={touch} unlocked={unlocked} setUnlocked={setUnlocked} />
+      <div className="map" ref={el} />
+    </div>
+  );
 }
 
 /** All routes drawn translucently — overlapping roads build up into a heatmap. */
@@ -64,9 +177,17 @@ export function RoutesMap({ routes, onSelect, opacity = 0.35, weight = 2 }: {
   weight?: number;
 }) {
   const el = useRef<HTMLDivElement>(null);
+  const map = useRef<L.Map | null>(null);
+  const tile = useRef<L.TileLayer | null>(null);
+  const touch = isTouchDevice();
+  const [style, setStyle] = useState<MapStyle>(loadStyle);
+  const [unlocked, setUnlocked] = useState(!touch);
+
   useEffect(() => {
     if (!el.current) return;
-    const m = baseMap(el.current);
+    const { map: m, tile: tl } = createMap(el.current, style, unlocked);
+    map.current = m;
+    tile.current = tl;
     const renderer = L.canvas({ padding: 0.5 });
     const group = L.featureGroup();
     for (const r of routes) {
@@ -78,17 +199,49 @@ export function RoutesMap({ routes, onSelect, opacity = 0.35, weight = 2 }: {
     group.addTo(m);
     if (group.getLayers().length) m.fitBounds(group.getBounds(), { padding: [20, 20] });
     else m.setView([47, 8], 5);
-    return () => { m.remove(); };
-  }, [routes, onSelect, opacity, weight]);
-  return <div className="map tall" ref={el} />;
+    return () => { m.remove(); map.current = null; tile.current = null; };
+  }, [routes, onSelect, opacity, weight]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!map.current) return;
+    const cfg = LAYERS[style];
+    if (tile.current) tile.current.remove();
+    tile.current = L.tileLayer(cfg.url, {
+      attribution: cfg.attribution,
+      maxZoom: cfg.maxZoom,
+      className: cfg.invertDark && isDark() ? "dark-tiles" : "",
+    }).addTo(map.current);
+    tile.current.bringToBack();
+  }, [style]);
+
+  useEffect(() => {
+    if (!map.current) return;
+    if (unlocked) map.current.dragging.enable();
+    else map.current.dragging.disable();
+  }, [unlocked]);
+
+  return (
+    <div className="map-wrap">
+      <MapControls style={style} setStyle={setStyle} touch={touch} unlocked={unlocked} setUnlocked={setUnlocked} />
+      <div className="map tall" ref={el} />
+    </div>
+  );
 }
 
 /** Explorer tiles: every visited zoom-14 square, the largest cluster highlighted, max square outlined. */
 export function TilesMap({ tiles, square }: { tiles: { bounds: [[number, number], [number, number]]; cluster: boolean }[]; square: [[number, number], [number, number]] | null }) {
   const el = useRef<HTMLDivElement>(null);
+  const map = useRef<L.Map | null>(null);
+  const tile = useRef<L.TileLayer | null>(null);
+  const touch = isTouchDevice();
+  const [style, setStyle] = useState<MapStyle>(loadStyle);
+  const [unlocked, setUnlocked] = useState(!touch);
+
   useEffect(() => {
     if (!el.current) return;
-    const m = baseMap(el.current);
+    const { map: m, tile: tl } = createMap(el.current, style, unlocked);
+    map.current = m;
+    tile.current = tl;
     const renderer = L.canvas({ padding: 0.5 });
     const group = L.featureGroup();
     const accent = cssVar("--accent");
@@ -100,7 +253,31 @@ export function TilesMap({ tiles, square }: { tiles: { bounds: [[number, number]
     if (square) L.rectangle(square, { color: cssVar("--text-primary"), weight: 2.5, fill: false, dashArray: "6 4" }).addTo(m).bindTooltip("Max square");
     if (group.getLayers().length) m.fitBounds(group.getBounds(), { padding: [20, 20] });
     else m.setView([47, 8], 5);
-    return () => { m.remove(); };
-  }, [tiles, square]);
-  return <div className="map tall" ref={el} />;
+    return () => { m.remove(); map.current = null; tile.current = null; };
+  }, [tiles, square]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!map.current) return;
+    const cfg = LAYERS[style];
+    if (tile.current) tile.current.remove();
+    tile.current = L.tileLayer(cfg.url, {
+      attribution: cfg.attribution,
+      maxZoom: cfg.maxZoom,
+      className: cfg.invertDark && isDark() ? "dark-tiles" : "",
+    }).addTo(map.current);
+    tile.current.bringToBack();
+  }, [style]);
+
+  useEffect(() => {
+    if (!map.current) return;
+    if (unlocked) map.current.dragging.enable();
+    else map.current.dragging.disable();
+  }, [unlocked]);
+
+  return (
+    <div className="map-wrap">
+      <MapControls style={style} setStyle={setStyle} touch={touch} unlocked={unlocked} setUnlocked={setUnlocked} />
+      <div className="map tall" ref={el} />
+    </div>
+  );
 }

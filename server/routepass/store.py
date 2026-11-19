@@ -51,6 +51,16 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     "gear_targets": {},
     # Named places for geofence rules: [{"name": "Home", "lat": .., "lng": .., "radius_km": 0.5}]
     "places": [],
+    # 50k / trail race training target (used by Trail tab & MCP AI Coach)
+    "trail_race": {
+        "name": "50k Trail Race",
+        "date": None,  # YYYY-MM-DD
+        "distance_km": 50.0,
+        "elevation_gain_m": 2000,
+        "weekly_km_target": 60.0,
+        "weekly_vert_target": 1800,
+        "target_carbs_g_per_h": 70,
+    },
     "import": {
         "history_start": None,  # ISO date; older provider records are not imported
     },

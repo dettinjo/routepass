@@ -47,9 +47,17 @@ export function StreamStack({ points, family, onHover }: { points: TrackPoint[];
       speed = points.map((p) => (p.v != null ? p.v * 3.6 : null));
       speedCh = { label: "Speed", unit: "km/h", fmt: (v) => `${v.toFixed(1)} km/h`, axis: (v) => `${Math.round(v)}` };
     }
+    let gapPace: (number | null)[] | null = null;
+    if (foot && points.some((p) => p.gap != null && p.gap > 0.6)) {
+      const rawGap = points.map((p) => (p.gap != null && p.gap > 0.6 ? 1000 / p.gap / 60 : null));
+      const validGap = rawGap.filter((v): v is number => v != null);
+      const capGap = validGap.length ? percentile(validGap, 0.97) * 1.15 : Infinity;
+      gapPace = rawGap.map((v) => (v != null && v <= capGap ? v : null));
+    }
     const all: Channel[] = [
       { key: "ele", label: "Elevation", unit: "m", icon: "elevation", color: "var(--series-6)", values: points.map((p) => p.ele), fmt: (v) => `${Math.round(v)} m`, axis: (v) => `${Math.round(v)}`, fill: true, height: 150 },
       { key: "v", icon: "speed", color: "var(--series-1)", values: speed, height: 120, ...speedCh },
+      ...(gapPace ? [{ key: "gap", label: "GAP", unit: "min/km", icon: "climb" as MetricKey, color: "var(--series-3)", values: gapPace, fmt: paceFmt, invert: true, height: 115 }] : []),
       { key: "hr", label: "Heart rate", unit: "bpm", icon: "hr", color: "var(--series-8)", values: points.map((p) => p.hr), fmt: (v) => `${Math.round(v)} bpm`, axis: (v) => `${Math.round(v)}`, height: 120 },
       { key: "pw", label: "Power", unit: "W", icon: "power", color: "var(--series-7)", values: points.map((p) => p.pw), fmt: (v) => `${Math.round(v)} W`, axis: (v) => `${Math.round(v)}`, height: 120 },
       { key: "cad", label: "Cadence", unit: "rpm", icon: "count", color: "var(--series-4)", values: points.map((p) => p.cad), fmt: (v) => `${Math.round(v)}`, height: 100 },

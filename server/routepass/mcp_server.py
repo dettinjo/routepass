@@ -8,7 +8,7 @@ from typing import Any, Literal
 from mcp.server.mcpserver import MCPServer
 
 from routepass import services, store
-from routepass.analysis import insights
+from routepass.analysis import insights, trail
 from routepass.db import session_scope
 from routepass.engine import runner, sync
 
@@ -22,7 +22,11 @@ mcp = MCPServer(
         "activities between them according to sync rules. Every activity appears once even if it exists "
         "on both platforms (see `providers`). Distances are metres, durations seconds, speeds m/s, "
         "dates ISO 8601. Sports use Strava sport_type names (Ride, Run, Hike, EBikeRide…); families group "
-        "them (ride, run, walk, winter, water, other). Training load is on the TSS scale."
+        "them (ride, run, walk, winter, water, other). Training load is on the TSS scale. "
+        "For 50k / ultra trail-running coaching, start with `get_trail_training_brief` to inspect race "
+        "countdown, training phase, weekly distance/vertical/effort-km, back-to-back long runs, ACWR "
+        "injury risk, long-run aerobic durability, climbing VAM, shoe mileage, and coaching flags; use "
+        "`analyze_trail_activity` for deep dives and `plan_trail_race_gpx` for GPX race pacing & fueling."
     ),
 )
 
@@ -497,3 +501,96 @@ def dismiss_duplicate_candidate(activity_id: int, other_id: int) -> dict:
     """Mark a suggested duplicate pair as different activities so it is not suggested again."""
     with session_scope() as db:
         return services.dismiss_duplicate(db, activity_id, other_id)
+
+
+# ── 50k / ultra trail-running coach ──────────────────────────────────────────
+
+
+@mcp.tool()
+def get_trail_training_brief(weeks: int = 8) -> dict[str, Any]:
+    """Complete 50k / trail-running coaching dossier for AI analysis and training recommendations.
+    Includes target race countdown & phase (base/build/peak/taper), weekly distance/vertical/ITRA
+    effort-km, biggest back-to-back weekends, CTL/ATL/TSB + ACWR injury-risk status, recent long-run
+    aerobic durability (GAP + HR decoupling), median GAP & climbing VAM, trail shoe mileage, and
+    automated coaching flags."""
+    with session_scope() as db:
+        return trail.trail_readiness(db, store.get_preferences(db), weeks=max(4, min(weeks, 26)))
+
+
+@mcp.tool()
+def set_trail_race_goal(
+    name: str | None = None,
+    date: str | None = None,
+    distance_km: float | None = None,
+    elevation_gain_m: float | None = None,
+    weekly_km_target: float | None = None,
+    weekly_vert_target: float | None = None,
+    target_carbs_g_per_h: float | None = None,
+) -> dict[str, Any]:
+    """Configure or update the target trail race (e.g. 50k date, distance, vertical gain, weekly targets).
+    date should be YYYY-MM-DD (or empty string to clear). Only supplied fields are changed."""
+    patch: dict[str, Any] = {}
+    if name is not None:
+        patch["name"] = name
+    if date is not None:
+        patch["date"] = date or None
+    if distance_km is not None:
+        patch["distance_km"] = distance_km
+    if elevation_gain_m is not None:
+        patch["elevation_gain_m"] = elevation_gain_m
+    if weekly_km_target is not None:
+        patch["weekly_km_target"] = weekly_km_target
+    if weekly_vert_target is not None:
+        patch["weekly_vert_target"] = weekly_vert_target
+    if target_carbs_g_per_h is not None:
+        patch["target_carbs_g_per_h"] = target_carbs_g_per_h
+    with session_scope() as db:
+        prefs = store.update_preferences(db, {"trail_race": patch})
+        return prefs["trail_race"]
+
+
+@mcp.tool()
+def analyze_trail_activity(activity_id: int) -> dict[str, Any]:
+    """Trail-specific deep dive for one activity: Grade-Adjusted Pace (GAP), ITRA effort-km, vertical
+    specificity vs target race (m/km), detected climbs with VAM and grade, km splits with +m/-m/GAP/HR,
+    HR zones, and aerobic decoupling."""
+    with session_scope() as db:
+        return trail.analyze_trail_activity(db, activity_id, store.get_preferences(db))
+
+
+@mcp.tool()
+def plan_trail_race_gpx(
+    gpx_xml: str,
+    aid_stations_km: list[float] | None = None,
+    fade_pct: float = 8.0,
+    carbs_g_per_h: float = 70.0,
+    fluid_ml_per_h: float = 600.0,
+    base_gap_speed_ms: float | None = None,
+) -> dict[str, Any]:
+    """Predict 50k / ultra trail race splits, finish time, major climbs, and carb/fluid fueling from a
+    GPX route using the athlete's real historical GAP and Minetti grade cost."""
+    with session_scope() as db:
+        return trail.plan_gpx_race(
+            db,
+            gpx_xml.encode("utf-8"),
+            aid_stations_km=aid_stations_km,
+            fade_pct=fade_pct,
+            carbs_g_per_h=carbs_g_per_h,
+            fluid_ml_per_h=fluid_ml_per_h,
+            base_gap_speed_ms=base_gap_speed_ms,
+        )
+
+
+@mcp.prompt()
+def trail_coach_review(focus: str = "weekly review and next-week plan") -> str:
+    """Structured prompt for an AI trail-running coach reviewing 50k preparation."""
+    return (
+        "You are an experienced 50k / ultra trail-running coach. "
+        "Call `get_trail_training_brief(weeks=8)` first (and `analyze_trail_activity` on the most recent "
+        "long run if available). Then provide a concise, actionable coaching report covering:\n"
+        "1. Readiness & Training Phase (weeks to race, volume vs targets, vertical specificity m/km).\n"
+        "2. Load & Injury Risk (CTL/ATL/TSB, ACWR, and back-to-back weekend progression).\n"
+        "3. Aerobic Durability & Climbing (long-run decoupling, GAP trend, climbing VAM, shoe mileage).\n"
+        "4. Concrete Next-Week Plan (key sessions, target km & D+, fueling practice, and recovery advice).\n"
+        f"Additional focus from athlete: {focus}"
+    )

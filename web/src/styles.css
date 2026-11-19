@@ -251,17 +251,18 @@ label.field { display: flex; flex-direction: column; gap: 5px; font-size: 13px; 
 .search svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
 .search input { padding-left: 38px; }
 
-.seg { display: inline-flex; background: var(--surface-2); border-radius: 11px; padding: 3px; gap: 2px; max-width: 100%; overflow-x: auto; }
-.seg button { border: 0; min-height: 34px; padding: 0 12px; background: transparent; color: var(--text-secondary); font-size: 13px; border-radius: 8px; }
+.seg { display: inline-flex; background: var(--surface-2); border-radius: 11px; padding: 3px; gap: 2px; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.seg::-webkit-scrollbar { display: none; }
+.seg button { border: 0; min-height: 38px; padding: 0 12px; background: transparent; color: var(--text-secondary); font-size: 13px; border-radius: 8px; }
 .seg button:hover:not(:disabled) { background: transparent; color: var(--text-primary); }
 .seg button.on { background: var(--surface-1); color: var(--text-primary); box-shadow: 0 1px 2px rgb(0 0 0 / 0.12); }
 .seg.block { display: flex; width: 100%; }
 .seg.block button { flex: 1; }
 
-.chips { display: flex; gap: 6px; overflow-x: auto; min-width: 0; max-width: 100%; scrollbar-width: none; padding-bottom: 2px; }
+.chips { display: flex; gap: 6px; overflow-x: auto; min-width: 0; max-width: 100%; scrollbar-width: none; padding-bottom: 2px; -webkit-overflow-scrolling: touch; }
 .chips::-webkit-scrollbar { display: none; }
 .chip {
-  display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 12px; border-radius: 999px; flex: none;
+  display: inline-flex; align-items: center; gap: 6px; min-height: 38px; padding: 0 12px; border-radius: 999px; flex: none;
   border: 1px solid var(--border-strong); background: var(--surface-1); color: var(--text-secondary);
   font-size: 13px; font-weight: 600; cursor: pointer;
 }
@@ -276,9 +277,15 @@ label.field { display: flex; flex-direction: column; gap: 5px; font-size: 13px; 
 .switch input:checked + span { background: var(--accent); }
 .switch input:checked + span::after { transform: translateX(18px); }
 
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 14px; overflow-x: auto; scrollbar-width: none; }
+.tabs {
+  display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 14px;
+  overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 24px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 24px), transparent 100%);
+  padding-right: 24px;
+}
 .tabs::-webkit-scrollbar { display: none; }
-.tabs button { border: 0; background: none; border-radius: 0; min-height: 42px; color: var(--text-secondary); border-bottom: 2px solid transparent; padding: 0 12px; flex: none; }
+.tabs button { border: 0; background: none; border-radius: 0; min-height: 44px; color: var(--text-secondary); border-bottom: 2px solid transparent; padding: 0 12px; flex: none; }
 .tabs button:hover:not(:disabled) { background: none; color: var(--text-primary); }
 .tabs button.on { color: var(--accent); border-bottom-color: var(--accent); }
 
@@ -304,6 +311,10 @@ label.field { display: flex; flex-direction: column; gap: 5px; font-size: 13px; 
 .item.selected { background: var(--accent-soft); }
 .sport-badge { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; flex: none; position: relative; }
 @media (max-width: 400px) { .item { gap: 10px; padding: 12px; } .item .sport-badge { width: 38px !important; height: 38px !important; } .metrics { font-size: 12.5px; } }
+@media (max-width: 639px) {
+  .card-head { flex-direction: column; align-items: stretch; gap: 8px; }
+  .card-head .row { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+}
 .item .main-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .item .name { font-weight: 650; font-size: 15px; }
 .item .meta { font-size: 12px; color: var(--text-muted); }
@@ -349,13 +360,28 @@ td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
 
 .readout {
   position: sticky; top: calc(var(--topbar) + 4px); z-index: 5;
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 6px 10px;
-  padding: 10px 12px; border-radius: 12px; background: var(--surface-2); margin-bottom: 8px; font-size: 13px;
+  display: flex; gap: 14px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  padding: 8px 12px; border-radius: 12px; background: var(--surface-2); margin-bottom: 8px; font-size: 13px;
 }
-.readout .r-label { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; }
-.readout .r-value { font-weight: 650; font-variant-numeric: tabular-nums; }
+.readout::-webkit-scrollbar { display: none; }
+.readout > div { flex: none; min-width: 68px; }
+.readout .r-label { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.readout .r-value { font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .stream-title { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-top: 6px; }
 
+.map-wrap { position: relative; width: 100%; }
+.map-controls {
+  position: absolute; top: 10px; right: 10px; z-index: 400;
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end;
+}
+.map-pill {
+  display: inline-flex; align-items: center; gap: 4px; min-height: 32px; padding: 0 10px;
+  border-radius: 999px; border: 1px solid var(--border-strong);
+  background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+  backdrop-filter: blur(6px); color: var(--text-primary);
+  font-size: 12px; font-weight: 600; cursor: pointer; box-shadow: 0 2px 8px rgb(0 0 0 / 0.14);
+}
+.map-pill.on { border-color: var(--accent); color: var(--accent); }
 .map { contain: inline-size; width: 100%; height: 300px; border-radius: 12px; overflow: hidden; background: var(--surface-2); z-index: 0; }
 .map.tall { height: 420px; }
 .leaflet-container { font-family: var(--font); }
