@@ -675,3 +675,34 @@ details.more[open] > summary svg { transform: rotate(90deg); }
   .settings-nav a .sub { display: none; }
   .training-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 16px; align-items: start; }
 }
+
+/* ── one control row on phones ───────────────────────────────────────────── */
+select.compact-select { width: auto; min-height: 36px; padding: 0 8px; border-radius: 9px; font-weight: 600; font-size: 16px; }
+.page-head { flex-wrap: nowrap; }
+.page-head > div:first-child { min-width: 0; }
+@media (max-width: 639px) { .page-head .static { display: none; } }
+.viewbar {
+  position: sticky; top: var(--topbar); z-index: 30; display: flex; gap: 8px; align-items: center;
+  padding: 8px 0 10px; margin: -4px 0 8px; background: color-mix(in srgb, var(--bg) 94%, transparent); backdrop-filter: blur(10px);
+}
+.viewbar button { min-height: 40px; border-radius: 999px; padding: 0 14px; font-size: 14px; min-width: 0; }
+.viewbar .view { flex: 1 1 auto; justify-content: flex-start; }
+.viewbar .view span { overflow: hidden; text-overflow: ellipsis; }
+.viewbar .filter { flex: 0 1 auto; max-width: 58%; }
+.viewbar .filter span { overflow: hidden; text-overflow: ellipsis; }
+.viewbar .filter.on { background: var(--selected-bg); color: var(--selected-ink); border-color: var(--selected-bg); }
+.view-list { display: flex; flex-direction: column; gap: 4px; }
+.view-list a, .view-list button { display: flex; align-items: center; gap: 10px; justify-content: flex-start; width: 100%; min-height: 46px; padding: 0 12px; border: 0; border-radius: 10px; background: transparent; color: var(--text-primary); font-weight: 600; font-size: 15px; }
+.view-list button.on { background: var(--surface-2); }
+.view-list button .check { margin-left: auto; }
+.navrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
+.navrow .tabs { border-bottom: 0; margin-bottom: -1px; mask-image: none; -webkit-mask-image: none; padding-right: 0; }
+.section-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.section-head .chips { flex: 1; }
+@media (max-width: 639px) {
+  /* A card gets at most one row of controls: they share the line and the segmented part scrolls if needed. */
+  .card-head > .row { flex-wrap: nowrap; }
+  .card-head > .row .seg { flex: 0 1 auto; min-width: 0; }
+  .card-head > .row select.compact-select { flex: none; }
+}
+.viewbar .filter { max-width: 50%; }

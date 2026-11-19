@@ -178,7 +178,11 @@ export default function Dashboard() {
           </Card>
         )}
 
-        <FamilyChips value={families} onChange={setFamilies} />
+        {/* The sport filter applies to everything below it — say so, instead of a bare row of chips. */}
+        <div className="section-head">
+          <span className="section-label" style={{ flex: "none" }}>Your training</span>
+          <FamilyChips value={families} onChange={setFamilies} />
+        </div>
 
         {isLoading || !data ? (
           <Skeleton h={200} />

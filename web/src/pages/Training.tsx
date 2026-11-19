@@ -805,7 +805,7 @@ export default function Training() {
   return (
     <>
       <div className="page-head">
-        <div><h1>Training</h1><div className="sub">Your plan, adapted to what you actually record</div></div>
+        <div><h1>Training</h1><div className="sub static">Your plan, adapted to what you actually record</div></div>
       </div>
       <Tabs value={view === "race" ? "race" : "plan"} onChange={(v) => nav(v === "plan" ? "/training" : `/training/${v}`)}
         tabs={[{ value: "plan", label: <><IconTraining size={ICON.button} />Plan</> }, { value: "race", label: <><IconRace size={ICON.button} />Race tools</> }]} />

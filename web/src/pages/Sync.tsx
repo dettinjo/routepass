@@ -524,7 +524,7 @@ export default function SyncPage() {
   return (
     <>
       <div className="page-head">
-        <div><h1>Sync</h1><div className="sub">An activity that already exists on the other platform is never copied again.</div></div>
+        <div><h1>Sync</h1><div className="sub static">An activity that already exists on the other platform is never copied again.</div></div>
         <button className="primary sm" onClick={() => run.mutate(false)} disabled={status?.running}><IconRefresh size={ICON.button} className={status?.running ? "spin" : ""} />{status?.running ? "Running…" : "Sync now"}</button>
       </div>
       {status && !ready && <div style={{ marginBottom: 16 }}><Callout kind="warn">Both Strava and Komoot must be connected to sync. <Link to="/settings">Connect in Settings</Link></Callout></div>}

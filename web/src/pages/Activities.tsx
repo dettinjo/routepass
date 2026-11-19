@@ -4,7 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import { TripView } from "../components/TripView";
 import { ICON, BrandIcon, IconDownload, IconFilter, IconLeft, IconRight, IconSearch, IconSelect, IconSync, IconX, MetricIcon } from "../components/icons";
 import { ActivityItem, FamilyChips } from "../components/shared";
-import { Card, Empty, Modal, Seg, Skeleton, useToast } from "../components/ui";
+import { Card, Empty, Menu, Modal, Seg, Skeleton, useToast } from "../components/ui";
 import { api, qs } from "../lib/api";
 import { FAMILY_LABEL } from "../lib/colors";
 import { int } from "../lib/format";
@@ -86,20 +86,29 @@ export default function Activities() {
   families.forEach((f) => active.push({ key: f, label: FAMILY_LABEL[f], clear: {} }));
   const filterCount = active.length;
 
+  const csvUrl = `/api/v1/activities/export.csv${qs({ q: get("q"), family: families, presence: get("presence"), start: get("start"), end: get("end") })}`;
   return (
     <>
       <div className="page-head">
         <div>
           <h1>Activities</h1>
-          <div className="sub">{data ? `${int(data.total)} activities` : " "} · each listed once, wherever it was recorded</div>
+          <div className="sub">{data ? `${int(data.total)} activities` : " "}<span className="static"> · each listed once, wherever it was recorded</span></div>
         </div>
         <div className="row nowrap">
-          <a className="btn sm" href={`/api/v1/activities/export.csv${qs({ q: get("q"), family: families, presence: get("presence"), start: get("start"), end: get("end") })}`} title="Download the activities matching the filters as CSV">
-            <IconDownload size={ICON.button} /><span className="hide-mobile">CSV</span>
+          <a className="btn sm hide-mobile" href={csvUrl} title="Download the activities matching the filters as CSV">
+            <IconDownload size={ICON.button} />CSV
           </a>
-          <button className={selecting ? "primary sm" : "sm"} onClick={() => { setSelecting(!selecting); setSelected([]); }}>
+          <button className={`${selecting ? "primary sm" : "sm"} ${selecting ? "" : "hide-mobile"}`} onClick={() => { setSelecting(!selecting); setSelected([]); }}>
             <IconSelect size={ICON.button} />{selecting ? "Done" : "Select"}
           </button>
+          {!selecting && (
+            <span className="hide-desktop">
+              <Menu>
+                <button onClick={() => { setSelecting(true); setSelected([]); }}><IconSelect size={ICON.button} />Select activities</button>
+                <a href={csvUrl}><IconDownload size={ICON.button} />Download as CSV</a>
+              </Menu>
+            </span>
+          )}
         </div>
       </div>
 
