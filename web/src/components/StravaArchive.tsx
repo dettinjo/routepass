@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "../lib/api";
 import { ago, int } from "../lib/format";
-import { IconImport } from "./icons";
+import { ICON, IconImport } from "./icons";
 import { Callout } from "./ui";
 
 interface ArchiveState {
@@ -44,7 +44,6 @@ export function StravaArchive() {
   const pct = st?.total ? Math.round(((st.done ?? 0) / st.total) * 100) : 0;
   return (
     <div className="stack" style={{ gap: 10 }}>
-      <div className="section-label">Import your Strava data export</div>
       <p className="small secondary">
         Works without the Strava API: every Strava user can download their complete history for free, including the
         original recordings.
@@ -77,7 +76,7 @@ export function StravaArchive() {
       )}
       {st?.phase === "error" && <Callout kind="bad">Import failed: {st.error}</Callout>}
       <label className={`btn ${busy ? "" : "primary"}`} style={{ alignSelf: "flex-start", cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1 }}>
-        <IconImport size={17} />Choose Strava export (.zip)
+        <IconImport size={ICON.button} />Choose Strava export (.zip)
         <input type="file" accept=".zip,application/zip" disabled={busy} style={{ display: "none" }}
           onChange={(e) => { const f = e.target.files?.[0]; if (f) send(f); e.target.value = ""; }} />
       </label>

@@ -212,10 +212,14 @@ def athlete_baseline(db: Session, prefs: dict[str, Any], today: date | None = No
         )
     elif acwr and acwr > 1.35 or tsb < -22:
         readiness_label = "Fatigued"
-        readiness_note = f"High acute load (TSB {tsb:+.0f}, ACWR {acwr or '—'}) — prioritize recovery and easy Z2."
+        readiness_note = (
+            f"High acute load (TSB {tsb:+.0f}, ACWR {acwr or '—'}) — prioritize recovery and easy Z2."
+        )
     elif tsb > 8 and ctl >= 25:
         readiness_label = "Fresh & Sharp"
-        readiness_note = f"Well-rested (TSB {tsb:+.0f}) with solid base fitness (CTL {ctl:.0f}) — ready for key workouts."
+        readiness_note = (
+            f"Well-rested (TSB {tsb:+.0f}) with solid base fitness (CTL {ctl:.0f}) — ready for key workouts."
+        )
     elif ctl_ramp_per_week >= 1.5:
         readiness_label = "Building"
         readiness_note = f"Fitness rising +{ctl_ramp_per_week:.1f} CTL/wk ({acts_14d} sessions in last 14d)."
@@ -343,7 +347,9 @@ def _build_skeleton(
     num_weeks = max(2, min(28, ((ev_mon - w1).days // 7) + 1))
     phases = _phase_schedule(num_weeks)
 
-    max_hours = float(schedule_prefs.get("max_weekly_hours") or max(5.0, baseline["total_weekly_hours"] * 1.25))
+    max_hours = float(
+        schedule_prefs.get("max_weekly_hours") or max(5.0, baseline["total_weekly_hours"] * 1.25)
+    )
     max_hours = max(3.5, min(22.0, max_hours))
     pref_slot = str(schedule_prefs.get("preferred_slot") or "evening")
     rest_days = set(int(x) for x in (schedule_prefs.get("rest_days") or [0]))  # 0=Mon..6=Sun
@@ -369,7 +375,9 @@ def _build_skeleton(
         week_hours = round(max_hours * mult, 2)
         week_tss = round(week_hours * 58.0, 0)
 
-        templates = _weekly_templates(plan_type, phase, run_km_goal, run_elev_goal, bike_km_goal, bike_elev_goal, swim_km_goal)
+        templates = _weekly_templates(
+            plan_type, phase, run_km_goal, run_elev_goal, bike_km_goal, bike_elev_goal, swim_km_goal
+        )
         # Filter / shift sessions off rest_days (except race day)
         used_days: set[int] = set()
         week_sessions: list[dict[str, Any]] = []
@@ -385,14 +393,37 @@ def _build_skeleton(
                             d_off = cand
                             break
                 s_date = w_start + timedelta(days=d_off)
+                if s_date < start_date:
+                    # Week 1 starts on its Monday, but nothing may be scheduled before the plan exists.
+                    first = (start_date - w_start).days
+                    free = [c for c in range(first, 7) if c not in rest_days and c not in used_days]
+                    if not free:
+                        continue
+                    d_off = free[0]
+                    s_date = w_start + timedelta(days=d_off)
                 if phase == "race_week" and s_date >= event_date:
                     continue
                 used_days.add(d_off)
 
             dur_s = round(max(1200.0, week_hours * 3600.0 * share))
-            tss = round(max(18.0, week_tss * share * (1.15 if stype in ("intervals", "tempo", "hills", "race") else 0.92)), 0)
+            tss = round(
+                max(
+                    18.0,
+                    week_tss * share * (1.15 if stype in ("intervals", "tempo", "hills", "race") else 0.92),
+                ),
+                0,
+            )
             dist_km, elev_m = _estimate_session_volume(
-                sport, stype, dur_s, phase, run_km_goal, run_elev_goal, bike_km_goal, bike_elev_goal, swim_km_goal, baseline
+                sport,
+                stype,
+                dur_s,
+                phase,
+                run_km_goal,
+                run_elev_goal,
+                bike_km_goal,
+                bike_elev_goal,
+                swim_km_goal,
+                baseline,
             )
             if stype == "race":
                 if plan_type in ("trail_run", "road_run"):
@@ -400,7 +431,10 @@ def _build_skeleton(
                 elif plan_type == "cycling":
                     dist_km, elev_m = bike_km_goal, bike_elev_goal
                 elif plan_type == "triathlon":
-                    dist_km, elev_m = round(swim_km_goal + bike_km_goal + run_km_goal, 1), bike_elev_goal + run_elev_goal
+                    dist_km, elev_m = (
+                        round(swim_km_goal + bike_km_goal + run_km_goal, 1),
+                        bike_elev_goal + run_elev_goal,
+                    )
 
             slot = "morning" if s_date.weekday() >= 5 else pref_slot
             week_sessions.append(
@@ -456,61 +490,330 @@ def _weekly_templates(
     swim_km: float,
 ) -> list[tuple[int, str, str, str, float, str, str, list[str]]]:
     if phase == "race_week":
-        main_sport = "trail_run" if plan_type == "trail_run" else ("bike" if plan_type == "cycling" else ("brick" if plan_type in ("triathlon", "duathlon") else "run"))
+        main_sport = (
+            "trail_run"
+            if plan_type == "trail_run"
+            else (
+                "bike"
+                if plan_type == "cycling"
+                else ("brick" if plan_type in ("triathlon", "duathlon") else "run")
+            )
+        )
         return [
-            (1, "run" if main_sport != "bike" else "bike", "easy", "supporting", 0.30, "Shakeout & Strides", "Short aerobic opener with 4×20s light strides.", ["15m easy Z1-Z2", "4×20s relaxed strides", "10m easy"]),
-            (3, "run" if main_sport != "bike" else "bike", "recovery", "optional", 0.20, "Pre-Race Mobility & Spin", "Keep legs fresh, hydrate and carb-load.", ["25m very easy Z1"]),
-            (6, main_sport, "race", "key", 0.50, "Race Day Execution", "Execute pacing & fueling plan cleanly.", ["Controlled start first 25%", "Steady fueling every 30-40m", "Strong finish"]),
+            (
+                1,
+                "run" if main_sport != "bike" else "bike",
+                "easy",
+                "supporting",
+                0.30,
+                "Shakeout & Strides",
+                "Short aerobic opener with 4×20s light strides.",
+                ["15m easy Z1-Z2", "4×20s relaxed strides", "10m easy"],
+            ),
+            (
+                3,
+                "run" if main_sport != "bike" else "bike",
+                "recovery",
+                "optional",
+                0.20,
+                "Pre-Race Mobility & Spin",
+                "Keep legs fresh, hydrate and carb-load.",
+                ["25m very easy Z1"],
+            ),
+            (
+                6,
+                main_sport,
+                "race",
+                "key",
+                0.50,
+                "Race Day Execution",
+                "Execute pacing & fueling plan cleanly.",
+                ["Controlled start first 25%", "Steady fueling every 30-40m", "Strong finish"],
+            ),
         ]
 
     if plan_type == "trail_run":
         if phase in ("build", "peak"):
             return [
-                (1, "trail_run", "easy", "supporting", 0.16, "Aerobic Trail Run", "Easy conversational Z2 on rolling terrain.", ["10m warmup", "Z2 aerobic trail", "5m cooldown"]),
-                (2, "trail_run", "hills", "key", 0.18, "Climb Power Repeats", "Sustained uphill efforts at Z3-Z4 focusing on hiking/running efficiency.", ["15m easy", "6×4m uphill Z4 (jog down)", "10m easy"]),
-                (3, "trail_run", "recovery", "optional", 0.12, "Recovery Jog & Mobility", "Very easy Z1 flush to absorb vertical load.", ["35-45m easy Z1"]),
-                (5, "trail_run", "long", "key", 0.34, "Long Mountain Trail Run", "Practice race nutrition (60-80g carbs/h) and steady climbing VAM.", ["20m settle in Z2", "Steady mountain Z2 + climbs", "Fuel every 35m"]),
-                (6, "trail_run", "long", "key", 0.20, "Back-to-Back Fatigue Run", "Steady Z2 on tired legs to build ultra durability.", ["10m gentle start", "Steady Z2 trail", "Walk steep pitches"]),
+                (
+                    1,
+                    "trail_run",
+                    "easy",
+                    "supporting",
+                    0.16,
+                    "Aerobic Trail Run",
+                    "Easy conversational Z2 on rolling terrain.",
+                    ["10m warmup", "Z2 aerobic trail", "5m cooldown"],
+                ),
+                (
+                    2,
+                    "trail_run",
+                    "hills",
+                    "key",
+                    0.18,
+                    "Climb Power Repeats",
+                    "Sustained uphill efforts at Z3-Z4 focusing on hiking/running efficiency.",
+                    ["15m easy", "6×4m uphill Z4 (jog down)", "10m easy"],
+                ),
+                (
+                    3,
+                    "trail_run",
+                    "recovery",
+                    "optional",
+                    0.12,
+                    "Recovery Jog & Mobility",
+                    "Very easy Z1 flush to absorb vertical load.",
+                    ["35-45m easy Z1"],
+                ),
+                (
+                    5,
+                    "trail_run",
+                    "long",
+                    "key",
+                    0.34,
+                    "Long Mountain Trail Run",
+                    "Practice race nutrition (60-80g carbs/h) and steady climbing VAM.",
+                    ["20m settle in Z2", "Steady mountain Z2 + climbs", "Fuel every 35m"],
+                ),
+                (
+                    6,
+                    "trail_run",
+                    "long",
+                    "key",
+                    0.20,
+                    "Back-to-Back Fatigue Run",
+                    "Steady Z2 on tired legs to build ultra durability.",
+                    ["10m gentle start", "Steady Z2 trail", "Walk steep pitches"],
+                ),
             ]
         return [
-            (1, "trail_run", "easy", "supporting", 0.20, "Easy Aerobic Run", "Relaxed Z2 effort; keep HR controlled.", ["Easy Z2 throughout"]),
-            (2, "trail_run", "tempo", "key", 0.20, "Rolling Tempo / Threshold", "Sustained Z3-Z4 rhythm on undulating trails.", ["15m warmup", "2×12m Z3-Z4 (3m easy)", "10m cooldown"]),
-            (4, "trail_run", "easy", "supporting", 0.18, "Trail Cadence & Strides", "Easy run finishing with 6×20s hill strides.", ["Easy Z2", "6×20s uphill strides"]),
-            (6, "trail_run", "long", "key", 0.42, "Weekend Long Trail Run", "Build time on feet and vertical gain progressively.", ["Steady Z2 effort", "Practice race hydration"]),
+            (
+                1,
+                "trail_run",
+                "easy",
+                "supporting",
+                0.20,
+                "Easy Aerobic Run",
+                "Relaxed Z2 effort; keep HR controlled.",
+                ["Easy Z2 throughout"],
+            ),
+            (
+                2,
+                "trail_run",
+                "tempo",
+                "key",
+                0.20,
+                "Rolling Tempo / Threshold",
+                "Sustained Z3-Z4 rhythm on undulating trails.",
+                ["15m warmup", "2×12m Z3-Z4 (3m easy)", "10m cooldown"],
+            ),
+            (
+                4,
+                "trail_run",
+                "easy",
+                "supporting",
+                0.18,
+                "Trail Cadence & Strides",
+                "Easy run finishing with 6×20s hill strides.",
+                ["Easy Z2", "6×20s uphill strides"],
+            ),
+            (
+                6,
+                "trail_run",
+                "long",
+                "key",
+                0.42,
+                "Weekend Long Trail Run",
+                "Build time on feet and vertical gain progressively.",
+                ["Steady Z2 effort", "Practice race hydration"],
+            ),
         ]
 
     if plan_type == "cycling":
         return [
-            (1, "bike", "intervals", "key", 0.20, "Sweet-Spot / Threshold Intervals", "Build sustainable climbing & flat power at 88-96% FTP.", ["15m warmup", "3×12m @ 90% FTP (4m Z1)", "10m spin"]),
-            (2, "bike", "easy", "supporting", 0.18, "Endurance Z2 Spin", "High-cadence aerobic base ride at 65-75% FTP.", ["Steady Z2 endurance"]),
-            (4, "bike", "hills", "key", 0.22, "Climb Tempo & Torque", "Sustained climbs at 80-88% FTP with low-cadence seated work.", ["15m warmup", "3×10m climb tempo", "15m easy"]),
-            (6, "bike", "long", "key", 0.40, "Weekend Endurance Ride", "Long aerobic ride targeting race elevation & fueling.", ["Steady Z2", "60-80g carbs/h", "Controlled climbs"]),
+            (
+                1,
+                "bike",
+                "intervals",
+                "key",
+                0.20,
+                "Sweet-Spot / Threshold Intervals",
+                "Build sustainable climbing & flat power at 88-96% FTP.",
+                ["15m warmup", "3×12m @ 90% FTP (4m Z1)", "10m spin"],
+            ),
+            (
+                2,
+                "bike",
+                "easy",
+                "supporting",
+                0.18,
+                "Endurance Z2 Spin",
+                "High-cadence aerobic base ride at 65-75% FTP.",
+                ["Steady Z2 endurance"],
+            ),
+            (
+                4,
+                "bike",
+                "hills",
+                "key",
+                0.22,
+                "Climb Tempo & Torque",
+                "Sustained climbs at 80-88% FTP with low-cadence seated work.",
+                ["15m warmup", "3×10m climb tempo", "15m easy"],
+            ),
+            (
+                6,
+                "bike",
+                "long",
+                "key",
+                0.40,
+                "Weekend Endurance Ride",
+                "Long aerobic ride targeting race elevation & fueling.",
+                ["Steady Z2", "60-80g carbs/h", "Controlled climbs"],
+            ),
         ]
 
     if plan_type == "triathlon":
         return [
-            (1, "swim", "intervals", "supporting", 0.14, "CSS Swim Threshold", "Aerobic efficiency & pacing near Critical Swim Speed.", ["300m warmup", "8×100m @ CSS (15s rest)", "200m cooldown"]),
-            (2, "bike", "tempo", "key", 0.22, "Aero Bike Tempo", "Sustained race-position riding at 78-85% FTP.", ["15m warmup", "2×20m aero tempo", "10m easy"]),
-            (3, "run", "tempo", "key", 0.16, "Threshold Run", "Controlled Z3-Z4 cruise intervals.", ["15m warmup", "4×6m @ threshold GAP (2m jog)", "10m easy"]),
-            (4, "swim", "easy", "optional", 0.12, "Endurance Swim & Drills", "Continuous aerobic swim with catch-up & sighting drills.", ["200m drills", "Continuous Z2 swim", "100m easy"]),
-            (5, "brick", "brick", "key", 0.24, "Race-Sim Brick (Bike → Run)", "Longer bike followed immediately by off-the-bike transition run.", ["Main bike Z2-Z3", "Quick T2 (<3m)", "15-30m run at goal pace"]),
-            (6, "run", "long", "key", 0.12, "Steady Aerobic Long Run", "Relaxed Z2 run to build run durability.", ["Steady Z2 aerobic"]),
+            (
+                1,
+                "swim",
+                "intervals",
+                "supporting",
+                0.14,
+                "CSS Swim Threshold",
+                "Aerobic efficiency & pacing near Critical Swim Speed.",
+                ["300m warmup", "8×100m @ CSS (15s rest)", "200m cooldown"],
+            ),
+            (
+                2,
+                "bike",
+                "tempo",
+                "key",
+                0.22,
+                "Aero Bike Tempo",
+                "Sustained race-position riding at 78-85% FTP.",
+                ["15m warmup", "2×20m aero tempo", "10m easy"],
+            ),
+            (
+                3,
+                "run",
+                "tempo",
+                "key",
+                0.16,
+                "Threshold Run",
+                "Controlled Z3-Z4 cruise intervals.",
+                ["15m warmup", "4×6m @ threshold GAP (2m jog)", "10m easy"],
+            ),
+            (
+                4,
+                "swim",
+                "easy",
+                "optional",
+                0.12,
+                "Endurance Swim & Drills",
+                "Continuous aerobic swim with catch-up & sighting drills.",
+                ["200m drills", "Continuous Z2 swim", "100m easy"],
+            ),
+            (
+                5,
+                "brick",
+                "brick",
+                "key",
+                0.24,
+                "Race-Sim Brick (Bike → Run)",
+                "Longer bike followed immediately by off-the-bike transition run.",
+                ["Main bike Z2-Z3", "Quick T2 (<3m)", "15-30m run at goal pace"],
+            ),
+            (
+                6,
+                "run",
+                "long",
+                "key",
+                0.12,
+                "Steady Aerobic Long Run",
+                "Relaxed Z2 run to build run durability.",
+                ["Steady Z2 aerobic"],
+            ),
         ]
 
     if plan_type == "duathlon":
         return [
-            (1, "run", "intervals", "key", 0.20, "Run Threshold Repeats", "Z4 intervals to sharpen leg speed.", ["15m warmup", "5×5m Z4 (2m jog)", "10m easy"]),
-            (2, "bike", "tempo", "key", 0.25, "Bike Sweet-Spot", "Sustained 85-92% FTP blocks.", ["15m warmup", "2×20m sweet-spot", "10m spin"]),
-            (4, "run", "easy", "supporting", 0.18, "Aerobic Run", "Easy Z2 recovery & cadence.", ["Steady Z2 run"]),
-            (6, "brick", "brick", "key", 0.37, "Long Bike-to-Run Brick", "Race-specific bike endurance into fast-settling run legs.", ["Long bike Z2", "Quick transition", "20-35m steady run"]),
+            (
+                1,
+                "run",
+                "intervals",
+                "key",
+                0.20,
+                "Run Threshold Repeats",
+                "Z4 intervals to sharpen leg speed.",
+                ["15m warmup", "5×5m Z4 (2m jog)", "10m easy"],
+            ),
+            (
+                2,
+                "bike",
+                "tempo",
+                "key",
+                0.25,
+                "Bike Sweet-Spot",
+                "Sustained 85-92% FTP blocks.",
+                ["15m warmup", "2×20m sweet-spot", "10m spin"],
+            ),
+            (
+                4,
+                "run",
+                "easy",
+                "supporting",
+                0.18,
+                "Aerobic Run",
+                "Easy Z2 recovery & cadence.",
+                ["Steady Z2 run"],
+            ),
+            (
+                6,
+                "brick",
+                "brick",
+                "key",
+                0.37,
+                "Long Bike-to-Run Brick",
+                "Race-specific bike endurance into fast-settling run legs.",
+                ["Long bike Z2", "Quick transition", "20-35m steady run"],
+            ),
         ]
 
     # road_run or base_build
     return [
         (1, "run", "easy", "supporting", 0.22, "Easy Aerobic Run", "Conversational Z2 run.", ["Steady Z2"]),
-        (2, "run", "intervals", "key", 0.22, "Threshold / Cruise Intervals", "Build lactate threshold pace cleanly.", ["15m warmup", "4×8m @ threshold (2m jog)", "10m cooldown"]),
-        (4, "run" if plan_type == "road_run" else "bike", "easy", "supporting", 0.20, "Aerobic Volume", "Easy Z2 cross-training or aerobic run.", ["Steady Z2"]),
-        (6, "run", "long", "key", 0.36, "Weekend Long Run", "Progressive aerobic endurance run.", ["Steady Z2", "Last 15% steady Z3"]),
+        (
+            2,
+            "run",
+            "intervals",
+            "key",
+            0.22,
+            "Threshold / Cruise Intervals",
+            "Build lactate threshold pace cleanly.",
+            ["15m warmup", "4×8m @ threshold (2m jog)", "10m cooldown"],
+        ),
+        (
+            4,
+            "run" if plan_type == "road_run" else "bike",
+            "easy",
+            "supporting",
+            0.20,
+            "Aerobic Volume",
+            "Easy Z2 cross-training or aerobic run.",
+            ["Steady Z2"],
+        ),
+        (
+            6,
+            "run",
+            "long",
+            "key",
+            0.36,
+            "Weekend Long Run",
+            "Progressive aerobic endurance run.",
+            ["Steady Z2", "Last 15% steady Z3"],
+        ),
     ]
 
 
@@ -672,7 +975,7 @@ def create_plan(
         name=name,
         status="active",
         plan_type=plan_type,
-        start_date=weeks_data[0]["start_date"],
+        start_date=_iso(start_date),
         event_date=_iso(event_date),
         goal_spec=goal_spec,
         schedule_prefs=schedule_prefs,
@@ -713,9 +1016,57 @@ def create_plan(
     return plan
 
 
-def match_activities_to_plan(
-    db: Session, plan: TrainingPlan, *, today: date | None = None
-) -> dict[str, int]:
+def plan_first_day(plan: TrainingPlan) -> date:
+    """The first day a session may be due: the plan's start, never before it was created."""
+    start = _parse_date(plan.start_date, date.today())
+    if plan.created_at is not None:
+        # Older plans stored the Monday of week 1 even when created mid-week.
+        created = plan.created_at.date()
+        if 0 < (created - start).days < 7:
+            start = created
+    return start
+
+
+def _refresh_week_totals(db: Session, week_ids: set[int]) -> None:
+    for week in db.scalars(select(TrainingWeek).where(TrainingWeek.id.in_(week_ids))):
+        rows = list(db.scalars(select(TrainingSession).where(TrainingSession.week_id == week.id)))
+        week.target_tss = round(sum(float(r.target_tss or 0) for r in rows), 0)
+        week.target_duration_s = round(sum(float(r.target_duration_s or 0) for r in rows), 0)
+        week.target_distance_km = round(sum(float(r.target_distance_km or 0) for r in rows), 1)
+        week.target_elev_m = round(sum(float(r.target_elev_m or 0) for r in rows), 0)
+        split: dict[str, float] = {}
+        for r in rows:
+            if r.sport == "rest":
+                continue
+            k = "run" if r.sport in ("run", "trail_run") else r.sport
+            split[k] = round(split.get(k, 0.0) + float(r.target_duration_s or 0) / 3600.0, 2)
+        week.discipline_split = split
+
+
+def _drop_sessions_before_start(
+    db: Session, plan: TrainingPlan, sessions: list[TrainingSession]
+) -> list[TrainingSession]:
+    """Plans created before this fix scheduled week 1 from its Monday, so days that had already passed
+    showed up as missed. Unmatched sessions before the plan's first day are removed."""
+    first_day = plan_first_day(plan)
+    stale = [
+        s
+        for s in sessions
+        if s.matched_activity_id is None
+        and s.status in ("planned", "missed", "moved")
+        and _parse_date(s.scheduled_date, first_day) < first_day
+    ]
+    if not stale:
+        return sessions
+    weeks = {s.week_id for s in stale}
+    for s in stale:
+        db.delete(s)
+    db.flush()
+    _refresh_week_totals(db, weeks)
+    return [s for s in sessions if s not in stale]
+
+
+def match_activities_to_plan(db: Session, plan: TrainingPlan, *, today: date | None = None) -> dict[str, int]:
     """Pair recorded activities with planned sessions and mark missed past sessions."""
     today = today or date.today()
     start_d = _parse_date(plan.start_date, today) - timedelta(days=1)
@@ -733,6 +1084,7 @@ def match_activities_to_plan(
             .order_by(TrainingSession.scheduled_date.asc(), TrainingSession.id.asc())
         )
     )
+    sessions = _drop_sessions_before_start(db, plan, sessions)
     used_act_ids = {s.matched_activity_id for s in sessions if s.matched_activity_id}
     matched_count = 0
     missed_count = 0
@@ -753,7 +1105,11 @@ def match_activities_to_plan(
                 day_diff = abs((a_date - s_date).days)
                 if day_diff > 1:
                     continue
-                dur_ratio = (float(a.moving_time_s or 0.0) / max(1.0, s.target_duration_s)) if s.target_duration_s else 1.0
+                dur_ratio = (
+                    (float(a.moving_time_s or 0.0) / max(1.0, s.target_duration_s))
+                    if s.target_duration_s
+                    else 1.0
+                )
                 fit = max(0.0, 1.0 - abs(1.0 - dur_ratio)) - 0.15 * day_diff
                 if fit > best_score:
                     best_score = fit
@@ -1060,11 +1416,7 @@ def _compute_gamification(
     cal_synced = any(s.gcal_event_id for s in sessions)
 
     # Streak of most recent due sessions completed/partial
-    due_past = [
-        s
-        for s in sessions
-        if s.sport != "rest" and _parse_date(s.scheduled_date, today) <= today
-    ]
+    due_past = [s for s in sessions if s.sport != "rest" and _parse_date(s.scheduled_date, today) <= today]
     streak = 0
     for s in reversed(due_past):
         if s.status in ("completed", "partial"):
@@ -1095,17 +1447,24 @@ def _compute_gamification(
 
     badges: list[dict[str, str]] = []
     if streak >= 3:
-        badges.append({"id": "streak", "icon": "🔥", "label": f"{streak}-Session Streak", "tone": "good"})
+        badges.append({"id": "streak", "icon": "flame", "label": f"{streak}-Session Streak", "tone": "good"})
     if alignment_overall >= 85 and due_past:
-        badges.append({"id": "aligned", "icon": "🎯", "label": "85%+ Plan Alignment", "tone": "good"})
+        badges.append({"id": "aligned", "icon": "target", "label": "85%+ Plan Alignment", "tone": "good"})
     if len(key_done) >= 2:
-        badges.append({"id": "key_ace", "icon": "⚡", "label": f"{len(key_done)} Key Workouts Crushed", "tone": "warn"})
+        badges.append(
+            {
+                "id": "key_ace",
+                "icon": "bolt",
+                "label": f"{len(key_done)} Key Workouts Crushed",
+                "tone": "warn",
+            }
+        )
     if (baseline.get("weekly_avg", {}).get("run", {}).get("elev_m") or 0) >= 800:
-        badges.append({"id": "vert", "icon": "⛰️", "label": "Vert Hunter", "tone": "good"})
+        badges.append({"id": "vert", "icon": "mountain", "label": "Vert Hunter", "tone": "good"})
     if baseline.get("days_since_last_activity") is not None and baseline["days_since_last_activity"] <= 2:
-        badges.append({"id": "fresh", "icon": "💚", "label": "Active Momentum", "tone": "good"})
+        badges.append({"id": "fresh", "icon": "heart", "label": "Active Momentum", "tone": "good"})
     if cal_synced:
-        badges.append({"id": "calendar", "icon": "📅", "label": "Calendar Auto-Synced", "tone": ""})
+        badges.append({"id": "calendar", "icon": "calendar", "label": "Calendar Auto-Synced", "tone": ""})
 
     return {
         "xp": xp,
@@ -1125,6 +1484,8 @@ def compute_plan_analytics(
     """Compute alignment score, discipline progress, race prediction, gamification, and trajectory graph."""
     today = today or date.today()
     baseline = athlete_baseline(db, prefs, today)
+    quality = insights.data_quality(db, today)
+    first_day = plan_first_day(plan)
     weeks = list(
         db.scalars(
             select(TrainingWeek)
@@ -1142,12 +1503,16 @@ def compute_plan_analytics(
 
     act_ids = [s.matched_activity_id for s in sessions if s.matched_activity_id]
     acts_by_id = (
-        {a.id: a for a in db.scalars(select(Activity).where(Activity.id.in_(act_ids)))}
-        if act_ids
-        else {}
+        {a.id: a for a in db.scalars(select(Activity).where(Activity.id.in_(act_ids)))} if act_ids else {}
     )
 
-    due = [s for s in sessions if s.sport != "rest" and _parse_date(s.scheduled_date, today) <= today]
+    due = [
+        s
+        for s in sessions
+        if s.sport != "rest" and first_day <= _parse_date(s.scheduled_date, today) <= today
+    ]
+    # Too little history to judge adherence: no score, no "at risk" from one or two sessions.
+    enough_data = len(due) >= 3 and (today - first_day).days >= 10
     completed_weight = 0.0
     planned_tss_due = 0.0
     actual_tss_due = 0.0
@@ -1177,7 +1542,15 @@ def compute_plan_analytics(
             continue
         dk = "run" if s.sport in ("run", "trail_run") else s.sport
         d = disc_progress.setdefault(
-            dk, {"planned_hours": 0.0, "actual_hours": 0.0, "planned_km": 0.0, "actual_km": 0.0, "planned_sessions": 0, "completed_sessions": 0}
+            dk,
+            {
+                "planned_hours": 0.0,
+                "actual_hours": 0.0,
+                "planned_km": 0.0,
+                "actual_km": 0.0,
+                "planned_sessions": 0,
+                "completed_sessions": 0,
+            },
         )
         d["planned_hours"] += float(s.target_duration_s or 0.0) / 3600.0
         d["planned_km"] += float(s.target_distance_km or 0.0)
@@ -1263,40 +1636,80 @@ def compute_plan_analytics(
     target_time_s = (plan.goal_spec or {}).get("target_time_s")
 
     limiting_factors: list[str] = []
-    if target_time_s:
+    attention: list[dict[str, Any]] = []
+    if not target_time_s and not enough_data:
+        verdict = "early"
+    elif target_time_s:
         gap_pct = (pred_race_trend["total_s"] - float(target_time_s)) / max(1.0, float(target_time_s)) * 100.0
         if gap_pct <= 2.5:
             verdict = "on_track"
         elif gap_pct <= 8.0:
             verdict = "catchable"
-            limiting_factors.append(f"Projected finish is {gap_pct:.1f}% slower than goal time at current adherence.")
+            limiting_factors.append(
+                f"Projected finish is {gap_pct:.1f}% slower than goal time at current adherence."
+            )
         else:
             verdict = "at_risk"
-            limiting_factors.append(f"Projected finish is {gap_pct:.1f}% slower than goal time — boost key session hit rate or adjust goal.")
+            limiting_factors.append(
+                f"Projected finish is {gap_pct:.1f}% slower than goal time — boost key session hit rate or adjust goal."
+            )
     else:
         ctl_gap = (race_ctl_trend - race_ctl_planned) / max(1.0, race_ctl_planned) * 100.0
         if alignment_overall >= 80 and ctl_gap >= -8:
             verdict = "on_track"
         elif alignment_overall >= 60:
             verdict = "catchable"
-            limiting_factors.append("Plan adherence is moderate — hitting upcoming key sessions will close the gap.")
+            limiting_factors.append(
+                "Plan adherence is moderate — hitting upcoming key sessions will close the gap."
+            )
         else:
             verdict = "at_risk"
             limiting_factors.append("Recent missed sessions are pulling projected race fitness below plan.")
 
+    for text in limiting_factors:
+        attention.append({"level": "warn", "text": text, "action": "adapt"})
     if baseline.get("days_since_last_activity") is not None and baseline["days_since_last_activity"] > 7:
-        limiting_factors.append(
-            f"Last recorded activity was {baseline['days_since_last_activity']} days ago — prediction includes recency decay."
-        )
+        text = f"Last recorded activity was {baseline['days_since_last_activity']} days ago — the prediction includes some fitness loss."
+        limiting_factors.append(text)
+        attention.append({"level": "warn", "text": text, "action": None})
     if baseline.get("acwr") and baseline["acwr"] > 1.35:
-        limiting_factors.append(f"ACWR is elevated ({baseline['acwr']:.2f}) — prioritize sleep and easy-day discipline.")
-    if due and s_key < 75:
-        limiting_factors.append(f"Key session hit rate is {s_key:.0f}% — protect weekend long/brick workouts.")
+        text = (
+            f"Load is rising fast (ACWR {baseline['acwr']:.2f}) — prioritise sleep and keep easy days easy."
+        )
+        limiting_factors.append(text)
+        attention.append({"level": "warn", "text": text, "action": None})
+    if enough_data and s_key < 75:
+        text = f"Key session hit rate is {s_key:.0f}% — protect the weekend long sessions."
+        limiting_factors.append(text)
+        attention.append({"level": "warn", "text": text, "action": "adapt"})
+    if quality["level"] != "high" and quality["activities"] > 0 and quality["missing"]:
+        attention.append(
+            {
+                "level": "info",
+                "text": "Training load is mostly estimated from duration — add your heart-rate values for tighter predictions.",
+                "action": "profile",
+            }
+        )
+
+    # Uncertainty band: wider when load is estimated or history is thin.
+    range_pct = {"high": 0.04, "medium": 0.07, "low": 0.1}[quality["level"]]
+    if (baseline.get("confidence_pct") or 70) < 60:
+        range_pct += 0.03
+    trend_s = float(pred_race_trend["total_s"] or 0)
+
+    def _round5(v: float) -> int:
+        return int(round(v / 300.0) * 300)
 
     event_d = _parse_date(plan.event_date, today)
     days_to_race = (event_d - today).days
     current_week = next(
-        (w for w in weeks if _parse_date(w.start_date, today) <= today <= _parse_date(w.start_date, today) + timedelta(days=6)),
+        (
+            w
+            for w in weeks
+            if _parse_date(w.start_date, today)
+            <= today
+            <= _parse_date(w.start_date, today) + timedelta(days=6)
+        ),
         weeks[0] if weeks else None,
     )
     gamification = _compute_gamification(sessions, alignment_overall, baseline, today)
@@ -1314,6 +1727,7 @@ def compute_plan_analytics(
             "intensity": s_int,
             "key_sessions": s_key,
             "due_sessions": len(due),
+            "enough_data": enough_data,
         },
         "disciplines": disc_progress,
         "gamification": gamification,
@@ -1326,7 +1740,13 @@ def compute_plan_analytics(
             "simulated_activity": simulated_activity,
             "verdict": verdict,
             "limiting_factors": limiting_factors,
+            "attention": attention,
+            "range_low_s": _round5(trend_s * (1 - range_pct)) if trend_s else None,
+            "range_high_s": _round5(trend_s * (1 + range_pct)) if trend_s else None,
+            "range_pct": round(range_pct * 100),
         },
+        "data_quality": quality,
+        "first_day": _iso(first_day),
         "trajectory": trajectory,
     }
 
@@ -1376,7 +1796,12 @@ def adapt_plan(
 
     h = _state_hash(recent, upcoming, user_note)
     if not force and plan.last_adapted_hash == h:
-        return {"adapted": False, "reason": "No changes since last adaptation", "match": match_stats, "diff": []}
+        return {
+            "adapted": False,
+            "reason": "No changes since last adaptation",
+            "match": match_stats,
+            "diff": [],
+        }
 
     baseline = athlete_baseline(db, prefs, today)
     compact_payload = {
@@ -1384,7 +1809,12 @@ def adapt_plan(
         "plan_name": plan.name,
         "plan_type": plan.plan_type,
         "event_date": plan.event_date,
-        "athlete_load": {"ctl": baseline["ctl"], "atl": baseline["atl"], "tsb": baseline["tsb"], "acwr": baseline["acwr"]},
+        "athlete_load": {
+            "ctl": baseline["ctl"],
+            "atl": baseline["atl"],
+            "tsb": baseline["tsb"],
+            "acwr": baseline["acwr"],
+        },
         "user_note": user_note.strip()[:400],
         "recent_sessions": [
             {
@@ -1529,8 +1959,12 @@ def skip_and_adapt_session(
         if sev == "severe" or s_date < today:
             session.status = "skipped"
             session.compliance_score = 0.0
-            session.adaptation_note = f"Skipped ({reason_l.replace('_', ' ')}, {sev}){': ' + user_extra if user_extra else ''}"
-            immediate_actions.append(f"Skipped '{session.title}' for full rest ({reason_l.replace('_', ' ')}).")
+            session.adaptation_note = (
+                f"Skipped ({reason_l.replace('_', ' ')}, {sev}){': ' + user_extra if user_extra else ''}"
+            )
+            immediate_actions.append(
+                f"Skipped '{session.title}' for full rest ({reason_l.replace('_', ' ')})."
+            )
         else:
             # Convert today's/upcoming session directly into a gentle recovery & mobility session
             dur_s = 1500 if sev == "moderate" else 1800
@@ -1585,7 +2019,9 @@ def skip_and_adapt_session(
                 nxt.target_elev_m = round(nxt.target_elev_m * scale, 0)
                 nxt.target_tss = round(nxt.target_tss * scale, 0)
                 nxt.adaptation_note = f"Volume trimmed {round((1 - scale) * 100)}% for recovery"
-                immediate_actions.append(f"Trimmed {nxt.title} on {nxt.scheduled_date} by {round((1 - scale) * 100)}%.")
+                immediate_actions.append(
+                    f"Trimmed {nxt.title} on {nxt.scheduled_date} by {round((1 - scale) * 100)}%."
+                )
 
     elif reason_l == "sickness":
         session.status = "skipped"
@@ -1593,7 +2029,9 @@ def skip_and_adapt_session(
         session.adaptation_note = f"Skipped (sickness, {sev}){': ' + user_extra if user_extra else ''}"
         days_off = 2 if sev == "mild" else (3 if sev == "moderate" else 5)
         cutoff = s_date + timedelta(days=days_off)
-        immediate_actions.append(f"Skipped '{session.title}' and protected the next {days_off} days for illness recovery.")
+        immediate_actions.append(
+            f"Skipped '{session.title}' and protected the next {days_off} days for illness recovery."
+        )
 
         window_sessions = [
             nxt for nxt in upcoming_sessions if s_date < _parse_date(nxt.scheduled_date, today) <= cutoff
@@ -1604,9 +2042,7 @@ def skip_and_adapt_session(
                 nxt.session_type = "recovery"
                 nxt.priority = "supporting"
                 nxt.title = "Easy Return-to-Training Shakeout"
-                nxt.description = (
-                    "Only complete if fever-free for 24h and resting HR is back to normal. Keep strictly Z1-Z2."
-                )
+                nxt.description = "Only complete if fever-free for 24h and resting HR is back to normal. Keep strictly Z1-Z2."
                 nxt.target_duration_s = 1500
                 nxt.target_distance_km = round(min(nxt.target_distance_km or 4.0, 4.0), 1)
                 nxt.target_elev_m = 0.0
@@ -1797,7 +2233,9 @@ def _apply_mutations(
             "status": s.status,
         }
         if after != before:
-            applied.append({"session_id": s.id, "action": action, "before": before, "after": after, "note": note})
+            applied.append(
+                {"session_id": s.id, "action": action, "before": before, "after": after, "note": note}
+            )
 
     db.flush()
     return applied
@@ -1848,6 +2286,28 @@ def serialize_plan_detail(
         )
     )
 
+    matched_ids = [s.matched_activity_id for s in sessions if s.matched_activity_id]
+    matched = (
+        {a.id: a for a in db.scalars(select(Activity).where(Activity.id.in_(matched_ids)))}
+        if matched_ids
+        else {}
+    )
+
+    def _matched(aid: int | None) -> dict[str, Any] | None:
+        a = matched.get(aid) if aid else None
+        if a is None:
+            return None
+        return {
+            "id": a.id,
+            "name": a.name,
+            "sport": a.sport,
+            "family": a.family,
+            "distance_m": a.distance_m,
+            "moving_time_s": a.moving_time_s,
+            "elevation_gain_m": a.elevation_gain_m,
+            "load": a.load,
+        }
+
     sessions_by_week: dict[int, list[dict[str, Any]]] = {}
     for s in sessions:
         sessions_by_week.setdefault(s.week_id, []).append(
@@ -1870,6 +2330,7 @@ def serialize_plan_detail(
                 "target_tss": s.target_tss,
                 "status": s.status,
                 "matched_activity_id": s.matched_activity_id,
+                "matched_activity": _matched(s.matched_activity_id),
                 "compliance_score": s.compliance_score,
                 "gcal_event_id": s.gcal_event_id,
                 "adaptation_note": s.adaptation_note,
@@ -1950,7 +2411,11 @@ def sync_active_plans_after_ingest(db: Session, prefs: dict[str, Any]) -> dict[s
             except Exception:  # noqa: BLE001
                 logger.exception("Auto-adaptation failed for plan %s", plan.id)
 
-        if gcal_cfg.get("connected") and gcal_cfg.get("target_calendar_id") and gcal_cfg.get("auto_sync", True):
+        if (
+            gcal_cfg.get("connected")
+            and gcal_cfg.get("target_calendar_id")
+            and gcal_cfg.get("auto_sync", True)
+        ):
             try:
                 gcal.sync_plan_to_calendar(db, plan)
                 cal_synced += 1

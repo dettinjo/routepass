@@ -9,23 +9,37 @@ Zero extra Docker dependencies (0 MB overhead).
 from __future__ import annotations
 
 import json
+import secrets
 import time
 from urllib.parse import urlparse
 
-from routepass import auth
+from sqlalchemy.orm import Session
+
+from routepass import auth, store
 
 HANDOFF_PURPOSE = "strava_session_sync"
 HANDOFF_TTL_S = 365 * 86400  # 1 year
 
 
-def issue_handoff_token() -> str:
+CURRENT_KEY = "strava.userscript_key"  # id of the one handoff token that is still accepted
+
+
+def issue_handoff_token(db: Session) -> str:
+    """Mint a token for a fresh userscript download. Only the newest download stays valid, so
+    reinstalling the script revokes every earlier copy (and any leaked token)."""
     now = int(time.time())
-    return auth.sign({"purpose": HANDOFF_PURPOSE, "iat": now, "exp": now + HANDOFF_TTL_S})
+    jti = secrets.token_urlsafe(12)
+    store.set_value(db, CURRENT_KEY, jti)
+    return auth.sign({"purpose": HANDOFF_PURPOSE, "jti": jti, "iat": now, "exp": now + HANDOFF_TTL_S})
 
 
-def verify_handoff_token(token: str | None) -> bool:
+def verify_handoff_token(db: Session, token: str | None) -> bool:
     payload = auth.unsign(token)
-    return bool(payload and payload.get("purpose") == HANDOFF_PURPOSE)
+    if not payload or payload.get("purpose") != HANDOFF_PURPOSE:
+        return False
+    current = store.get_value(db, CURRENT_KEY)
+    # Scripts installed before revocation existed carry no id; they keep working until the next install.
+    return payload.get("jti") == current if current else True
 
 
 def render_userscript(base_url: str, token: str) -> str:
@@ -37,12 +51,14 @@ def render_userscript(base_url: str, token: str) -> str:
     return f"""// ==UserScript==
 // @name         RoutePass Strava Auto-Connect
 // @namespace    {origin}/
-// @version      1.2.1
+// @version      1.3.0
 // @description  Automatically syncs your Strava session cookies (_strava4_session + strava_remember_token) to RoutePass when you sign in on strava.com.
 // @match        https://www.strava.com/*
 // @grant        GM_cookie
 // @grant        GM_xmlhttpRequest
 // @grant        GM_registerMenuCommand
+// @grant        GM_getValue
+// @grant        GM_setValue
 // @connect      {host}
 // @run-at       document-idle
 // ==/UserScript==
@@ -190,17 +206,22 @@ def render_userscript(base_url: str, token: str) -> str:
     cb(map);
   }}
 
-  function syncCookies(cookies, force) {{
-    const fp =
-      (cookies._strava4_session || "") +
-      "|" +
-      (cookies.strava_remember_token || "") +
-      "|" +
-      (cookies.strava_remember_id || "");
-    let prev = "";
-    try {{
-      prev = localStorage.getItem(FP_KEY) || "";
-    }} catch (_) {{}}
+  // Only a SHA-256 of the cookies is kept, in the userscript manager's private storage — never the
+  // cookie values, and never in strava.com's localStorage where page scripts could read them.
+  async function fingerprint(cookies) {{
+    const raw =
+      (cookies._strava4_session || "") + "|" + (cookies.strava_remember_token || "") + "|" + (cookies.strava_remember_id || "");
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw));
+    return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  }}
+
+  try {{
+    localStorage.removeItem(FP_KEY); // clean up what versions before 1.3.0 left behind
+  }} catch (_) {{}}
+
+  async function syncCookies(cookies, force) {{
+    const fp = await fingerprint(cookies);
+    const prev = GM_getValue(FP_KEY, "");
 
     if (!force && fp === prev) {{
       return; // Already up to date
@@ -223,9 +244,7 @@ def render_userscript(base_url: str, token: str) -> str:
       }}),
       onload: (resp) => {{
         if (resp.status >= 200 && resp.status < 300) {{
-          try {{
-            localStorage.setItem(FP_KEY, fp);
-          }} catch (_) {{}}
+          GM_setValue(FP_KEY, fp);
           clearPendingConnect();
           if (force) {{
             showToast("RoutePass: Strava connected! Returning to RoutePass…", "#15803d");

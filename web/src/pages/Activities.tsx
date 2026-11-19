@@ -2,7 +2,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { TripView } from "../components/TripView";
-import { BrandIcon, IconDownload, IconFilter, IconLeft, IconRight, IconSearch, IconSelect, IconSync, IconX, MetricIcon } from "../components/icons";
+import { ICON, BrandIcon, IconDownload, IconFilter, IconLeft, IconRight, IconSearch, IconSelect, IconSync, IconX, MetricIcon } from "../components/icons";
 import { ActivityItem, FamilyChips } from "../components/shared";
 import { Card, Empty, Modal, Seg, Skeleton, useToast } from "../components/ui";
 import { api, qs } from "../lib/api";
@@ -95,19 +95,19 @@ export default function Activities() {
         </div>
         <div className="row nowrap">
           <a className="btn sm" href={`/api/v1/activities/export.csv${qs({ q: get("q"), family: families, presence: get("presence"), start: get("start"), end: get("end") })}`} title="Download the activities matching the filters as CSV">
-            <IconDownload size={16} /><span className="hide-mobile">CSV</span>
+            <IconDownload size={ICON.button} /><span className="hide-mobile">CSV</span>
           </a>
           <button className={selecting ? "primary sm" : "sm"} onClick={() => { setSelecting(!selecting); setSelected([]); }}>
-            <IconSelect size={16} />{selecting ? "Done" : "Select"}
+            <IconSelect size={ICON.button} />{selecting ? "Done" : "Select"}
           </button>
         </div>
       </div>
 
       <div className="stack" style={{ gap: 10, marginBottom: 12 }}>
         <div className="row nowrap">
-          <div className="search grow"><IconSearch size={17} /><input placeholder="Search activities" value={q} onChange={(e) => setQ(e.target.value)} type="search" /></div>
+          <div className="search grow"><IconSearch size={ICON.button} /><input placeholder="Search activities" value={q} onChange={(e) => setQ(e.target.value)} type="search" /></div>
           <button className={filterCount ? "primary icon" : "icon"} onClick={() => setFiltersOpen(true)} aria-label="Filters" title="Filters">
-            <IconFilter size={19} />
+            <IconFilter size={ICON.header} />
           </button>
           <select value={`${sort}:${order}`} onChange={(e) => { const [s, o] = e.target.value.split(":"); update({ sort: s, order: o }); }}
             style={{ width: 112, flex: "none", paddingRight: 4 }} aria-label="Sort">
@@ -120,7 +120,7 @@ export default function Activities() {
             {active.map((f) => (
               <button key={f.key} className="chip on removable"
                 onClick={() => update(FAMILY_LABEL[f.key] ? { family: families.filter((x) => x !== f.key) } : f.clear)}>
-                {f.label}<IconX size={14} />
+                {f.label}<IconX size={ICON.inline} />
               </button>
             ))}
             <button className="chip" onClick={() => update({ start: null, end: null, min_km: null, max_km: null, presence: null, family: [] })}>Clear all</button>
@@ -147,9 +147,9 @@ export default function Activities() {
         )}
         {data && pages > 1 && (
           <div className="row between" style={{ padding: "10px 14px", borderTop: "1px solid var(--border)" }}>
-            <button className="sm" disabled={page <= 1} onClick={() => { update({ page: String(page - 1) }); window.scrollTo(0, 0); }}><IconLeft size={16} />Newer</button>
+            <button className="sm" disabled={page <= 1} onClick={() => { update({ page: String(page - 1) }); window.scrollTo(0, 0); }}><IconLeft size={ICON.button} />Newer</button>
             <span className="small muted">{page} / {pages}</span>
-            <button className="sm" disabled={page >= pages} onClick={() => { update({ page: String(page + 1) }); window.scrollTo(0, 0); }}>Older<IconRight size={16} /></button>
+            <button className="sm" disabled={page >= pages} onClick={() => { update({ page: String(page + 1) }); window.scrollTo(0, 0); }}>Older<IconRight size={ICON.button} /></button>
           </div>
         )}
       </Card>
@@ -161,10 +161,10 @@ export default function Activities() {
       {selecting && selected.length > 0 && (
         <div className="action-bar" role="toolbar">
           <b className="small" style={{ flex: "none" }}>{selected.length}</b>
-          <button className="sm" disabled={bulk.isPending} onClick={() => bulk.mutate("strava_to_komoot")}><IconSync size={15} />To <BrandIcon provider="komoot" size={14} /></button>
-          <button className="sm" disabled={bulk.isPending} onClick={() => bulk.mutate("komoot_to_strava")}><IconSync size={15} />To <BrandIcon provider="strava" size={14} /></button>
-          <button className="sm" disabled={selected.length < 2} onClick={() => setTrip(true)}><MetricIcon.distance size={15} />Trip</button>
-          <button className="sm ghost icon" onClick={() => setSelected([])} aria-label="Clear selection"><IconX size={16} /></button>
+          <button className="sm" disabled={bulk.isPending} onClick={() => bulk.mutate("strava_to_komoot")}><IconSync size={ICON.button} />To <BrandIcon provider="komoot" size={14} /></button>
+          <button className="sm" disabled={bulk.isPending} onClick={() => bulk.mutate("komoot_to_strava")}><IconSync size={ICON.button} />To <BrandIcon provider="strava" size={14} /></button>
+          <button className="sm" disabled={selected.length < 2} onClick={() => setTrip(true)}><MetricIcon.distance size={ICON.button} />Trip</button>
+          <button className="sm ghost icon" onClick={() => setSelected([])} aria-label="Clear selection"><IconX size={ICON.button} /></button>
         </div>
       )}
       {trip && <TripView ids={selected} onClose={() => setTrip(false)} />}

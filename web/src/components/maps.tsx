@@ -119,7 +119,7 @@ export function TrackMap({ points, highlight, climbs, focusClimb }: {
     tile.current = tl;
     const accent = cssVar("--accent");
     const line = L.polyline(points, { color: accent, weight: 3.5, opacity: 0.95 }).addTo(m);
-    (climbs || []).forEach((seg) => L.polyline(seg, { color: cssVar("--series-2"), weight: 5, opacity: 0.9 }).addTo(m));
+    (climbs || []).forEach((seg) => L.polyline(seg, { color: cssVar("--metric-climb"), weight: 5, opacity: 0.9 }).addTo(m));
     L.circleMarker(points[0], { radius: 6, color: "#fff", weight: 2, fillColor: cssVar("--good"), fillOpacity: 1 }).addTo(m).bindTooltip("Start");
     L.circleMarker(points[points.length - 1], { radius: 6, color: "#fff", weight: 2, fillColor: cssVar("--bad"), fillOpacity: 1 }).addTo(m).bindTooltip("Finish");
     marker.current = L.circleMarker(points[0], { radius: 7, color: "#fff", weight: 2, fillColor: accent, opacity: 0, fillOpacity: 0 }).addTo(m);
@@ -244,8 +244,9 @@ export function TilesMap({ tiles, square }: { tiles: { bounds: [[number, number]
     tile.current = tl;
     const renderer = L.canvas({ padding: 0.5 });
     const group = L.featureGroup();
-    const accent = cssVar("--accent");
-    const cluster = cssVar("--series-2");
+    // Amount, not identity: visited tiles quiet ink, the cluster dark ink.
+    const accent = cssVar("--text-muted");
+    const cluster = cssVar("--text-primary");
     for (const t of tiles) {
       group.addLayer(L.rectangle(t.bounds, { renderer, weight: 0.5, color: t.cluster ? cluster : accent, fillColor: t.cluster ? cluster : accent, fillOpacity: t.cluster ? 0.5 : 0.3 }));
     }
@@ -280,4 +281,38 @@ export function TilesMap({ tiles, square }: { tiles: { bounds: [[number, number]
       <div className="map tall" ref={el} />
     </div>
   );
+}
+
+/** Tap the map to choose a point (used for Places). Shows existing places as faint circles. */
+export function PlacePicker({ value, radiusKm, places, onPick }: {
+  value: [number, number] | null; radiusKm: number; places: { name: string; lat: number; lng: number; radius_km: number }[];
+  onPick: (lat: number, lng: number) => void;
+}) {
+  const el = useRef<HTMLDivElement>(null);
+  const map = useRef<L.Map | null>(null);
+  const pick = useRef<L.Circle | null>(null);
+  const cb = useRef(onPick);
+  cb.current = onPick;
+  useEffect(() => {
+    if (!el.current) return;
+    const { map: m } = createMap(el.current, "osm", true);
+    map.current = m;
+    const ink = cssVar("--text-muted");
+    for (const p of places) L.circle([p.lat, p.lng], { radius: p.radius_km * 1000, color: ink, weight: 1, fillOpacity: 0.08 }).addTo(m).bindTooltip(p.name);
+    const start = value ?? (places[0] ? [places[0].lat, places[0].lng] as [number, number] : null);
+    if (start) m.setView(start, 13); else m.setView([47, 8], 5);
+    m.on("click", (e: L.LeafletMouseEvent) => cb.current(Number(e.latlng.lat.toFixed(5)), Number(e.latlng.lng.toFixed(5))));
+    return () => { m.remove(); map.current = null; pick.current = null; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const m = map.current;
+    if (!m) return;
+    pick.current?.remove();
+    pick.current = null;
+    if (value) {
+      pick.current = L.circle(value, { radius: Math.max(radiusKm, 0.05) * 1000, color: cssVar("--accent"), weight: 2, fillOpacity: 0.15 }).addTo(m);
+      if (!m.getBounds().contains(value)) m.setView(value, 13);
+    }
+  }, [value?.[0], value?.[1], radiusKm]); // eslint-disable-line react-hooks/exhaustive-deps
+  return <div ref={el} className="map" style={{ height: 240 }} aria-label="Tap the map to choose the place" />;
 }

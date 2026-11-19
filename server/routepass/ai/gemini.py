@@ -171,16 +171,11 @@ def monthly_usage(db: Session, *, now: datetime | None = None) -> dict[str, Any]
 def _endpoints_for_key(api_key: str, model: str) -> list[str]:
     """Return ordered candidate REST endpoints for a given API key format."""
     vertex_url = (
-        f"https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent"
-        f"?key={api_key}"
+        f"https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent?key={api_key}"
     )
-    aistudio_v1 = (
-        f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent"
-        f"?key={api_key}"
-    )
+    aistudio_v1 = f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={api_key}"
     aistudio_v1beta = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        f"?key={api_key}"
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     )
     # Vertex AI Express keys start with "AQ."; AI Studio keys start with "AIza"
     if api_key.startswith("AQ."):

@@ -5,19 +5,20 @@ import { api } from "../lib/api";
 import { duration, hours, int, km } from "../lib/format";
 import { usePrefs } from "../lib/hooks";
 import { HBars, Legend, LineChart, StackedBars } from "./charts";
-import { IconInfo, IconMap, IconSettings, MetricIcon } from "./icons";
+import { ICON, IconGear, IconInfo, IconMap, MetricIcon } from "./icons";
 import { TilesMap } from "./maps";
-import { Callout, Card, Empty, Seg, Skeleton, SportDot, Stat, useToast } from "./ui";
+import { Card, Empty, Seg, Skeleton, SportDot, Stat, useToast } from "./ui";
 
-const ZONE_COLORS = ["var(--seq-1)", "var(--seq-2)", "var(--seq-3)", "var(--seq-4)", "var(--seq-5)", "var(--seq-6)", "var(--series-8)"];
+// Zones are an amount of intensity: one hue from light to dark (never status red for "hard").
+const ZONE_COLORS = ["var(--seq-1)", "var(--seq-2)", "var(--seq-3)", "var(--seq-4)", "var(--seq-5)", "var(--seq-6)", "var(--seq-6)"];
 
 interface ZoneBlock { seconds: number[]; total_s: number; polarization: { low_pct: number; threshold_pct: number; high_pct: number }; buckets: { start: string; values: Record<string, number> }[] }
 
 function Polarization({ p }: { p: ZoneBlock["polarization"] }) {
   const parts = [
-    { key: "low", label: "Easy", value: p.low_pct, color: "var(--seq-2)" },
+    { key: "low", label: "Easy", value: p.low_pct, color: "var(--seq-1)" },
     { key: "mid", label: "Threshold", value: p.threshold_pct, color: "var(--seq-4)" },
-    { key: "high", label: "Hard", value: p.high_pct, color: "var(--series-8)" },
+    { key: "high", label: "Hard", value: p.high_pct, color: "var(--seq-6)" },
   ];
   return (
     <div className="stack" style={{ gap: 8 }}>
@@ -29,14 +30,16 @@ function Polarization({ p }: { p: ZoneBlock["polarization"] }) {
   );
 }
 
-function ZoneCard({ title, block, zones, grain }: { title: string; block: ZoneBlock; zones: number; grain: string }) {
+function ZoneCard({ title, block, zones, grain, onGrain }: { title: string; block: ZoneBlock; zones: number; grain: "month" | "year"; onGrain: (g: "month" | "year") => void }) {
   const series = Array.from({ length: zones }, (_, i) => ({ key: `Z${i + 1}`, label: `Z${i + 1}`, color: ZONE_COLORS[Math.min(i + (zones === 5 ? 1 : 0), 6)] }));
   const bars = block.buckets.slice(-24).map((b) => ({
     label: new Date(b.start).toLocaleDateString(undefined, grain === "year" ? { year: "numeric" } : { month: "short", year: "numeric" }),
     values: b.values,
   }));
   return (
-    <Card title={title} icon={title.startsWith("Heart") ? MetricIcon.hr : MetricIcon.power} hint={`${hours(block.total_s)} h with data`}>
+    <Card title={title} icon={title.startsWith("Heart") ? MetricIcon.hr : MetricIcon.power} hint={`${hours(block.total_s)} h with data`}
+      info={<>Endurance training usually works best with about 80% easy, little threshold and some hard time. Zones come from your max heart rate and FTP (<Link to="/settings/profile">profile</Link>).</>}
+      actions={<Seg value={grain} onChange={onGrain} options={[{ value: "month", label: "Per month" }, { value: "year", label: "Per year" }]} />}>
       <div className="stack gap16">
         <Polarization p={block.polarization} />
         <HBars format={(v) => duration(v)} rows={block.seconds.map((s, i) => ({ label: `Zone ${i + 1}`, value: s, color: series[i].color }))} />
@@ -46,10 +49,10 @@ function ZoneCard({ title, block, zones, grain }: { title: string; block: ZoneBl
   );
 }
 
-export function ZonesTab({ families }: { families: string[] }) {
+export function ZonesTab({ families, start }: { families: string[]; start?: string }) {
   const [grain, setGrain] = useState<"month" | "year">("month");
-  const zones = useQuery<{ hr: ZoneBlock; power: ZoneBlock }>({ queryKey: ["zones", families, grain], queryFn: () => api("/insights/zones", { params: { family: families, grain } }) });
-  const eff = useQuery<any[]>({ queryKey: ["efficiency", families], queryFn: () => api("/insights/efficiency", { params: { family: families } }) });
+  const zones = useQuery<{ hr: ZoneBlock; power: ZoneBlock }>({ queryKey: ["zones", families, grain, start], queryFn: () => api("/insights/zones", { params: { family: families, grain, start } }) });
+  const eff = useQuery<any[]>({ queryKey: ["efficiency", families, start], queryFn: () => api("/insights/efficiency", { params: { family: families, start } }) });
   const chart = useMemo(() => {
     const rows = (eff.data || []).filter((r) => r.ef_speed != null || r.ef_power != null);
     if (rows.length < 2) return null;
@@ -57,7 +60,7 @@ export function ZonesTab({ families }: { families: string[] }) {
     return {
       usePower,
       x: rows.map((r) => new Date(r.date).getTime() / 1000),
-      series: [{ label: usePower ? "Power per heartbeat" : "Speed per heartbeat", color: "var(--series-1)", values: rows.map((r) => (usePower ? r.ef_power : r.ef_speed)) }],
+      series: [{ label: usePower ? "Power per heartbeat" : "Speed per heartbeat", color: "var(--line-1)", values: rows.map((r) => (usePower ? r.ef_power : r.ef_speed)) }],
       dec: rows.filter((r) => r.decoupling_pct != null),
     };
   }, [eff.data]);
@@ -66,14 +69,10 @@ export function ZonesTab({ families }: { families: string[] }) {
   const hasPw = zones.data.power.total_s > 0;
   return (
     <div className="stack gap16">
-      <div className="row between">
-        <Seg value={grain} onChange={setGrain} options={[{ value: "month", label: "Per month" }, { value: "year", label: "Per year" }]} />
-      </div>
-      <Callout><b>Polarisation:</b> endurance training usually works best with about 80 % easy, little threshold and some hard time. Zones come from your max heart rate and FTP in <Link to="/settings">Settings</Link>.</Callout>
       {!hasHr && !hasPw ? <Empty title="No heart-rate or power recordings yet" icon={MetricIcon.hr}>Recordings from Strava (API or data export) carry heart rate; Komoot tracks do not.</Empty> : (
-        <div className="grid g2">
-          {hasHr && <ZoneCard title="Heart-rate zones" block={zones.data.hr} zones={5} grain={grain} />}
-          {hasPw && <ZoneCard title="Power zones" block={zones.data.power} zones={7} grain={grain} />}
+        <div className={`grid ${hasHr && hasPw ? "g2" : ""}`}>
+          {hasHr && <ZoneCard title="Heart-rate zones" block={zones.data.hr} zones={5} grain={grain} onGrain={setGrain} />}
+          {hasPw && <ZoneCard title="Power zones" block={zones.data.power} zones={7} grain={grain} onGrain={setGrain} />}
         </div>
       )}
       <Card title="Aerobic efficiency" icon={MetricIcon.speed} hint="Output per heartbeat over time — rising means fitter at the same effort">
@@ -92,8 +91,8 @@ export function ZonesTab({ families }: { families: string[] }) {
   );
 }
 
-export function TilesTab({ families }: { families: string[] }) {
-  const { data } = useQuery<any>({ queryKey: ["tiles", families], queryFn: () => api("/insights/tiles", { params: { family: families } }) });
+export function TilesTab({ families, start }: { families: string[]; start?: string }) {
+  const { data } = useQuery<any>({ queryKey: ["tiles", families, start], queryFn: () => api("/insights/tiles", { params: { family: families, start } }) });
   if (!data) return <Skeleton h={500} />;
   if (!data.total_tiles) return <Empty title="No GPS tracks yet" icon={IconMap} />;
   const years = Object.entries(data.new_by_year as Record<string, number>);
@@ -106,25 +105,25 @@ export function TilesTab({ families }: { families: string[] }) {
           <Stat icon="count" label="Max cluster" value={int(data.max_cluster)} title="Tiles whose four neighbours are all visited, connected" />
           <Stat icon="distance" label="Cluster tiles" value={int(data.cluster_tiles)} />
         </div>
-        <p className="xs muted mt8 row nowrap" style={{ gap: 6, alignItems: "flex-start" }}><IconInfo size={14} />Explorer tiles are the ~1.5 km map squares (zoom 14) your activities passed through — a game of filling in the map.</p>
+        <p className="xs muted mt8 row nowrap" style={{ gap: 6, alignItems: "flex-start" }}><IconInfo size={ICON.inline} />Explorer tiles are the ~1.5 km map squares (zoom 14) your activities passed through — a game of filling in the map.</p>
       </Card>
-      <Card title="Tile map" icon={IconMap} hint="Orange = cluster, dashed = max square">
+      <Card title="Tile map" icon={IconMap} hint="Filled = cluster, dashed = max square">
         <TilesMap tiles={data.tiles} square={data.square_bounds} />
       </Card>
       {years.length > 1 && (
         <Card title="New tiles per year" icon={MetricIcon.count}>
-          <StackedBars data={years.map(([y, n]) => ({ label: y, values: { n } }))} series={[{ key: "n", label: "New tiles", color: "var(--series-1)" }]} format={(v) => int(v)} height={180} />
+          <StackedBars data={years.map(([y, n]) => ({ label: y, values: { n } }))} series={[{ key: "n", label: "New tiles", color: "var(--text-secondary)" }]} format={(v) => int(v)} height={180} />
         </Card>
       )}
     </div>
   );
 }
 
-export function GearTab() {
+export function GearTab({ families, start }: { families?: string[]; start?: string }) {
   const qc = useQueryClient();
   const toast = useToast();
   const { data: prefs } = usePrefs();
-  const { data } = useQuery<{ gear: any[]; devices: any[] }>({ queryKey: ["gear"], queryFn: () => api("/insights/gear") });
+  const { data } = useQuery<{ gear: any[]; devices: any[] }>({ queryKey: ["gear", families, start], queryFn: () => api("/insights/gear", { params: { family: families, start } }) });
   const save = useMutation({
     mutationFn: (gear_targets: Record<string, unknown>) => api("/settings", { method: "PATCH", body: { gear_targets } }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["gear"] }); qc.invalidateQueries({ queryKey: ["prefs"] }); toast("Saved"); },
@@ -134,17 +133,17 @@ export function GearTab() {
   const [service, setService] = useState("");
   if (!data) return <Skeleton h={300} />;
   if (!data.gear.length && !data.devices.length) {
-    return <Empty title="No gear recorded" icon={IconSettings}>Gear comes from Strava (API or data export), where bikes and shoes are assigned to activities.</Empty>;
+    return <Empty title="No gear recorded" icon={IconGear}>Gear comes from Strava (API or data export), where bikes and shoes are assigned to activities.</Empty>;
   }
   const row = (g: any, editable: boolean) => (
     <div key={g.key} className="item" style={{ cursor: "default", alignItems: "flex-start" }}>
-      <span className="card-ico"><IconSettings size={16} /></span>
+      <span className="card-ico"><IconGear size={ICON.header} /></span>
       <div className="main-col">
         <b className="small">{g.label}{g.label !== g.key && <span className="muted" style={{ fontWeight: 400 }}> · {g.key}</span>}</b>
         <div className="metrics">
-          <span><MetricIcon.distance size={13} />{km(g.distance_m, 0)} km</span>
-          <span><MetricIcon.time size={13} />{hours(g.moving_time_s)} h</span>
-          <span><MetricIcon.elevation size={13} />{int(g.elevation_m)} m</span>
+          <span><MetricIcon.distance size={ICON.inline} />{km(g.distance_m, 0)} km</span>
+          <span><MetricIcon.time size={ICON.inline} />{hours(g.moving_time_s)} h</span>
+          <span><MetricIcon.elevation size={ICON.inline} />{int(g.elevation_m)} m</span>
           <span className="extra">{g.count} activities · {g.first_date} – {g.last_date}</span>
         </div>
         <div className="row" style={{ gap: 4 }}>{g.families.map((f: string) => <SportDot key={f} family={f} />)}</div>
@@ -170,7 +169,7 @@ export function GearTab() {
   );
   return (
     <div className="stack gap16">
-      {data.gear.length > 0 && <Card title="Bikes & shoes" icon={IconSettings} hint="Give gear a name and a service interval" flush><div className="list">{data.gear.map((g) => row(g, true))}</div></Card>}
+      {data.gear.length > 0 && <Card title="Bikes & shoes" icon={IconGear} hint="Give gear a name and a service interval" flush><div className="list">{data.gear.map((g) => row(g, true))}</div></Card>}
       {data.devices.length > 0 && <Card title="Recording devices" icon={MetricIcon.time} flush><div className="list">{data.devices.map((g) => row(g, false))}</div></Card>}
     </div>
   );

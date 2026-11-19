@@ -40,14 +40,19 @@ export function usePrefs() {
   return useQuery<Preferences>({ queryKey: ["prefs"], queryFn: () => api("/settings") });
 }
 
-export function useSavePrefs() {
+export function useSavePrefs(opts: { quiet?: boolean; onSaved?: () => void } = {}) {
   const qc = useQueryClient();
   const toast = useToast();
   return useMutation({
     mutationFn: (patch: Record<string, any>) => api<Preferences>("/settings", { method: "PATCH", body: patch }),
-    onSuccess: (data) => {
+    onSuccess: (data, patch) => {
       qc.setQueryData(["prefs"], data);
-      toast("Saved");
+      if (patch.profile) {
+        // Load, zones and predictions are recomputed in the background.
+        for (const k of ["data-quality", "training-plan", "load", "zones", "efficiency"]) qc.invalidateQueries({ queryKey: [k] });
+      }
+      if (!opts.quiet) toast("Saved");
+      opts.onSaved?.();
     },
     onError: (e: Error) => toast(e.message, true),
   });
@@ -59,4 +64,16 @@ export function useSportMeta() {
     queryFn: () => api("/meta/sports"),
     staleTime: Infinity,
   });
+}
+
+/** Call `fn` once the value has stopped changing for `ms` (for settings that save as you type). */
+export function useDebouncedCallback<A extends unknown[]>(fn: (...args: A) => void, ms = 600) {
+  const t = useRef<number | null>(null);
+  const latest = useRef(fn);
+  latest.current = fn;
+  useEffect(() => () => { if (t.current) window.clearTimeout(t.current); }, []);
+  return (...args: A) => {
+    if (t.current) window.clearTimeout(t.current);
+    t.current = window.setTimeout(() => latest.current(...args), ms);
+  };
 }

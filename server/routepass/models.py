@@ -213,7 +213,9 @@ class TrainingPlan(Base):
     name: Mapped[str] = mapped_column(String(200))
     status: Mapped[str] = mapped_column(String(16), default="active", index=True)  # active|completed|archived
     plan_type: Mapped[str] = mapped_column(String(24), default="trail_run")
-    start_date: Mapped[str] = mapped_column(String(10))  # ISO YYYY-MM-DD (Monday of week 1)
+    start_date: Mapped[str] = mapped_column(
+        String(10)
+    )  # ISO YYYY-MM-DD (first day of the plan; week 1 = its Monday)
     event_date: Mapped[str] = mapped_column(String(10))  # ISO YYYY-MM-DD
     goal_spec: Mapped[dict] = mapped_column(JSON, default=dict)
     schedule_prefs: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -264,11 +266,17 @@ class TrainingSession(Base):
     plan_id: Mapped[int] = mapped_column(ForeignKey("training_plans.id", ondelete="CASCADE"), index=True)
     week_id: Mapped[int] = mapped_column(ForeignKey("training_weeks.id", ondelete="CASCADE"), index=True)
     scheduled_date: Mapped[str] = mapped_column(String(10))  # ISO YYYY-MM-DD
-    scheduled_slot: Mapped[str] = mapped_column(String(16), default="flexible")  # morning|midday|afternoon|evening|flexible
+    scheduled_slot: Mapped[str] = mapped_column(
+        String(16), default="flexible"
+    )  # morning|midday|afternoon|evening|flexible
     scheduled_start: Mapped[str | None] = mapped_column(String(32))  # ISO datetime when placed on calendar
     scheduled_end: Mapped[str | None] = mapped_column(String(32))
-    sport: Mapped[str] = mapped_column(String(20), default="run")  # run|trail_run|bike|swim|strength|brick|rest
-    session_type: Mapped[str] = mapped_column(String(20), default="easy")  # easy|long|tempo|intervals|hills|brick|recovery|race
+    sport: Mapped[str] = mapped_column(
+        String(20), default="run"
+    )  # run|trail_run|bike|swim|strength|brick|rest
+    session_type: Mapped[str] = mapped_column(
+        String(20), default="easy"
+    )  # easy|long|tempo|intervals|hills|brick|recovery|race
     priority: Mapped[str] = mapped_column(String(12), default="supporting")  # key|supporting|optional
     title: Mapped[str] = mapped_column(String(200), default="")
     description: Mapped[str] = mapped_column(Text, default="")
@@ -277,7 +285,9 @@ class TrainingSession(Base):
     target_distance_km: Mapped[float] = mapped_column(Float, default=0.0)
     target_elev_m: Mapped[float] = mapped_column(Float, default=0.0)
     target_tss: Mapped[float] = mapped_column(Float, default=0.0)
-    status: Mapped[str] = mapped_column(String(16), default="planned")  # planned|completed|partial|missed|moved|skipped
+    status: Mapped[str] = mapped_column(
+        String(16), default="planned"
+    )  # planned|completed|partial|missed|moved|skipped
     matched_activity_id: Mapped[int | None] = mapped_column(
         ForeignKey("activities.id", ondelete="SET NULL"), index=True
     )
@@ -337,5 +347,3 @@ class NotificationLog(Base):
     title: Mapped[str] = mapped_column(String(200))
     body: Mapped[str] = mapped_column(Text, default="")
     sent_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
-
-

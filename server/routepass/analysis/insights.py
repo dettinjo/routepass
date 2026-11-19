@@ -956,3 +956,72 @@ def coverage(db: Session) -> dict[str, Any]:
     counts["provider_records"] = raw
     counts["duplicates_hidden"] = sum(raw.values()) - counts["activities"]
     return counts
+
+
+# ── data quality ─────────────────────────────────────────────────────────────
+
+PROFILE_FIELDS = (
+    ("hr_max", "Max heart rate", "Heart-rate zones and heart-rate based training load"),
+    ("hr_rest", "Resting heart rate", "More accurate heart-rate load (heart-rate reserve)"),
+    ("ftp", "FTP", "Power-based load and cycling predictions"),
+)
+
+
+def data_quality(db: Session, today: date | None = None, days: int = 90) -> dict[str, Any]:
+    """How trustworthy load, zones and predictions are, and what would make them better.
+
+    `level` is high when most recent load comes from power or heart rate, low when it is mostly a
+    duration estimate. `suggestions` are values derived from the recorded data the user can accept.
+    """
+    today = today or date.today()
+    profile = store.get_preferences(db)["profile"]
+    since = datetime.combine(today - timedelta(days=days), datetime.min.time())
+    methods: dict[str, int] = defaultdict(int)
+    for (method,) in db.execute(
+        select(Activity.load_method).where(Activity.start_time >= since, Activity.load.is_not(None))
+    ):
+        methods[method or "unknown"] += 1
+    total = sum(methods.values())
+    measured = methods.get("power", 0) + methods.get("heartrate", 0)
+    measured_share = measured / total if total else 0.0
+
+    two_years = datetime.combine(today - timedelta(days=730), datetime.min.time())
+    hr_values = sorted(
+        v
+        for (v,) in db.execute(
+            select(Activity.max_hr).where(Activity.start_time >= two_years, Activity.max_hr.is_not(None))
+        )
+        if v and 120 <= v <= 225
+    )
+    suggested_hr_max = None
+    if len(hr_values) >= 5:
+        # Second-highest plausible value: one strap glitch must not set the zones.
+        suggested_hr_max = int(round(hr_values[-2]))
+    best_20m = db.scalar(select(func.max(Effort.value)).where(Effort.kind == "power", Effort.key == 1200))
+    suggested_ftp = int(round(float(best_20m) * 0.95)) if best_20m else None
+
+    missing = [
+        {"field": key, "label": label, "why": why}
+        for key, label, why in PROFILE_FIELDS
+        if not profile.get(key) and (key != "ftp" or suggested_ftp)
+    ]
+    if total == 0:
+        level = "low"
+    elif measured_share >= 0.6:
+        level = "high"
+    elif measured_share >= 0.25:
+        level = "medium"
+    else:
+        level = "low"
+    return {
+        "level": level,
+        "window_days": days,
+        "activities": total,
+        "load_methods": dict(methods),
+        "measured_share": round(measured_share, 2),
+        "missing": missing,
+        "suggestions": {
+            "hr_max": suggested_hr_max if not profile.get("hr_max") else None,
+            "ftp": suggested_ftp if not profile.get("ftp") else None,
+        },
+    }

@@ -538,6 +538,13 @@ def gear(f: insights.Filters = Depends(_filters), db: Session = Depends(get_sess
     return insights.gear_stats(db, f, store.get_preferences(db))
 
 
+@router.get("/insights/data-quality", tags=["insights"])
+def data_quality(db: Session = Depends(get_session)) -> dict[str, Any]:
+    """How much of the recent training load is measured (power / heart rate) vs estimated, which profile
+    values are missing, and values suggested from the recorded data."""
+    return insights.data_quality(db)
+
+
 @router.get("/insights/coverage", tags=["insights"])
 def coverage(db: Session = Depends(get_session)) -> dict[str, Any]:
     return insights.coverage(db)
@@ -713,8 +720,13 @@ class StravaSessionBody(BaseModel):
 
 
 def _save_strava_web_session(db: Session, cookies: dict[str, str], athlete: dict[str, Any]) -> None:
-    store.set_secret(db, STRAVA_WEB_SESSION, {"cookies": cookies})
+    """Store the session. A sync (and a retry of failed track downloads) only starts when this is a new
+    connection, another athlete, or it repairs an error — a refreshed cookie alone changes nothing."""
+    previous = store.get_secret(db, STRAVA_WEB_SESSION)
     existing = store.get_value(db, STRAVA_ATHLETE) or {}
+    had_error = store.get_value(db, "strava.error") is not None
+    new_athlete = bool(athlete.get("id")) and str(athlete.get("id")) != str(existing.get("id"))
+    store.set_secret(db, STRAVA_WEB_SESSION, {"cookies": cookies})
     store.set_value(
         db,
         STRAVA_ATHLETE,
@@ -729,12 +741,13 @@ def _save_strava_web_session(db: Session, cookies: dict[str, str], athlete: dict
         },
     )
     store.delete_value(db, "strava.error")
-    db.execute(
-        update(ProviderActivity)
-        .where(ProviderActivity.provider == "strava", ProviderActivity.track_status == "error")
-        .values(track_status="pending")
-    )
-    runner.trigger_soon()
+    if previous is None or new_athlete or had_error:
+        db.execute(
+            update(ProviderActivity)
+            .where(ProviderActivity.provider == "strava", ProviderActivity.track_status == "error")
+            .values(track_status="pending")
+        )
+        runner.trigger_soon()
 
 
 @router.put("/connections/strava/session", tags=["connections"])
@@ -775,10 +788,10 @@ def _public_ui_origin(request: Request) -> str:
 
 
 @router.get("/connections/strava/userscript.user.js", tags=["connections"])
-def strava_userscript_download(request: Request) -> Response:
+def strava_userscript_download(request: Request, db: Session = Depends(get_session)) -> Response:
     """Serve a personalized 1-click Tampermonkey/Userscript that auto-syncs Strava cookies."""
     origin = _public_ui_origin(request)
-    token = strava_userscript.issue_handoff_token()
+    token = strava_userscript.issue_handoff_token(db)
     script = strava_userscript.render_userscript(origin, token)
     return Response(
         content=script,
@@ -791,14 +804,33 @@ def strava_userscript_download(request: Request) -> Response:
 
 
 @public.post("/connections/strava/session/handoff", tags=["connections"])
-def strava_session_handoff(body: StravaHandoffBody, db: Session = Depends(get_session)) -> dict[str, Any]:
-    """Accept Strava session cookies from the installed userscript using its scoped HMAC token."""
-    if not strava_userscript.verify_handoff_token(body.token):
+def strava_session_handoff(
+    body: StravaHandoffBody, request: Request, db: Session = Depends(get_session)
+) -> dict[str, Any]:
+    """Accept Strava session cookies from the installed userscript using its scoped HMAC token.
+
+    Only served on the private (tailnet) listener: the userscript always calls the private UI host."""
+    if auth.is_public_listener(request.scope):
+        raise HTTPException(404, "Not found")
+    if not strava_userscript.verify_handoff_token(db, body.token):
         raise HTTPException(
             401, "Invalid or expired Strava handoff token — reinstall the userscript in Settings"
         )
     try:
         cookies = strava.parse_web_cookies(body.cookies)
+    except strava.StravaAuthError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    stored = (store.get_secret(db, STRAVA_WEB_SESSION) or {}).get("cookies") or {}
+    keys = ("_strava4_session", "strava_remember_token", "strava_remember_id")
+    if stored and all(cookies.get(k) == stored.get(k) for k in keys):
+        athlete = store.get_value(db, STRAVA_ATHLETE) or {}
+        return {
+            "ok": True,
+            "unchanged": True,
+            "athlete": {"id": athlete.get("id"), "name": athlete.get("name")},
+            "has_remember_token": "strava_remember_token" in stored,
+        }
+    try:
         with strava.StravaWebClient(cookies) as client:
             athlete = client.athlete()
             cookies = dict(client.cookies)
@@ -1109,7 +1141,9 @@ def strava_archive_from_file(body: ArchiveFile) -> dict[str, Any]:
 
 class CreateTrainingPlanBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
-    plan_type: Literal["trail_run", "road_run", "cycling", "triathlon", "duathlon", "base_build"] = "trail_run"
+    plan_type: Literal["trail_run", "road_run", "cycling", "triathlon", "duathlon", "base_build"] = (
+        "trail_run"
+    )
     start_date: str | None = None
     event_date: str
     goal_spec: dict[str, Any] = Field(default_factory=dict)
@@ -1157,11 +1191,7 @@ def list_training_plans(db: Session = Depends(get_session)) -> dict[str, Any]:
     from routepass.models import TrainingPlan
 
     plans = list(
-        db.scalars(
-            select(TrainingPlan).order_by(
-                TrainingPlan.status.asc(), TrainingPlan.created_at.desc()
-            )
-        )
+        db.scalars(select(TrainingPlan).order_by(TrainingPlan.status.asc(), TrainingPlan.created_at.desc()))
     )
     return {
         "plans": [training.serialize_plan_summary(p) for p in plans],
@@ -1170,9 +1200,7 @@ def list_training_plans(db: Session = Depends(get_session)) -> dict[str, Any]:
 
 
 @router.post("/training/plans", tags=["training"])
-def create_training_plan(
-    body: CreateTrainingPlanBody, db: Session = Depends(get_session)
-) -> dict[str, Any]:
+def create_training_plan(body: CreateTrainingPlanBody, db: Session = Depends(get_session)) -> dict[str, Any]:
     from routepass.analysis import training
 
     prefs = store.get_preferences(db)
@@ -1207,7 +1235,9 @@ def update_training_plan(
         plan.name = body.name.strip()[:200]
     if body.status is not None:
         if body.status == "active":
-            for prev in db.scalars(select(TrainingPlan).where(TrainingPlan.status == "active", TrainingPlan.id != plan.id)):
+            for prev in db.scalars(
+                select(TrainingPlan).where(TrainingPlan.status == "active", TrainingPlan.id != plan.id)
+            ):
                 prev.status = "archived"
         plan.status = body.status
     if body.event_date is not None:
@@ -1344,9 +1374,7 @@ def get_training_ai_config(db: Session = Depends(get_session)) -> dict[str, Any]
 
 
 @router.put("/training/ai-config", tags=["training"])
-def update_training_ai_config(
-    body: AIConfigBody, db: Session = Depends(get_session)
-) -> dict[str, Any]:
+def update_training_ai_config(body: AIConfigBody, db: Session = Depends(get_session)) -> dict[str, Any]:
     from routepass.ai import gemini
 
     return gemini.save_ai_config(
@@ -1472,7 +1500,10 @@ def sync_training_plan_calendar(plan_id: int, db: Session = Depends(get_session)
         cal_stats = gcal.sync_plan_to_calendar(db, plan)
     except gcal.GCalError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return {"calendar": cal_stats, "plan": training.serialize_plan_detail(db, plan, store.get_preferences(db))}
+    return {
+        "calendar": cal_stats,
+        "plan": training.serialize_plan_detail(db, plan, store.get_preferences(db)),
+    }
 
 
 # ── PWA Web Push Notifications ───────────────────────────────────────────────
@@ -1551,5 +1582,3 @@ def push_test(db: Session = Depends(get_session)) -> dict[str, Any]:
         kind="test",
         ignore_quiet=True,
     )
-
-

@@ -293,7 +293,9 @@ def trail_readiness(db: Session, prefs: dict[str, Any], *, weeks: int = 8) -> di
             }
         )
 
-    high_drift = [lr for lr in long_runs[:5] if lr.get("decoupling_pct") is not None and lr["decoupling_pct"] > 7.0]
+    high_drift = [
+        lr for lr in long_runs[:5] if lr.get("decoupling_pct") is not None and lr["decoupling_pct"] > 7.0
+    ]
     if high_drift:
         flags.append(
             {
@@ -433,13 +435,17 @@ def plan_gpx_race(
 
     baseline = _athlete_trail_baseline(db)
     # Default ultra-sustainable flat GAP: 88% of recent median training GAP (or 6:15/km fallback)
-    ref_gap = float(base_gap_speed_ms) if base_gap_speed_ms else (
-        float(baseline["median_gap_speed_ms"]) * 0.88 if baseline["median_gap_speed_ms"] else 2.65
+    ref_gap = (
+        float(base_gap_speed_ms)
+        if base_gap_speed_ms
+        else (float(baseline["median_gap_speed_ms"]) * 0.88 if baseline["median_gap_speed_ms"] else 2.65)
     )
     ref_gap = max(1.2, min(ref_gap, 5.5))
 
     # Build monotonic segment boundaries (in km)
-    stations = sorted({round(float(x), 2) for x in (aid_stations_km or []) if 0.5 < float(x) < total_km - 0.5})
+    stations = sorted(
+        {round(float(x), 2) for x in (aid_stations_km or []) if 0.5 < float(x) < total_km - 0.5}
+    )
     if not stations:
         # Default to ~10 km aid station splits
         step = 10.0 if total_km >= 25 else 5.0
@@ -488,7 +494,9 @@ def plan_gpx_race(
         )
 
     # Detect major climbs using synthetic time_s from predicted pacing
-    synth_track = trk.NormalizedTrack(time_s=cum_t, lat=track.lat, lon=track.lon, elevation_m=ele, distance_m=d)
+    synth_track = trk.NormalizedTrack(
+        time_s=cum_t, lat=track.lat, lon=track.lon, elevation_m=ele, distance_m=d
+    )
     climbs = trk.detect_climbs(synth_track)
 
     total_s = float(cum_t[-1])

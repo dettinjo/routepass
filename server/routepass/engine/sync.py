@@ -275,9 +275,7 @@ def _komoot_to_strava(db: Session, job: SyncJob, komoot: KomootClient, strava: S
             if ph_res["photos_uploaded"]:
                 job.reason = f"{job.reason}; {ph_res['photos_uploaded']} photo(s) synced"
             elif ph_res["errors"]:
-                logger.info(
-                    "Skipped Komoot→Strava photo sync for %s: %s", job.source_id, ph_res["errors"][0]
-                )
+                logger.info("Skipped Komoot→Strava photo sync for %s: %s", job.source_id, ph_res["errors"][0])
         except Exception as exc:  # noqa: BLE001
             logger.warning("Komoot→Strava photo sync failed for %s: %s", job.source_id, exc)
 

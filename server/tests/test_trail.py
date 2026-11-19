@@ -18,9 +18,7 @@ def _sample_gpx() -> str:
         pts.append(f'<trkpt lat="{lat:.6f}" lon="8.000000"><ele>{ele:.1f}</ele></trkpt>')
     return (
         '<?xml version="1.0" encoding="UTF-8"?>'
-        '<gpx version="1.1"><trk><name>Test 12k</name><trkseg>'
-        + "".join(pts)
-        + "</trkseg></trk></gpx>"
+        '<gpx version="1.1"><trk><name>Test 12k</name><trkseg>' + "".join(pts) + "</trkseg></trk></gpx>"
     )
 
 

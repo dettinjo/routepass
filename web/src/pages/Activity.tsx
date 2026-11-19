@@ -2,9 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { HBars } from "../components/charts";
-import {
+import { ICON,
   BrandIcon, IconDownload, IconExternal, IconHistory, IconLeft, IconLock, IconMap, IconRefresh, IconRight,
-  IconSync, IconTarget, IconTrophy, IconUnlock, MetricIcon, providerName,
+  IconCheck, IconSync, IconTarget, IconTrophy, IconUnlock, IconX, MetricIcon, providerName,
 } from "../components/icons";
 import { TrackMap } from "../components/maps";
 import { ActivityList } from "../components/shared";
@@ -15,7 +15,7 @@ import { familyColor } from "../lib/colors";
 import { activityDate, dateTime, duration, int, km, num, speed } from "../lib/format";
 import type { ActivityDetail, ActivityRow, TrackPoint } from "../lib/types";
 
-const ZONE_COLORS = ["var(--seq-1)", "var(--seq-2)", "var(--seq-3)", "var(--seq-4)", "var(--seq-5)", "var(--seq-6)", "var(--series-8)"];
+const ZONE_COLORS = ["var(--seq-1)", "var(--seq-2)", "var(--seq-3)", "var(--seq-4)", "var(--seq-5)", "var(--seq-6)", "var(--seq-6)"];
 const DIST_LABEL: Record<string, string> = {
   "400": "400 m", "1000": "1 km", "1609": "1 mile", "5000": "5 km", "10000": "10 km", "20000": "20 km", "21097": "Half marathon",
   "40000": "40 km", "42195": "Marathon", "50000": "50 km", "100000": "100 km", "160934": "100 miles",
@@ -123,13 +123,13 @@ function Analysis({ a, onSelectClimb }: { a: ActivityDetail; onSelectClimb?: (id
           <div className="list">
             {an.climbs.map((c, i) => (
               <div key={i} className="item" onClick={() => onSelectClimb?.(i)} style={{ cursor: onSelectClimb ? "pointer" : "default" }}>
-                <span className="sport-badge" style={{ width: 36, height: 36, background: "var(--warn-soft)", color: "var(--warn)" }}><MetricIcon.climb size={18} /></span>
+                <span className="sport-badge" style={{ width: 36, height: 36, background: "var(--warn-soft)", color: "var(--warn)" }}><MetricIcon.climb size={ICON.header} /></span>
                 <div className="main-col">
                   <b className="small">{int(c.gain_m)} m up · {num(c.grade_pct)} %</b>
                   <div className="metrics">
-                    <span><MetricIcon.distance size={13} />km {km(c.start_m)} – {km(c.end_m)}</span>
-                    <span><MetricIcon.time size={13} />{duration(c.duration_s, true)}</span>
-                    <span><MetricIcon.speed size={13} />{int(c.vam)} m/h</span>
+                    <span><MetricIcon.distance size={ICON.inline} />km {km(c.start_m)} – {km(c.end_m)}</span>
+                    <span><MetricIcon.time size={ICON.inline} />{duration(c.duration_s, true)}</span>
+                    <span><MetricIcon.speed size={ICON.inline} />{int(c.vam)} m/h</span>
                   </div>
                 </div>
               </div>
@@ -169,7 +169,7 @@ function SyncTab({ a }: { a: ActivityDetail }) {
                 <div className="main-col">
                   {s ? (
                     <>
-                      <a href={s.url} target="_blank" rel="noreferrer" className="name ellipsis row nowrap" style={{ gap: 4 }}>{s.name || s.external_id}<IconExternal size={14} /></a>
+                      <a href={s.url} target="_blank" rel="noreferrer" className="name ellipsis row nowrap" style={{ gap: 4 }}>{s.name || s.external_id}<IconExternal size={ICON.inline} /></a>
                       <span className="meta">{s.created_by_sync ? "Copy created by RoutePass" : "Original recording"}{s.match_locked ? " · linked by hand" : ""}{s.visibility ? ` · ${s.visibility}` : ""}</span>
                     </>
                   ) : (
@@ -181,7 +181,7 @@ function SyncTab({ a }: { a: ActivityDetail }) {
                 </div>
                 {s && live.length > 1 && (
                   <button className="sm ghost" onClick={() => confirm("Split this record into its own activity?") && action.mutate({ path: `/activities/${a.id}/unlink`, body: { source_id: s.id } })}>
-                    Not the same
+                    <IconX size={ICON.button} />Not the same
                   </button>
                 )}
                 {!s && !blocker && (
@@ -189,7 +189,7 @@ function SyncTab({ a }: { a: ActivityDetail }) {
                     onClick={() => action.mutate({ path: `/activities/${a.id}/sync`, body: { direction: dir.key } }, {
                       onSuccess: (r: any) => toast(r.job.status === "done" ? `Copied to ${providerName(p)}` : `${r.job.status}: ${r.job.reason || r.job.error || ""}`, r.job.status === "failed"),
                     })}>
-                    Copy now
+                    <IconSync size={ICON.button} />Copy now
                   </button>
                 )}
               </div>
@@ -256,7 +256,7 @@ function SyncTab({ a }: { a: ActivityDetail }) {
       )}
 
       <Card title={a.sync_locked ? "Locked from automatic sync" : "Automatic sync"} icon={a.sync_locked ? IconLock : IconUnlock}
-        actions={<button className="sm" onClick={() => action.mutate({ path: `/activities/${a.id}`, method: "PATCH", body: { sync_locked: !a.sync_locked } })}>{a.sync_locked ? "Unlock" : "Lock"}</button>}>
+        actions={<button className="sm" onClick={() => action.mutate({ path: `/activities/${a.id}`, method: "PATCH", body: { sync_locked: !a.sync_locked } })}>{a.sync_locked ? <><IconUnlock size={ICON.button} />Unlock</> : <><IconLock size={ICON.button} />Lock</>}</button>}>
         <p className="small secondary">{a.sync_locked ? "RoutePass will never copy this activity automatically." : "Rules decide whether this activity is copied. Lock it to keep it where it is."}</p>
       </Card>
 
@@ -265,7 +265,7 @@ function SyncTab({ a }: { a: ActivityDetail }) {
           <div className="list">
             {a.sync_jobs.map((j) => (
               <div key={j.id} className="item" style={{ cursor: "default" }}>
-                <span className="row nowrap" style={{ gap: 4 }}><BrandIcon provider={j.source_provider} size={16} /><IconRight size={14} /><BrandIcon provider={j.target_provider} size={16} /></span>
+                <span className="row nowrap" style={{ gap: 4 }}><BrandIcon provider={j.source_provider} size={16} /><IconRight size={ICON.inline} /><BrandIcon provider={j.target_provider} size={16} /></span>
                 <div className="main-col">
                   <span className="small">{j.reason}</span>
                   <span className="meta">{dateTime(j.updated_at)}{j.error ? ` · ${j.error.slice(0, 120)}` : ""}</span>
@@ -280,7 +280,7 @@ function SyncTab({ a }: { a: ActivityDetail }) {
       <Card title="Missed duplicate?" icon={IconTarget} hint="If another activity is the same recording, merge it into this one">
         <div className="row nowrap">
           <input placeholder="Other activity id" inputMode="numeric" value={mergeId} onChange={(e) => setMergeId(e.target.value)} />
-          <button disabled={!mergeId} onClick={() => action.mutate({ path: `/activities/${a.id}/merge`, body: { other_id: Number(mergeId) } }, { onSuccess: () => { setMergeId(""); toast("Merged"); } })}>Merge</button>
+          <button disabled={!mergeId} onClick={() => action.mutate({ path: `/activities/${a.id}/merge`, body: { other_id: Number(mergeId) } }, { onSuccess: () => { setMergeId(""); toast("Merged"); } })}><IconCheck size={ICON.button} />Merge</button>
         </div>
       </Card>
     </div>
@@ -332,18 +332,18 @@ export default function ActivityPage() {
   return (
     <>
       <div className="row between nowrap" style={{ marginBottom: 10 }}>
-        <button className="ghost sm" onClick={() => nav(-1)}><IconLeft size={16} />Back</button>
+        <button className="ghost sm" onClick={() => nav(-1)}><IconLeft size={ICON.button} />Back</button>
         <div className="row nowrap">
-          <button className="sm icon" disabled={!a.prev_id} onClick={() => nav(`/activities/${a.prev_id}`)} aria-label="Older activity"><IconLeft size={16} /></button>
-          <button className="sm icon" disabled={!a.next_id} onClick={() => nav(`/activities/${a.next_id}`)} aria-label="Newer activity"><IconRight size={16} /></button>
-          {a.has_track && <a className="btn sm" href={downloadUrl(`/activities/${a.id}/gpx`)} aria-label="Download GPX"><IconDownload size={16} /><span className="hide-mobile">GPX</span></a>}
+          <button className="sm icon" disabled={!a.prev_id} onClick={() => nav(`/activities/${a.prev_id}`)} aria-label="Older activity"><IconLeft size={ICON.button} /></button>
+          <button className="sm icon" disabled={!a.next_id} onClick={() => nav(`/activities/${a.next_id}`)} aria-label="Newer activity"><IconRight size={ICON.button} /></button>
+          {a.has_track && <a className="btn sm" href={downloadUrl(`/activities/${a.id}/gpx`)} aria-label="Download GPX"><IconDownload size={ICON.button} /><span className="hide-mobile">GPX</span></a>}
         </div>
       </div>
 
       <div className="row nowrap" style={{ gap: 12, marginBottom: 14, alignItems: "flex-start" }}>
         <SportBadge sport={a.sport} family={a.family} size={48} />
         <div className="grow">
-          <h1 className="clamp2" style={{ fontSize: 21, lineHeight: 1.25 }} title={a.name}>{a.name}{a.sync_locked && <IconLock size={16} className="muted" style={{ marginLeft: 6 }} />}</h1>
+          <h1 className="clamp2" style={{ fontSize: 21, lineHeight: 1.25 }} title={a.name}>{a.name}{a.sync_locked && <IconLock size={ICON.button} className="muted" style={{ marginLeft: 6 }} />}</h1>
           <div className="small muted" style={{ marginTop: 3 }}>{a.sport_label} · {activityDate(a)}{a.trainer ? " · indoor" : ""}{a.commute ? " · commute" : ""}{a.gear ? ` · ${a.gear}` : ""}{a.device ? ` · ${a.device}` : ""}</div>
         </div>
       </div>
@@ -386,7 +386,7 @@ export default function ActivityPage() {
               {track?.points.length ? <StreamStack points={track.points} family={a.family} onHover={onHover} /> : (
                 <Empty title={a.has_track ? "Loading…" : "No recording downloaded yet"} icon={IconRefresh}>
                   <button className="sm" onClick={() => action.mutate({ path: `/activities/${a.id}/refetch-track` }, { onSuccess: () => toast("Download queued") })}>
-                    <IconRefresh size={16} />Download now
+                    <IconRefresh size={ICON.button} />Download now
                   </button>
                 </Empty>
               )}

@@ -133,11 +133,17 @@ def test_calendar_and_push_rest_endpoints(tmp_path, monkeypatch):
         assert rs.json()["subscriptions"] == 1
 
         # Quiet hours helper check
-        assert push._in_quiet_hours(
-            {"quiet_start_hour": 22, "quiet_end_hour": 7, "timezone": "UTC"},
-            datetime(2026, 7, 8, 23, 30, tzinfo=UTC),
-        ) is True
-        assert push._in_quiet_hours(
-            {"quiet_start_hour": 22, "quiet_end_hour": 7, "timezone": "UTC"},
-            datetime(2026, 7, 8, 12, 0, tzinfo=UTC),
-        ) is False
+        assert (
+            push._in_quiet_hours(
+                {"quiet_start_hour": 22, "quiet_end_hour": 7, "timezone": "UTC"},
+                datetime(2026, 7, 8, 23, 30, tzinfo=UTC),
+            )
+            is True
+        )
+        assert (
+            push._in_quiet_hours(
+                {"quiet_start_hour": 22, "quiet_end_hour": 7, "timezone": "UTC"},
+                datetime(2026, 7, 8, 12, 0, tzinfo=UTC),
+            )
+            is False
+        )

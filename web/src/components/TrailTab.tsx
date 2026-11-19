@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { IconApi, IconImport, IconTarget, MetricIcon } from "./icons";
+import { ICON, IconApi, IconImport, IconTarget, MetricIcon } from "./icons";
 import { Callout, Card, Empty, Skeleton, Stat, useToast } from "./ui";
 import { api } from "../lib/api";
 import { duration, int, num } from "../lib/format";
@@ -242,7 +242,7 @@ export function TrailTab() {
             </div>
             <div className="row">
               <label className="btn primary sm" style={{ cursor: "pointer" }}>
-                <IconImport size={15} />
+                <IconImport size={ICON.button} />
                 {runPlan.isPending ? "Calculating…" : gpxName ? `Loaded: ${gpxName}` : "Choose GPX file"}
                 <input
                   type="file"

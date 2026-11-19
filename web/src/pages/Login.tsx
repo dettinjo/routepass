@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Logo } from "../components/Logo";
-import { IconKey } from "../components/icons";
+import { ICON, IconKey } from "../components/icons";
 import { Callout } from "../components/ui";
 import type { Me } from "../lib/api";
 
@@ -58,10 +58,10 @@ export default function Login({ me }: { me: Me | null }) {
               <label className="field">Access token
                 <input type="password" autoComplete="current-password" value={token} onChange={(e) => setToken(e.target.value)} autoFocus={!me?.methods.google} />
               </label>
-              <button className="primary" type="submit" disabled={!token || busy}><IconKey size={17} />Sign in</button>
+              <button className="primary" type="submit" disabled={!token || busy}><IconKey size={ICON.button} />Sign in</button>
             </form>
           ) : (
-            <button className="ghost sm" onClick={() => setShowToken(true)}><IconKey size={15} />Use the access token instead</button>
+            <button className="ghost sm" onClick={() => setShowToken(true)}><IconKey size={ICON.button} />Use the access token instead</button>
           )
         )}
       </div>
