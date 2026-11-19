@@ -759,19 +759,32 @@ class StravaWebClient:
             raise StravaAuthError("Could not obtain CSRF token from Strava web session")
         return self._csrf_token
 
+    def _get_following_strava_redirects(self, path_or_url: str, headers: dict[str, str]) -> httpx.Response:
+        url = path_or_url if path_or_url.startswith("http") else f"{BASE}{path_or_url}"
+        resp = self._http.get(url, headers=headers)
+        self._sync_cookies(resp)
+        for _ in range(4):
+            if resp.status_code not in (301, 302, 303, 307, 308):
+                break
+            loc = resp.headers.get("location", "")
+            if not loc or "/login" in loc or "/session" in loc:
+                break
+            if loc.startswith("/"):
+                next_url = f"{BASE}{loc}"
+            elif loc.startswith(BASE):
+                next_url = loc
+            else:
+                break
+            resp = self._http.get(next_url, headers=headers)
+            self._sync_cookies(resp)
+        return resp
+
     # ── endpoints ──────────────────────────────────────────────────────
     def athlete(self) -> dict[str, Any]:
-        resp = self._http.get(f"{BASE}/dashboard", headers={"Accept": "text/html,application/xhtml+xml"})
-        self._sync_cookies(resp)
+        headers = {"Accept": "text/html,application/xhtml+xml"}
+        resp = self._get_following_strava_redirects("/dashboard", headers)
         if self._is_auth_failure(resp) and self._try_renew_from_remember_token():
-            resp = self._http.get(f"{BASE}/dashboard", headers={"Accept": "text/html,application/xhtml+xml"})
-            self._sync_cookies(resp)
-        if resp.status_code in (301, 302, 303, 307, 308):
-            loc = resp.headers.get("location", "")
-            if "/login" in loc or "/session" in loc:
-                raise StravaAuthError("Strava web session expired — sign in again in Settings → Strava")
-            if loc.startswith("/"):
-                resp = self._http.get(f"{BASE}{loc}", headers={"Accept": "text/html,application/xhtml+xml"})
+            resp = self._get_following_strava_redirects("/dashboard", headers)
         self._check_redirect_or_login(resp, "/dashboard")
         body = resp.text
         if 'action="/session"' in body and "login" in body.lower() and "/athletes/" not in body:

@@ -37,7 +37,7 @@ def render_userscript(base_url: str, token: str) -> str:
     return f"""// ==UserScript==
 // @name         RoutePass Strava Auto-Connect
 // @namespace    {origin}/
-// @version      1.1.0
+// @version      1.2.0
 // @description  Automatically syncs your Strava session cookies (_strava4_session + strava_remember_token) to RoutePass when you sign in on strava.com.
 // @match        https://www.strava.com/*
 // @grant        GM_cookie
@@ -136,7 +136,20 @@ def render_userscript(base_url: str, token: str) -> str:
     return;
   }}
 
-  function readStravaCookies(force, cb) {{
+  function queryCookies(filter) {{
+    return new Promise((resolve) => {{
+      try {{
+        GM_cookie.list(filter, (cookies, error) => {{
+          if (error || !Array.isArray(cookies)) return resolve([]);
+          resolve(cookies);
+        }});
+      }} catch (_) {{
+        resolve([]);
+      }}
+    }});
+  }}
+
+  async function readStravaCookies(force, cb) {{
     if (typeof GM_cookie === "undefined" || typeof GM_cookie.list !== "function") {{
       showToast(
         "RoutePass: GM_cookie is unavailable. On Chrome/Edge install Tampermonkey BETA (not Stable) so HttpOnly cookies can be read.",
@@ -144,32 +157,36 @@ def render_userscript(base_url: str, token: str) -> str:
       );
       return;
     }}
-    // Empty filter returns both www.strava.com (host-only) and .strava.com cookies for this page.
-    GM_cookie.list({{}}, (cookies, error) => {{
-      if (error || !Array.isArray(cookies)) {{
-        if (force) {{
-          showToast("RoutePass: Could not read Strava cookies (" + (error || "unknown") + ")", "#b91c1c");
-        }}
-        return;
-      }}
-      const map = {{}};
-      for (const c of cookies) {{
+    // Query url, .strava.com, and explicit names so both host-only and domain cookies are captured.
+    const batches = await Promise.all([
+      queryCookies({{ url: "https://www.strava.com/" }}),
+      queryCookies({{ domain: ".strava.com" }}),
+      queryCookies({{ name: "_strava4_session" }}),
+      queryCookies({{ name: "strava_remember_token" }}),
+    ]);
+    const map = {{}};
+    for (const list of batches) {{
+      for (const c of list) {{
         if (c && c.name && c.value) {{
           map[c.name] = c.value;
         }}
       }}
-      console.info("[RoutePass] Found Strava cookies:", Object.keys(map).filter((k) => k.includes("strava")));
-      if (!map._strava4_session && !map.strava_remember_token) {{
-        if (force) {{
-          showToast(
-            "RoutePass: No _strava4_session cookie found. Make sure you are signed in and using Tampermonkey BETA.",
-            "#b91c1c"
-          );
-        }}
-        return;
+    }}
+    const keys = Object.keys(map);
+    console.info("[RoutePass] Found cookies:", keys);
+    if (!map._strava4_session && !map.strava_remember_token) {{
+      if (force) {{
+        const sample = keys.slice(0, 6).join(", ") || "none";
+        showToast(
+          "RoutePass: _strava4_session not visible (saw: " +
+            sample +
+            "). Note: Tampermonkey Stable hides HttpOnly cookies — use Tampermonkey BETA or paste Copy as cURL in Settings.",
+          "#b91c1c"
+        );
       }}
-      cb(map);
-    }});
+      return;
+    }}
+    cb(map);
   }}
 
   function syncCookies(cookies, force) {{

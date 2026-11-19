@@ -424,7 +424,7 @@ def test_strava_userscript_and_session_handoff(client, mock_apis) -> None:
     assert r.status_code == 200
     script = r.text
     assert "// ==UserScript==" in script
-    assert "GM_cookie.list({}" in script
+    assert 'queryCookies({ url: "https://www.strava.com/" })' in script
     assert 'const ROUTEPASS_URL = "https://routepass.example.ts.net";' in script
     assert "/api/v1/connections/strava/session/handoff" in script
 
