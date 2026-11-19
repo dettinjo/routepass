@@ -59,7 +59,7 @@ function Strava() {
         )}
         <div className="stack" style={{ gap: 8 }}>
           <p className="small muted" style={{ margin: 0 }}>
-            Sign in normally on <span className="mono">strava.com</span> (<b>Email 6-digit One-Time Code</b>, <b>Google</b>, <b>Apple</b>, or password) — no paid Strava API required. Install the tiny 1-click userscript once (requires <a href="https://www.tampermonkey.net/" target="_blank" rel="noreferrer">Tampermonkey 5+</a>), then click <b>Sign in to Strava</b> to capture and auto-refresh your session cookies.
+            Sign in normally on <span className="mono">strava.com</span> (<b>Email 6-digit One-Time Code</b>, <b>Google</b>, <b>Apple</b>, or password) — no paid Strava API required. Install the tiny 1-click userscript once (on Chrome/Edge requires <a href="https://chromewebstore.google.com/detail/tampermonkey-beta/gcalenpjmijncebpfijmoaglllgpjagf" target="_blank" rel="noreferrer">Tampermonkey BETA</a> for <span className="mono">GM_cookie</span>; on Firefox/Safari regular Tampermonkey works), then click <b>Sign in to Strava</b>.
           </p>
           <div className="row" style={{ gap: 8 }}>
             <a className="button sm" href="/api/v1/connections/strava/userscript.user.js" target="_blank" rel="noreferrer">

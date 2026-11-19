@@ -413,11 +413,19 @@ def test_strava_userscript_and_session_handoff(client, mock_apis) -> None:
     """Option 1: 1-click userscript download and cross-site scoped HMAC session handoff work end-to-end."""
     import re
 
-    r = client.get("/api/v1/connections/strava/userscript.user.js", headers=AUTH)
+    r = client.get(
+        "/api/v1/connections/strava/userscript.user.js",
+        headers={
+            **AUTH,
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "routepass.example.ts.net",
+        },
+    )
     assert r.status_code == 200
     script = r.text
     assert "// ==UserScript==" in script
-    assert "GM_cookie" in script
+    assert "GM_cookie.list({}" in script
+    assert 'const ROUTEPASS_URL = "https://routepass.example.ts.net";' in script
     assert "/api/v1/connections/strava/session/handoff" in script
 
     m = re.search(r'const HANDOFF_TOKEN = "([^"]+)";', script)

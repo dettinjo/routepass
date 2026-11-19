@@ -700,10 +700,22 @@ class StravaHandoffBody(BaseModel):
     cookies: dict[str, str] | str
 
 
+def _public_ui_origin(request: Request) -> str:
+    """Resolve the HTTPS UI origin behind reverse proxies (e.g. tailscale serve)."""
+    configured = get_settings().base_url.rstrip("/")
+    if configured and configured not in ("http://localhost:8000", "http://127.0.0.1:8000"):
+        return configured
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "http"
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if host:
+        return f"{proto}://{host}".rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
 @router.get("/connections/strava/userscript.user.js", tags=["connections"])
 def strava_userscript_download(request: Request) -> Response:
     """Serve a personalized 1-click Tampermonkey/Userscript that auto-syncs Strava cookies."""
-    origin = str(request.base_url).rstrip("/") or get_settings().base_url.rstrip("/")
+    origin = _public_ui_origin(request)
     token = strava_userscript.issue_handoff_token()
     script = strava_userscript.render_userscript(origin, token)
     return Response(
