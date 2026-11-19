@@ -304,12 +304,26 @@ function GeminiAICard() {
   });
   const [apiKey, setApiKey] = useState("");
   const [budget, setBudget] = useState("");
+  const [modelFast, setModelFast] = useState("gemini-4-hydrogen");
+  const [modelPro, setModelPro] = useState("gemini-4-hydrogen");
 
   useEffect(() => {
-    if (data?.monthly_budget_usd != null && budget === "") {
+    if (!data) return;
+    if (data.monthly_budget_usd != null && budget === "") {
       setBudget(String(data.monthly_budget_usd));
     }
+    if (data.model_fast) setModelFast(data.model_fast);
+    if (data.model_pro) setModelPro(data.model_pro);
   }, [data, budget]);
+
+  const models: { id: string; label: string; input_usd_per_m: number; output_usd_per_m: number }[] =
+    data?.available_models || [
+      { id: "gemini-4-hydrogen", label: "Gemini 4 Hydrogen (Recommended · Fast & efficient)", input_usd_per_m: 1.5, output_usd_per_m: 7.5 },
+      { id: "gemini-4-argon", label: "Gemini 4 Argon (Frontier reasoning)", input_usd_per_m: 2.0, output_usd_per_m: 10.0 },
+      { id: "gemini-4-carbon", label: "Gemini 4 Carbon (Flagship reasoning)", input_usd_per_m: 4.0, output_usd_per_m: 20.0 },
+      { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash (Previous fast)", input_usd_per_m: 1.5, output_usd_per_m: 7.5 },
+      { id: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash-Lite (Ultra low-cost)", input_usd_per_m: 0.1, output_usd_per_m: 0.4 },
+    ];
 
   const save = useMutation({
     mutationFn: (body: Record<string, unknown>) => api("/training/ai-config", { method: "PUT", body }),
@@ -341,9 +355,6 @@ function GeminiAICard() {
               Month <b>{data.usage.month}</b>: <b>${data.usage.spent_usd.toFixed(4)}</b> / ${data.monthly_budget_usd.toFixed(2)} USD
               ({data.usage.calls} calls · {int(data.usage.input_tokens + data.usage.output_tokens)} tokens)
             </span>
-            <span>
-              Models: <span className="mono">{data.model_fast}</span> / <span className="mono">{data.model_pro}</span>
-            </span>
           </div>
         )}
         <div className="fields">
@@ -368,6 +379,30 @@ function GeminiAICard() {
             />
           </label>
         </div>
+        <div className="fields">
+          <label className="field">
+            Daily Adaptation Model (fast / low thinking)
+            <select value={modelFast} onChange={(e) => setModelFast(e.target.value)}>
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label} (${m.input_usd_per_m}/${m.output_usd_per_m} per 1M)
+                </option>
+              ))}
+              {!models.some((m) => m.id === modelFast) && <option value={modelFast}>{modelFast}</option>}
+            </select>
+          </label>
+          <label className="field">
+            Plan Generation Model (deep / high thinking)
+            <select value={modelPro} onChange={(e) => setModelPro(e.target.value)}>
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label} (${m.input_usd_per_m}/${m.output_usd_per_m} per 1M)
+                </option>
+              ))}
+              {!models.some((m) => m.id === modelPro) && <option value={modelPro}>{modelPro}</option>}
+            </select>
+          </label>
+        </div>
         <div className="row" style={{ gap: 8 }}>
           <button
             className="sm primary"
@@ -376,6 +411,8 @@ function GeminiAICard() {
               save.mutate({
                 ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
                 ...(budget ? { monthly_budget_usd: Number(budget) } : {}),
+                model_fast: modelFast,
+                model_pro: modelPro,
               })
             }
           >

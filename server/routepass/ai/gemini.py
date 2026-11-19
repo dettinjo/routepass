@@ -38,6 +38,39 @@ MODEL_PRICING_USD_PER_M: dict[str, tuple[float, float]] = {
     "gemini-2.5-pro": (1.25, 10.00),
 }
 
+AVAILABLE_MODELS: list[dict[str, Any]] = [
+    {
+        "id": "gemini-4-hydrogen",
+        "label": "Gemini 4 Hydrogen (Recommended · Fast & efficient)",
+        "input_usd_per_m": 1.50,
+        "output_usd_per_m": 7.50,
+    },
+    {
+        "id": "gemini-4-argon",
+        "label": "Gemini 4 Argon (Frontier reasoning)",
+        "input_usd_per_m": 2.00,
+        "output_usd_per_m": 10.00,
+    },
+    {
+        "id": "gemini-4-carbon",
+        "label": "Gemini 4 Carbon (Flagship reasoning)",
+        "input_usd_per_m": 4.00,
+        "output_usd_per_m": 20.00,
+    },
+    {
+        "id": "gemini-3.8-flash",
+        "label": "Gemini 3.8 Flash (Previous fast)",
+        "input_usd_per_m": 1.50,
+        "output_usd_per_m": 7.50,
+    },
+    {
+        "id": "gemini-3.5-flash-lite",
+        "label": "Gemini 3.5 Flash-Lite (Ultra low-cost)",
+        "input_usd_per_m": 0.10,
+        "output_usd_per_m": 0.40,
+    },
+]
+
 _SECRET_KEY = "gemini.credentials"
 _CONFIG_KEY = "gemini.config"
 
@@ -79,6 +112,7 @@ def get_ai_config(db: Session) -> dict[str, Any]:
         "monthly_budget_usd": round(budget, 2),
         "model_fast": model_fast,
         "model_pro": model_pro,
+        "available_models": AVAILABLE_MODELS,
         "usage": usage,
         "remaining_usd": round(max(0.0, budget - usage["spent_usd"]), 4),
     }
