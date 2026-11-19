@@ -5,6 +5,7 @@ import { BrandIcon, IconApi, IconRefresh, IconTarget, IconImport, IconUser } fro
 import { Callout, Card, Seg, Skeleton, useToast } from "../components/ui";
 import { StravaArchive } from "../components/StravaArchive";
 import { AppearanceCard, GoalsCard, PlacesCard } from "../components/SettingsExtras";
+import { GoogleCalendarCard, PushNotificationsCard } from "../components/TrainingIntegrations";
 import { api, type Me } from "../lib/api";
 import { clearOfflineData } from "../lib/pwa";
 import { useQuery } from "@tanstack/react-query";
@@ -266,6 +267,8 @@ export default function Settings() {
         )}
         <AppearanceCard />
         <GeminiAICard />
+        <GoogleCalendarCard />
+        <PushNotificationsCard />
 
         <Card title="API & MCP" icon={IconApi} hint="Everything in this UI is available programmatically">
           <div className="stack">

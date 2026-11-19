@@ -1268,6 +1268,8 @@ def serialize_plan_detail(
                 "week_id": s.week_id,
                 "scheduled_date": s.scheduled_date,
                 "scheduled_slot": s.scheduled_slot,
+                "scheduled_start": s.scheduled_start,
+                "scheduled_end": s.scheduled_end,
                 "sport": s.sport,
                 "session_type": s.session_type,
                 "priority": s.priority,
@@ -1320,20 +1322,62 @@ def serialize_plan_detail(
 
 
 def sync_active_plans_after_ingest(db: Session, prefs: dict[str, Any]) -> dict[str, Any]:
-    """Called after Strava/Komoot sync: match activities and auto-adapt if needed."""
+    """Called after Strava/Komoot sync: match activities, auto-adapt, sync Google Calendar & push alerts."""
+    from routepass import push
+    from routepass.providers import gcal
+
     plans = list(db.scalars(select(TrainingPlan).where(TrainingPlan.status == "active")))
     total_matched = 0
     total_missed = 0
     adapted = 0
+    cal_synced = 0
+    gcal_cfg = gcal.get_config(db)
+    push_prefs = push.get_prefs(db)
+
     for plan in plans:
         res = match_activities_to_plan(db, plan)
         total_matched += res["matched"]
         total_missed += res["missed"]
+        if res["matched"] > 0 and push_prefs.get("notify_completed", True):
+            push.send_notification(
+                db,
+                title=f"{plan.name}: Workout synced",
+                body=f"Matched {res['matched']} activity to your training plan.",
+                url="/insights/training",
+                kind="completed",
+            )
         if res["missed"] > 0 or res["matched"] > 0:
             try:
                 ad = adapt_plan(db, plan, prefs, trigger="auto_sync", force=False)
                 if ad.get("adapted") and ad.get("diff"):
                     adapted += 1
+                    if push_prefs.get("notify_adapted", True):
+                        push.send_notification(
+                            db,
+                            title=f"{plan.name}: Plan adapted",
+                            body=ad.get("summary") or "Upcoming sessions were automatically adjusted.",
+                            url="/insights/training",
+                            kind="adapted",
+                        )
             except Exception:  # noqa: BLE001
                 logger.exception("Auto-adaptation failed for plan %s", plan.id)
-    return {"plans": len(plans), "matched": total_matched, "missed": total_missed, "adapted": adapted}
+
+        if gcal_cfg.get("connected") and gcal_cfg.get("target_calendar_id") and gcal_cfg.get("auto_sync", True):
+            try:
+                gcal.sync_plan_to_calendar(db, plan)
+                cal_synced += 1
+            except Exception:  # noqa: BLE001
+                logger.exception("Google Calendar auto-sync failed for plan %s", plan.id)
+
+    try:
+        push.dispatch_due_reminders(db)
+    except Exception:  # noqa: BLE001
+        logger.exception("Push reminder dispatch failed")
+
+    return {
+        "plans": len(plans),
+        "matched": total_matched,
+        "missed": total_missed,
+        "adapted": adapted,
+        "calendar_synced": cal_synced,
+    }

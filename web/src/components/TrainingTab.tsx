@@ -555,6 +555,15 @@ export function TrainingTab() {
     onError: (e: Error) => toast(e.message, true),
   });
 
+  const calSyncMut = useMutation({
+    mutationFn: () => api<any>(`/training/plans/${activeId}/sync-calendar`, { method: "POST" }),
+    onSuccess: (r) => {
+      qc.setQueryData(["training-plan", activeId], r.plan);
+      toast(`Calendar synced: ${r.calendar.created} created, ${r.calendar.updated} updated`);
+    },
+    onError: (e: Error) => toast(e.message, true),
+  });
+
   const adaptMut = useMutation({
     mutationFn: () =>
       api<any>(`/training/plans/${activeId}/adapt`, {
@@ -766,9 +775,14 @@ export function TrainingTab() {
               <Card
                 title="AI Coach Adaptation"
                 actions={
-                  <button className="sm" disabled={matchMut.isPending} onClick={() => matchMut.mutate()}>
-                    {matchMut.isPending ? "Matching…" : "Match Activities"}
-                  </button>
+                  <div className="row" style={{ gap: 6 }}>
+                    <button className="sm" disabled={calSyncMut.isPending} onClick={() => calSyncMut.mutate()}>
+                      {calSyncMut.isPending ? "Syncing Cal…" : "Sync Calendar"}
+                    </button>
+                    <button className="sm" disabled={matchMut.isPending} onClick={() => matchMut.mutate()}>
+                      {matchMut.isPending ? "Matching…" : "Match Activities"}
+                    </button>
+                  </div>
                 }
               >
                 <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
@@ -915,7 +929,12 @@ export function TrainingTab() {
                             {s.target_distance_km > 0 && ` · ${num(s.target_distance_km, 1)} km`}
                             {s.target_elev_m > 0 && ` · +${int(s.target_elev_m)} m`}
                             {s.target_tss > 0 && ` · ${int(s.target_tss)} TSS`}
-                            {s.scheduled_slot && ` · ${s.scheduled_slot}`}
+                            {s.scheduled_start && s.scheduled_end
+                              ? ` · ${s.scheduled_start.slice(11, 16)}–${s.scheduled_end.slice(11, 16)}`
+                              : s.scheduled_slot
+                                ? ` · ${s.scheduled_slot}`
+                                : ""}
+                            {s.gcal_event_id && " · Calendar synced"}
                             {s.compliance_score != null && ` · Compliance ${Math.round(s.compliance_score)}%`}
                           </div>
 

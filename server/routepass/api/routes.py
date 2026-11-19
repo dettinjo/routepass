@@ -1282,3 +1282,198 @@ def update_training_ai_config(
         model_pro=body.model_pro,
     )
 
+
+# ── Google Calendar Integration ──────────────────────────────────────────────
+
+
+class GCalConfigBody(BaseModel):
+    target_calendar_id: str | None = None
+    target_calendar_name: str | None = None
+    busy_calendar_ids: list[str] | None = None
+    timezone: str | None = None
+    buffer_minutes: int | None = Field(default=None, ge=0, le=120)
+    auto_sync: bool | None = None
+    slot_windows: dict[str, list[str]] | None = None
+
+
+class GCalAppBody(BaseModel):
+    client_id: str
+    client_secret: str
+
+
+class CreateCalendarBody(BaseModel):
+    name: str = "RoutePass Training"
+
+
+@router.get("/connections/google-calendar", tags=["calendar"])
+def gcal_status(db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass.providers import gcal
+
+    return gcal.get_config(db)
+
+
+@router.put("/connections/google-calendar/config", tags=["calendar"])
+def gcal_save_config(body: GCalConfigBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass.providers import gcal
+
+    return gcal.save_config(db, body.model_dump(exclude_none=True))
+
+
+@router.put("/connections/google-calendar/app", tags=["calendar"])
+def gcal_save_app(body: GCalAppBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass.providers import gcal
+
+    return gcal.save_oauth_app(db, body.client_id, body.client_secret)
+
+
+@router.get("/connections/google-calendar/authorize", tags=["calendar"])
+def gcal_authorize(db: Session = Depends(get_session)) -> dict[str, str]:
+    from routepass.providers import gcal
+
+    try:
+        url, redir = gcal.start_authorize(db)
+    except gcal.GCalError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"url": url, "redirect_uri": redir}
+
+
+@public.get("/connections/google-calendar/callback", tags=["calendar"])
+def gcal_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    db: Session = Depends(get_session),
+) -> RedirectResponse:
+    from routepass.providers import gcal
+
+    base = get_settings().base_url.rstrip("/")
+    if error or not code:
+        return RedirectResponse(f"{base}/settings?gcal=error")
+    try:
+        gcal.exchange_code(db, code, state)
+    except gcal.GCalError:
+        return RedirectResponse(f"{base}/settings?gcal=error")
+    return RedirectResponse(f"{base}/settings?gcal=connected")
+
+
+@router.delete("/connections/google-calendar", tags=["calendar"])
+def gcal_disconnect(db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass.providers import gcal
+
+    return gcal.disconnect(db)
+
+
+@router.get("/connections/google-calendar/calendars", tags=["calendar"])
+def gcal_calendars(db: Session = Depends(get_session)) -> list[dict[str, Any]]:
+    from routepass.providers import gcal
+
+    try:
+        return gcal.list_calendars(db)
+    except gcal.GCalError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/connections/google-calendar/calendars", tags=["calendar"])
+def gcal_create_calendar(body: CreateCalendarBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass.providers import gcal
+
+    try:
+        return gcal.create_training_calendar(db, body.name)
+    except gcal.GCalError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/training/plans/{plan_id}/sync-calendar", tags=["training"])
+def sync_training_plan_calendar(plan_id: int, db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass.analysis import training
+    from routepass.models import TrainingPlan
+    from routepass.providers import gcal
+
+    plan = db.get(TrainingPlan, plan_id)
+    if plan is None:
+        raise HTTPException(404, "Training plan not found")
+    try:
+        cal_stats = gcal.sync_plan_to_calendar(db, plan)
+    except gcal.GCalError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"calendar": cal_stats, "plan": training.serialize_plan_detail(db, plan, store.get_preferences(db))}
+
+
+# ── PWA Web Push Notifications ───────────────────────────────────────────────
+
+
+class PushConfigBody(BaseModel):
+    enabled: bool | None = None
+    reminder_minutes_before: int | None = Field(default=None, ge=5, le=1440)
+    notify_adapted: bool | None = None
+    notify_completed: bool | None = None
+    quiet_start_hour: int | None = Field(default=None, ge=0, le=23)
+    quiet_end_hour: int | None = Field(default=None, ge=0, le=23)
+    timezone: str | None = None
+
+
+class PushSubscribeBody(BaseModel):
+    endpoint: str
+    keys: dict[str, str]
+
+
+class PushUnsubscribeBody(BaseModel):
+    endpoint: str
+
+
+@router.get("/push/config", tags=["push"])
+def push_config(db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass import push
+
+    return push.get_prefs(db)
+
+
+@router.put("/push/config", tags=["push"])
+def push_save_config(body: PushConfigBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass import push
+
+    return push.save_prefs(db, body.model_dump(exclude_none=True))
+
+
+@router.post("/push/subscribe", tags=["push"])
+def push_subscribe(
+    body: PushSubscribeBody, request: Request, db: Session = Depends(get_session)
+) -> dict[str, Any]:
+    from routepass import push
+
+    p256dh = body.keys.get("p256dh", "")
+    auth_sec = body.keys.get("auth", "")
+    if not p256dh or not auth_sec:
+        raise HTTPException(422, "Missing push subscription keys (p256dh / auth)")
+    push.save_subscription(
+        db,
+        endpoint=body.endpoint,
+        p256dh=p256dh,
+        auth_secret=auth_sec,
+        user_agent=request.headers.get("user-agent", ""),
+    )
+    return push.get_prefs(db)
+
+
+@router.delete("/push/subscribe", tags=["push"])
+def push_unsubscribe(body: PushUnsubscribeBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass import push
+
+    push.delete_subscription(db, body.endpoint)
+    return push.get_prefs(db)
+
+
+@router.post("/push/test", tags=["push"])
+def push_test(db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass import push
+
+    return push.send_notification(
+        db,
+        title="RoutePass Training Reminder",
+        body="Push notifications are working! You'll get pre-workout & adaptation alerts here.",
+        url="/insights/training",
+        kind="test",
+        ignore_quiet=True,
+    )
+
+
