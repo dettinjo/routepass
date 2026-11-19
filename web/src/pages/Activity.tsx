@@ -201,9 +201,9 @@ function SyncTab({ a }: { a: ActivityDetail }) {
 
       {hasKomoot && hasStrava && (
         <Card
-          title="Sync Title, Description & Photos (Komoot → Strava)"
+          title="Copy Komoot details to Strava"
           icon={IconRefresh}
-          hint="Push updated Komoot metadata and tour photos to the linked Strava activity (photos require Strava Web Session)"
+          hint="Title, description and photos from the Komoot tour, onto this Strava activity"
         >
           <div className="stack" style={{ gap: 10 }}>
             <div className="row" style={{ gap: 16, flexWrap: "wrap" }}>
@@ -217,7 +217,7 @@ function SyncTab({ a }: { a: ActivityDetail }) {
               </label>
               <label className="row xs" style={{ gap: 6, cursor: "pointer" }}>
                 <input type="checkbox" checked={syncPhotos} onChange={(e) => setSyncPhotos(e.target.checked)} />
-                <span>Photos (via Strava Web Session)</span>
+                <span>Photos</span>
               </label>
             </div>
             <div className="row">
@@ -249,7 +249,7 @@ function SyncTab({ a }: { a: ActivityDetail }) {
                   )
                 }
               >
-                {action.isPending ? "Syncing to Strava…" : "Push Komoot Details & Photos to Strava"}
+                {action.isPending ? "Copying to Strava…" : "Copy to Strava"}
               </button>
             </div>
           </div>
