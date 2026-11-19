@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import gzip
 import html
 import io
@@ -402,6 +403,20 @@ _CURL_COOKIE_RE = re.compile(
 )
 
 
+def _remember_id_from_jwt(token: str) -> str | None:
+    """Decode `sub` (athlete ID) from Strava's `strava_remember_token` JWT payload."""
+    parts = token.split(".")
+    if len(parts) < 2:
+        return None
+    try:
+        padded = parts[1] + "=" * (-len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded))
+        sub = payload.get("sub")
+        return str(sub).strip() if sub else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def parse_web_cookies(cookie_input: str | dict[str, str], remember_token: str = "") -> dict[str, str]:
     """Parse a Cookie header, 'Copy as cURL' snippet, DevTools table row, JSON dict, or raw value."""
     cookies: dict[str, str] = {}
@@ -425,6 +440,7 @@ def parse_web_cookies(cookie_input: str | dict[str, str], remember_token: str = 
                     if len(cols) >= 2 and cols[0] in (
                         "_strava4_session",
                         "strava_remember_token",
+                        "strava_remember_id",
                         "_strava_idcf",
                     ):
                         cookies[cols[0]] = cols[1]
@@ -432,7 +448,9 @@ def parse_web_cookies(cookie_input: str | dict[str, str], remember_token: str = 
             raw = raw.split(":", 1)[1].strip()
         if not cookies and "\t" in raw:
             cols = [c.strip() for c in raw.split("\t") if c.strip()]
-            if len(cols) >= 2 and cols[0].startswith("_strava") or cols[0] == "strava_remember_token":
+            if len(cols) >= 2 and (
+                cols[0].startswith("_strava") or cols[0] in ("strava_remember_token", "strava_remember_id")
+            ):
                 cookies[cols[0]] = cols[1]
         if not cookies and raw.startswith("{") and raw.endswith("}"):
             try:
@@ -459,6 +477,9 @@ def parse_web_cookies(cookie_input: str | dict[str, str], remember_token: str = 
                 cookies["_strava4_session"] = raw
     if remember_token and remember_token.strip():
         cookies["strava_remember_token"] = remember_token.strip()
+    if cookies.get("strava_remember_token") and not cookies.get("strava_remember_id"):
+        if derived_id := _remember_id_from_jwt(cookies["strava_remember_token"]):
+            cookies["strava_remember_id"] = derived_id
     if not cookies.get("_strava4_session") and not cookies.get("strava_remember_token"):
         raise StravaAuthError("Provide `_strava4_session` or `strava_remember_token` cookie from strava.com")
     return cookies
@@ -698,13 +719,17 @@ class StravaWebClient:
         return False
 
     def _try_renew_from_remember_token(self) -> bool:
-        """Use `strava_remember_token` to mint a fresh `_strava4_session` when the old session expires."""
+        """Use `strava_remember_token` + `strava_remember_id` to mint a fresh `_strava4_session`."""
         remember = self.cookies.get("strava_remember_token")
         if not remember:
             return False
+        remember_id = self.cookies.get("strava_remember_id") or _remember_id_from_jwt(remember)
         old_session = self.cookies.get("_strava4_session")
         self._http.cookies.delete("_strava4_session")
         self._http.cookies.set("strava_remember_token", remember)
+        if remember_id:
+            self.cookies["strava_remember_id"] = remember_id
+            self._http.cookies.set("strava_remember_id", remember_id)
         url = f"{BASE}/dashboard"
         resp: httpx.Response | None = None
         for _ in range(4):

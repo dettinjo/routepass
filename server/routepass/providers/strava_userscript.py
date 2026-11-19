@@ -37,7 +37,7 @@ def render_userscript(base_url: str, token: str) -> str:
     return f"""// ==UserScript==
 // @name         RoutePass Strava Auto-Connect
 // @namespace    {origin}/
-// @version      1.2.0
+// @version      1.2.1
 // @description  Automatically syncs your Strava session cookies (_strava4_session + strava_remember_token) to RoutePass when you sign in on strava.com.
 // @match        https://www.strava.com/*
 // @grant        GM_cookie
@@ -163,6 +163,7 @@ def render_userscript(base_url: str, token: str) -> str:
       queryCookies({{ domain: ".strava.com" }}),
       queryCookies({{ name: "_strava4_session" }}),
       queryCookies({{ name: "strava_remember_token" }}),
+      queryCookies({{ name: "strava_remember_id" }}),
     ]);
     const map = {{}};
     for (const list of batches) {{
@@ -190,7 +191,12 @@ def render_userscript(base_url: str, token: str) -> str:
   }}
 
   function syncCookies(cookies, force) {{
-    const fp = (cookies._strava4_session || "") + "|" + (cookies.strava_remember_token || "");
+    const fp =
+      (cookies._strava4_session || "") +
+      "|" +
+      (cookies.strava_remember_token || "") +
+      "|" +
+      (cookies.strava_remember_id || "");
     let prev = "";
     try {{
       prev = localStorage.getItem(FP_KEY) || "";
