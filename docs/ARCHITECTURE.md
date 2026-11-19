@@ -99,15 +99,10 @@ Fernet-encrypted at rest.
 - Since 30 June 2026 a Strava API application in the Standard Tier only works while the account that owns it has
   a paid Strava subscription; otherwise every API call returns `403 {"resource":"Application","field":"Status",
   "code":"Inactive"}` while OAuth keeps working.
-- **Option 1 — Web Session Client (`StravaWebClient`, `PUT /api/v1/connections/strava/session`)**: authenticates
-  with browser session cookies (`_strava4_session` and optional `strava_remember_token`, accepted as a raw cookie,
-  `Cookie:` header, DevTools *Copy as cURL*, *Copy Request Headers*, or cookie table rows — compatible with Strava's
-  Email 6-digit One-Time Code, Google, and Apple sign-in flows). Uses `strava.com/dashboard` (CSRF + athlete profile),
-  `/athlete/training_activities` (paginated JSON activity list), `/activities/{id}/streams` (with `/export_original`
-  and `/export_gpx` fallback), and `/upload/files` + `/upload/progress` + `PATCH /activities/{id}` so continuous
-  **Strava ⇄ Komoot** sync works in both directions without a paid Strava subscription. When both OAuth and a web
-  session are configured (`mode: "oauth+web"`), `StravaClient` automatically falls back to `StravaWebClient` if the
-  v3 API returns `403 Application Status: Inactive`, while persisting rotated session cookies encrypted at rest.
+- **Option 1 — Web Session Client (`StravaWebClient`, `GET /api/v1/connections/strava/userscript.user.js`, `POST /api/v1/connections/strava/session/handoff`, `PUT /api/v1/connections/strava/session`)**:
+  - **1-Click Userscript Auto-Connector (`providers/strava_userscript.py`, 0 MB Docker overhead)**: RoutePass serves a personalized Tampermonkey/Userscript (`.user.js`) embedded with a scoped HMAC handoff token (`purpose: "strava_session_sync"`). Clicking **Sign in to Strava** opens `strava.com/dashboard#routepass-connect` in the user's normal browser (supporting Email 6-digit One-Time Code, Google, Apple, or password with *Remember me* auto-checked). Once signed in, the script reads `HttpOnly` `_strava4_session` and `strava_remember_token` via `GM_cookie.list`, posts them to `/api/v1/connections/strava/session/handoff`, and redirects back to RoutePass Settings (and silently syncs updated cookies whenever the user visits `strava.com`).
+  - **Automatic Cookie Rotation & Renewal**: `StravaWebClient` persists rotated `Set-Cookie` headers on every poll and automatically uses `strava_remember_token` (`_try_renew_from_remember_token()`) to mint a fresh `_strava4_session` cookie whenever an old session expires.
+  - **Full Bidirectional Sync**: uses `strava.com/dashboard` (CSRF + athlete profile), `/athlete/training_activities` (paginated JSON activity list), `/activities/{id}/streams` (with `/export_original` and `/export_gpx` fallback), and `/upload/files` + `/upload/progress` + `PATCH /activities/{id}` so continuous **Strava ⇄ Komoot** sync works in both directions without a paid Strava subscription. When both OAuth and a web session are configured (`mode: "oauth+web"`), `StravaClient` automatically falls back to `StravaWebClient` if the v3 API returns `403 Application Status: Inactive`.
 - **Option 2 — Personal Data Export (`engine/strava_archive.py`)**: imports a user's bulk Strava `.zip` export
   (`activities.csv` + FIT/GPX/TCX originals, protected under API Policy §6.6) as `strava` records keyed by Strava's
   activity id, so historical analysis, deduplication and Strava → Komoot copies work offline without the API.

@@ -688,13 +688,57 @@ class StravaWebClient:
         if changed and self.on_refresh:
             self.on_refresh(dict(self.cookies))
 
+    def _is_auth_failure(self, resp: httpx.Response) -> bool:
+        if resp.status_code in (401, 403):
+            return True
+        if resp.status_code in (301, 302, 303, 307, 308):
+            loc = resp.headers.get("location", "")
+            if "/login" in loc or "/session" in loc or "/onboarding" in loc:
+                return True
+        return False
+
+    def _try_renew_from_remember_token(self) -> bool:
+        """Use `strava_remember_token` to mint a fresh `_strava4_session` when the old session expires."""
+        remember = self.cookies.get("strava_remember_token")
+        if not remember:
+            return False
+        old_session = self.cookies.get("_strava4_session")
+        self._http.cookies.delete("_strava4_session")
+        self._http.cookies.set("strava_remember_token", remember)
+        url = f"{BASE}/dashboard"
+        resp: httpx.Response | None = None
+        for _ in range(4):
+            resp = self._http.get(url, headers={"Accept": "text/html,application/xhtml+xml"})
+            self._sync_cookies(resp)
+            if resp.status_code in (301, 302, 303, 307, 308):
+                loc = resp.headers.get("location", "")
+                if not loc or "/login" in loc:
+                    break
+                url = loc if loc.startswith("http") else f"{BASE}{loc}"
+                continue
+            break
+        new_session = self.cookies.get("_strava4_session")
+        if (
+            resp is not None
+            and resp.status_code == 200
+            and new_session
+            and new_session != old_session
+            and 'action="/session"' not in resp.text
+        ):
+            self._extract_csrf(resp.text)
+            return True
+        if old_session:
+            self.cookies["_strava4_session"] = old_session
+            self._http.cookies.set("_strava4_session", old_session)
+        return False
+
     def _check_redirect_or_login(self, resp: httpx.Response, path: str) -> None:
         self._sync_cookies(resp)
         if resp.status_code in (301, 302, 303, 307, 308):
             loc = resp.headers.get("location", "")
             if "/login" in loc or "/session" in loc or "/onboarding" in loc:
                 raise StravaAuthError(
-                    "Strava web session expired or rejected — update your cookie in Settings"
+                    "Strava web session expired or rejected — sign in again in Settings → Strava"
                 )
         if resp.status_code in (401, 403):
             raise StravaAuthError(f"Strava web session rejected on {path} ({resp.status_code})")
@@ -718,16 +762,20 @@ class StravaWebClient:
     # ── endpoints ──────────────────────────────────────────────────────
     def athlete(self) -> dict[str, Any]:
         resp = self._http.get(f"{BASE}/dashboard", headers={"Accept": "text/html,application/xhtml+xml"})
+        self._sync_cookies(resp)
+        if self._is_auth_failure(resp) and self._try_renew_from_remember_token():
+            resp = self._http.get(f"{BASE}/dashboard", headers={"Accept": "text/html,application/xhtml+xml"})
+            self._sync_cookies(resp)
         if resp.status_code in (301, 302, 303, 307, 308):
             loc = resp.headers.get("location", "")
             if "/login" in loc or "/session" in loc:
-                raise StravaAuthError("Strava web session expired — paste a fresh cookie in Settings")
+                raise StravaAuthError("Strava web session expired — sign in again in Settings → Strava")
             if loc.startswith("/"):
                 resp = self._http.get(f"{BASE}{loc}", headers={"Accept": "text/html,application/xhtml+xml"})
         self._check_redirect_or_login(resp, "/dashboard")
         body = resp.text
         if 'action="/session"' in body and "login" in body.lower() and "/athletes/" not in body:
-            raise StravaAuthError("Strava web session is not signed in — paste a fresh cookie in Settings")
+            raise StravaAuthError("Strava web session is not signed in — sign in again in Settings → Strava")
         self._extract_csrf(body)
 
         athlete_id: int | str | None = None
@@ -764,15 +812,17 @@ class StravaWebClient:
         }
 
     def _fetch_training_page(self, web_page: int) -> list[dict[str, Any]]:
-        resp = self._http.get(
-            f"{BASE}/athlete/training_activities",
-            params={"new_activity_only": "false", "page": web_page, "per_page": 20},
-            headers={
-                "X-Requested-With": "XMLHttpRequest",
-                "Accept": "application/json, text/javascript, */*; q=0.01",
-                "Referer": f"{BASE}/athlete/training",
-            },
-        )
+        headers = {
+            "X-Requested-With": "XMLHttpRequest",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Referer": f"{BASE}/athlete/training",
+        }
+        params = {"new_activity_only": "false", "page": web_page, "per_page": 20}
+        resp = self._http.get(f"{BASE}/athlete/training_activities", params=params, headers=headers)
+        self._sync_cookies(resp)
+        if self._is_auth_failure(resp) and self._try_renew_from_remember_token():
+            resp = self._http.get(f"{BASE}/athlete/training_activities", params=params, headers=headers)
+            self._sync_cookies(resp)
         self._check_redirect_or_login(resp, "/athlete/training_activities")
         try:
             payload = resp.json()

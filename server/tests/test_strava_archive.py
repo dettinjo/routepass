@@ -355,3 +355,108 @@ def test_strava_oauth_inactive_falls_back_to_web_session(client, connected, mock
     res = runner.run_cycle("test", tracks=False)
     assert res["status"] == "ok", res
     assert res["stats"]["import_strava"]["new"] == 1
+
+
+def test_strava_remember_token_auto_renews_expired_session(mock_apis) -> None:
+    """When _strava4_session expires, StravaWebClient uses strava_remember_token to mint a new session cookie."""
+    from routepass.providers import strava
+
+    refreshed: list[dict[str, str]] = []
+    calls = {"training": 0}
+
+    def training_handler(request: httpx.Request) -> httpx.Response:
+        calls["training"] += 1
+        cookie_hdr = request.headers.get("cookie", "")
+        if "renewed-session-cookie" not in cookie_hdr:
+            return httpx.Response(302, headers={"Location": "https://www.strava.com/login"})
+        return httpx.Response(
+            200,
+            json={
+                "models": [
+                    {
+                        "id": 9901,
+                        "name": "Auto Renewed Ride",
+                        "sport_type": "Ride",
+                        "start_date_local_raw": 1778231510,
+                        "distance_raw": 15000.0,
+                        "moving_time_raw": 1800,
+                        "elevation_gain_raw": 120.0,
+                    }
+                ]
+            },
+        )
+
+    mock_apis.get("https://www.strava.com/athlete/training_activities").mock(side_effect=training_handler)
+    mock_apis.get("https://www.strava.com/dashboard").mock(
+        return_value=httpx.Response(
+            200,
+            text='<html><head><meta name="csrf-token" content="csrf-renewed" /></head>'
+            '<body><a href="/athletes/77777">Jonathan</a></body></html>',
+            headers={"Set-Cookie": "_strava4_session=renewed-session-cookie; Path=/; HttpOnly"},
+        )
+    )
+
+    with strava.StravaWebClient(
+        {"_strava4_session": "expired-cookie", "strava_remember_token": "long-lived-remember"},
+        on_refresh=lambda c: refreshed.append(c),
+    ) as web_client:
+        items = web_client.list_activities(page=1, per_page=20)
+        assert len(items) == 1
+        assert items[0]["id"] == 9901
+        assert web_client.cookies["_strava4_session"] == "renewed-session-cookie"
+
+    assert calls["training"] == 2
+    assert refreshed and refreshed[-1]["_strava4_session"] == "renewed-session-cookie"
+
+
+def test_strava_userscript_and_session_handoff(client, mock_apis) -> None:
+    """Option 1: 1-click userscript download and cross-site scoped HMAC session handoff work end-to-end."""
+    import re
+
+    r = client.get("/api/v1/connections/strava/userscript.user.js", headers=AUTH)
+    assert r.status_code == 200
+    script = r.text
+    assert "// ==UserScript==" in script
+    assert "GM_cookie" in script
+    assert "/api/v1/connections/strava/session/handoff" in script
+
+    m = re.search(r'const HANDOFF_TOKEN = "([^"]+)";', script)
+    assert m, "handoff token missing from userscript"
+    token = m.group(1)
+
+    # Invalid token is rejected
+    bad = client.post(
+        "/api/v1/connections/strava/session/handoff",
+        json={"token": "invalid.token", "cookies": {"_strava4_session": "abc"}},
+        headers={"Authorization": "Bearer invalid.token", "Origin": "https://www.strava.com"},
+    )
+    assert bad.status_code == 401
+
+    # Valid scoped token from strava.com origin passes PR #25 CSRF gate and connects Strava
+    mock_apis.get("https://www.strava.com/dashboard").mock(
+        return_value=httpx.Response(
+            200,
+            text='<html><head><meta name="csrf-token" content="csrf-u1" /></head>'
+            '<body><a href="/athletes/88888">Jonathan</a></body></html>',
+        )
+    )
+    ok = client.post(
+        "/api/v1/connections/strava/session/handoff",
+        json={
+            "token": token,
+            "cookies": {
+                "_strava4_session": "userscript-session-val",
+                "strava_remember_token": "userscript-remember-val",
+            },
+        },
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Origin": "https://www.strava.com",
+            "Sec-Fetch-Site": "cross-site",
+        },
+    )
+    assert ok.status_code == 200, ok.text
+    body = ok.json()
+    assert body["ok"] is True
+    assert body["has_remember_token"] is True
+    assert body["athlete"]["id"] == 88888
