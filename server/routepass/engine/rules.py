@@ -295,7 +295,17 @@ def decide(
         sport = actions.get("sport") or sports.strava_to_komoot(act.sport)
     plan: dict[str, Any] = {"name": name[:250], "description": desc, "sport": sport}
     if target == "strava" and actions.get("strava"):
-        plan["strava"] = actions["strava"]
+        plan["strava"] = dict(actions["strava"])
     if target == "komoot":
         plan["komoot"] = {"visibility": "private", **(actions.get("komoot") or {})}
+    # The copy gets the original's visibility, unless the rule itself sets one.
+    from routepass.engine import visibility as vis
+
+    rule_actions = (rule.actions or {}) if rule else {}
+    src = next((s for s in act.sources if s.provider == DIRECTION_SOURCE[direction] and not s.deleted), None)
+    level = vis.level_of(src) if direction_prefs.get("match_visibility", True) else None
+    if level and target == "komoot" and not (rule_actions.get("komoot") or {}).get("visibility"):
+        plan["komoot"]["visibility"] = level
+    if level and target == "strava" and not (rule_actions.get("strava") or {}).get("visibility"):
+        plan["strava"] = {**(plan.get("strava") or {}), "visibility": vis.to_strava(level)}
     return Decision(True, rule.id if rule else None, reason, plan)

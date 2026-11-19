@@ -474,6 +474,22 @@ def _record_copy(db: Session, job: SyncJob, target_id: str) -> None:
     rec.activity_id = act.id
     rec.created_by_sync = True
     rec.deleted = False
+    # Remember the visibility the copy was created with and the original's level at that time, so a
+    # later change on the original carries over (engine/visibility.propagate).
+    from routepass.engine import visibility as vis
+
+    original = next(
+        (s for s in act.sources if not s.deleted and not s.created_by_sync and s.id != rec.id), None
+    )
+    target_level = (
+        (job.plan.get("komoot") or {}).get("visibility")
+        if job.target_provider == "komoot"
+        else {"everyone": "public", "followers_only": "friends", "only_me": "private"}.get(
+            (job.plan.get("strava") or {}).get("visibility")
+        )
+    )
+    if target_level in vis.LEVELS:
+        vis._remember(rec, target_level, original=vis.level_of(original) or target_level)
     db.flush()
     refresh_activity(db, act.id)
 

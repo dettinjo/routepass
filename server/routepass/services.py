@@ -229,7 +229,10 @@ def merge_activities(db: Session, activity_id: int, other_id: int) -> dict[str, 
     if clash:
         raise ValueError("both activities already have a record on " + ", ".join(s.provider for s in clash))
     for s in list(other.sources):
-        s.activity_id = act.id
+        # Move through the relationship, not the column: records left in other.sources would be
+        # unlinked (activity_id = NULL) when `other` is deleted below, and the next sync would then
+        # split them off into a new activity — the merged duplicate came back.
+        s.activity = act
         s.match_locked = True
     db.execute(SyncJob.__table__.update().where(SyncJob.activity_id == other.id).values(activity_id=act.id))
     db.flush()

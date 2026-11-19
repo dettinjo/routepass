@@ -13,6 +13,12 @@ def provider_url(provider: str, external_id: str) -> str:
     return f"https://www.komoot.com/tour/{external_id}"
 
 
+def _level(s: ProviderActivity) -> str | None:
+    from routepass.engine import visibility as vis
+
+    return vis.level_of(s)
+
+
 def source(s: ProviderActivity) -> dict[str, Any]:
     return {
         "id": s.id,
@@ -27,8 +33,16 @@ def source(s: ProviderActivity) -> dict[str, Any]:
         "match_locked": s.match_locked,
         "deleted": s.deleted,
         "track_status": s.track_status,
-        "visibility": s.raw.get("visibility") or s.raw.get("status"),
+        "visibility": _level(s),
     }
+
+
+def _visibility(live: list[ProviderActivity]) -> dict[str, Any]:
+    from routepass.engine import visibility as vis
+
+    per = {s.provider: vis.level_of(s) for s in live}
+    known = {v for v in per.values() if v}
+    return {"by_provider": per, "mismatch": len(known) > 1}
 
 
 def activity_row(a: Activity) -> dict[str, Any]:
@@ -54,6 +68,7 @@ def activity_row(a: Activity) -> dict[str, Any]:
         "polyline": a.polyline,
         "providers": sorted({s.provider for s in live}),
         "copies": sorted({s.provider for s in live if s.created_by_sync}),
+        "visibility": _visibility(live),
         "sync_locked": a.sync_locked,
     }
 

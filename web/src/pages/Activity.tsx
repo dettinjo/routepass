@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { HBars } from "../components/charts";
+import { PhotoGallery, VisibilityCard, VisibilityMark } from "../components/ActivityMedia";
 import { ICON,
   BrandIcon, IconDownload, IconExternal, IconHistory, IconLeft, IconLock, IconMap, IconRefresh, IconRight,
   IconCheck, IconSync, IconTarget, IconTrophy, IconUnlock, IconX, MetricIcon, providerName,
@@ -344,7 +345,7 @@ export default function ActivityPage() {
         <SportBadge sport={a.sport} family={a.family} size={48} />
         <div className="grow">
           <h1 className="clamp2" style={{ fontSize: 21, lineHeight: 1.25 }} title={a.name}>{a.name}{a.sync_locked && <IconLock size={ICON.button} className="muted" style={{ marginLeft: 6 }} />}</h1>
-          <div className="small muted" style={{ marginTop: 3 }}>{a.sport_label} · {activityDate(a)}{a.trainer ? " · indoor" : ""}{a.commute ? " · commute" : ""}{a.gear ? ` · ${a.gear}` : ""}{a.device ? ` · ${a.device}` : ""}</div>
+          <div className="small muted" style={{ marginTop: 3 }}>{a.sport_label} · {activityDate(a)}{a.trainer ? " · indoor" : ""}{a.commute ? " · commute" : ""}{a.gear ? ` · ${a.gear}` : ""}{a.device ? ` · ${a.device}` : ""} <VisibilityMark v={a.visibility} /></div>
         </div>
       </div>
 
@@ -378,6 +379,7 @@ export default function ActivityPage() {
             </div>
           </Card>
           {a.load_method === "estimate" && <Callout>Training load is estimated from duration. Add your max heart rate or FTP in <Link to="/settings">Settings</Link> for real values.</Callout>}
+          <PhotoGallery activityId={a.id} />
           <div className="grid g2">
             <Card title="Route" icon={IconMap} hint={climbSegs.length ? "Climbs in orange" : undefined}>
               <TrackMap points={latlng} highlight={highlight} climbs={climbSegs} focusClimb={focusClimb} />
@@ -392,6 +394,7 @@ export default function ActivityPage() {
               )}
             </Card>
           </div>
+          <VisibilityCard a={a} />
         </div>
       )}
       {tab === "analysis" && <Analysis a={a} onSelectClimb={onSelectClimb} />}

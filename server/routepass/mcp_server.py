@@ -494,6 +494,25 @@ def test_rule(direction: str, conditions: dict, rule_id: int | None = None, limi
 
 
 @mcp.tool()
+def get_activity_media(activity_id: int) -> dict:
+    """Photo (and Strava video) URLs of an activity from Strava and Komoot."""
+    from routepass.engine import media
+
+    with session_scope() as db:
+        return media.activity_media(db, services.get_activity(db, activity_id))
+
+
+@mcp.tool()
+def set_activity_visibility(activity_id: int, level: str, providers: list[str] | None = None) -> dict:
+    """Set who can see an activity: level 'public' | 'friends' | 'private', on both platforms by default
+    (or only `providers`, e.g. ['komoot'])."""
+    from routepass.engine import visibility
+
+    with session_scope() as db:
+        return visibility.set_for_activity(db, services.get_activity(db, activity_id), level, providers)
+
+
+@mcp.tool()
 def get_data_quality() -> dict:
     """How much recent training load is measured (power / heart rate) rather than estimated, which profile
     values are missing, and values (max HR, FTP) suggested from the recorded data. Set them with
@@ -712,6 +731,39 @@ def adapt_training_plan(plan_id: int | None = None, user_note: str = "") -> dict
         return training.adapt_plan(
             db, plan, store.get_preferences(db), trigger="mcp", user_note=user_note, force=True
         )
+
+
+@mcp.tool()
+def rate_training_session(
+    session_id: int, rpe: int | None = None, feel: str | None = None, note: str = ""
+) -> dict[str, Any]:
+    """Record how a session felt: rpe 1–10 and feel 'easy' | 'right' | 'hard'. The effort becomes the
+    activity's load when nothing was measured; two 'hard' (or 'easy') in a row adjust the next sessions."""
+    from routepass.analysis import training_extras
+    from routepass.models import TrainingSession
+
+    with session_scope() as db:
+        s = db.get(TrainingSession, session_id)
+        if s is None:
+            return {"error": f"Session {session_id} not found"}
+        return training_extras.rate_session(db, s, rpe=rpe, feel=feel, note=note)
+
+
+@mcp.tool()
+def change_training_session(session_id: int, kind: str, minutes: int | None = None) -> dict[str, Any]:
+    """Change one session: kind 'shorter' (to `minutes`), 'easier', 'swap' (with the next session)
+    or 'original' (undo the change)."""
+    from routepass.analysis import training_extras
+    from routepass.models import TrainingSession
+
+    with session_scope() as db:
+        s = db.get(TrainingSession, session_id)
+        if s is None:
+            return {"error": f"Session {session_id} not found"}
+        try:
+            return training_extras.apply_variant(db, s, kind, minutes)
+        except ValueError as exc:
+            return {"error": str(exc)}
 
 
 @mcp.tool()

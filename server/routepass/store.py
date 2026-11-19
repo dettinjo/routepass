@@ -21,11 +21,13 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
         "strava_to_komoot": {
             "enabled": False,
             "default_action": "sync",
+            "match_visibility": True,  # copies get the original's visibility (and follow later changes)
             "defaults": {"komoot": {"visibility": "private"}},
         },
         "komoot_to_strava": {
             "enabled": False,
             "default_action": "sync",
+            "match_visibility": True,
             "sync_photos": True,
             "defaults": {},
         },

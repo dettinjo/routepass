@@ -398,6 +398,34 @@ class UnlinkBody(BaseModel):
     source_id: int
 
 
+@router.get("/activities/{activity_id}/media", tags=["activities"])
+def activity_media(
+    activity_id: int, refresh: bool = False, db: Session = Depends(get_session)
+) -> dict[str, Any]:
+    """Photos (and Strava videos) of an activity from Strava and Komoot. Images load straight from the
+    platforms' CDNs; lists are cached for a few hours (refresh=true re-reads them)."""
+    from routepass.engine import media
+
+    act = _call(services.get_activity, db, activity_id)
+    return media.activity_media(db, act, refresh)
+
+
+class VisibilityBody(BaseModel):
+    level: Literal["public", "friends", "private"]
+    providers: list[Literal["strava", "komoot"]] | None = None
+
+
+@router.put("/activities/{activity_id}/visibility", tags=["activities"])
+def set_activity_visibility(
+    activity_id: int, body: VisibilityBody, db: Session = Depends(get_session)
+) -> dict[str, Any]:
+    """Who can see this activity, set on Strava and Komoot together (or only the given platforms)."""
+    from routepass.engine import visibility
+
+    act = _call(services.get_activity, db, activity_id)
+    return visibility.set_for_activity(db, act, body.level, body.providers)
+
+
 @router.post("/activities/{activity_id}/unlink", tags=["activities"])
 def unlink(activity_id: int, body: UnlinkBody, db: Session = Depends(get_session)) -> dict[str, Any]:
     return _call(services.unlink_source, db, activity_id, body.source_id)
@@ -1350,6 +1378,56 @@ def update_training_session(
         "compliance_score": s.compliance_score,
         "adaptation_note": s.adaptation_note,
     }
+
+
+class SessionFeedbackBody(BaseModel):
+    rpe: int | None = Field(default=None, ge=1, le=10)
+    feel: Literal["easy", "right", "hard"] | None = None
+    note: str = ""
+
+
+@router.post("/training/sessions/{session_id}/feedback", tags=["training"])
+def training_session_feedback(
+    session_id: int, body: SessionFeedbackBody, db: Session = Depends(get_session)
+) -> dict[str, Any]:
+    """How a session felt (effort 1–10 and too easy / right / too hard). The effort becomes the
+    activity's training load when no power or heart rate was recorded; two sessions in a row that
+    felt too hard ease the next ones (too easy: raise them slightly)."""
+    from routepass.analysis import training, training_extras
+    from routepass.models import TrainingPlan, TrainingSession
+
+    s = db.get(TrainingSession, session_id)
+    if s is None:
+        raise HTTPException(404, "Training session not found")
+    result = training_extras.rate_session(db, s, rpe=body.rpe, feel=body.feel, note=body.note)
+    plan = db.get(TrainingPlan, s.plan_id)
+    return {"result": result, "plan": training.serialize_plan_detail(db, plan, store.get_preferences(db))}
+
+
+class SessionVariantBody(BaseModel):
+    kind: Literal["shorter", "easier", "swap", "original"]
+    minutes: int | None = Field(default=None, ge=10, le=600)
+
+
+@router.post("/training/sessions/{session_id}/variant", tags=["training"])
+def training_session_variant(
+    session_id: int, body: SessionVariantBody, db: Session = Depends(get_session)
+) -> dict[str, Any]:
+    """Change one session for today: shorter (to the minutes you have), easier (same time, easy
+    effort), swap (with the next session) or original (undo)."""
+    from routepass.analysis import training, training_extras
+    from routepass.models import TrainingPlan, TrainingSession
+
+    s = db.get(TrainingSession, session_id)
+    if s is None:
+        raise HTTPException(404, "Training session not found")
+    try:
+        result = training_extras.apply_variant(db, s, body.kind, body.minutes)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    plan = db.get(TrainingPlan, s.plan_id)
+    training._maybe_sync_calendar(db, plan)
+    return {"result": result, "plan": training.serialize_plan_detail(db, plan, store.get_preferences(db))}
 
 
 class SkipAdaptSessionBody(BaseModel):

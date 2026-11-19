@@ -352,12 +352,29 @@ class StravaClient:
         return self._call_with_fallback("wait_for_upload", _api, upload_id, attempts=attempts, delay=delay)
 
     def update_activity(self, activity_id: str, **fields: Any) -> dict[str, Any]:
+        # The API cannot change visibility; the web session can. Without it, visibility is skipped.
+        visibility = fields.pop("visibility", None)
+        if visibility is not None:
+            fields.pop("private", None)
+            if self.web_fallback is not None:
+                try:
+                    self.web_fallback.update_activity(activity_id, visibility=visibility)
+                except StravaError as exc:
+                    logger.warning("Could not set Strava visibility on %s: %s", activity_id, exc)
+        if not fields:
+            return {"id": activity_id}
         return self._call_with_fallback(
             "update_activity",
             lambda: self._request("PUT", f"/activities/{activity_id}", json=fields).json(),
             activity_id,
             **fields,
         )
+
+    def activity_photos(self, activity_id: str) -> list[dict[str, Any]]:
+        """Photos need the web session (the API only returns them to approved apps)."""
+        if self.web_fallback is None:
+            return []
+        return self.web_fallback.activity_photos(activity_id)
 
     def upload_photo(
         self,
@@ -1151,7 +1168,10 @@ class StravaWebClient:
                 payload["type"] = v
             elif k == "private":
                 payload["private"] = bool(v)
-                payload["visibility"] = "only_me" if v else "everyone"
+                payload.setdefault("visibility", "only_me" if v else "everyone")
+            elif k == "visibility":
+                payload["visibility"] = v
+                payload["private"] = v == "only_me"
             else:
                 payload[k] = v
         if not payload:
@@ -1171,6 +1191,40 @@ class StravaWebClient:
             return resp.json()
         except ValueError:
             return {"id": activity_id, **payload}
+
+    def activity_photos(self, activity_id: str) -> list[dict[str, Any]]:
+        """Photos and videos of an activity, read from the photosJson the activity page embeds."""
+        resp = self._http.get(
+            f"{BASE}/activities/{activity_id}", headers={"Accept": "text/html,application/xhtml+xml"}
+        )
+        self._check_redirect_or_login(resp, f"/activities/{activity_id}")
+        m = re.search(r"photosJson\s*=\s*(\[.*?\]);\s*\n", resp.text, re.S)
+        if not m:
+            return []
+        try:
+            items = json.loads(m.group(1))
+        except ValueError:
+            return []
+        out = []
+        for it in items if isinstance(items, list) else []:
+            url = it.get("large") or it.get("thumbnail")
+            if not url:
+                continue
+            dims = ((it.get("dimensions") or {}).get("large")) or {}
+            out.append(
+                {
+                    "id": str(it.get("photo_id") or it.get("id") or url),
+                    "url": url,
+                    "thumb": it.get("thumbnail") or url,
+                    "caption": html.unescape(it.get("caption_escaped") or ""),
+                    "video": it.get("video"),
+                    "lat": it.get("lat"),
+                    "lng": it.get("lng"),
+                    "width": dims.get("width"),
+                    "height": dims.get("height"),
+                }
+            )
+        return out
 
     def upload_photo(
         self,

@@ -2308,6 +2308,10 @@ def serialize_plan_detail(
             "load": a.load,
         }
 
+    from routepass.analysis import training_extras as tx
+
+    week_by_id = {w.id: w for w in weeks}
+    week_by_index = {w.week_index: w for w in weeks}
     sessions_by_week: dict[int, list[dict[str, Any]]] = {}
     for s in sessions:
         sessions_by_week.setdefault(s.week_id, []).append(
@@ -2331,6 +2335,19 @@ def serialize_plan_detail(
                 "status": s.status,
                 "matched_activity_id": s.matched_activity_id,
                 "matched_activity": _matched(s.matched_activity_id),
+                "compliance_level": tx.compliance_level(s, today),
+                "why": tx.session_why(
+                    s,
+                    week_by_id.get(s.week_id),
+                    week_by_index.get(week_by_id[s.week_id].week_index - 1)
+                    if s.week_id in week_by_id
+                    else None,
+                ),
+                "zone": tx.SESSION_ZONE.get(s.session_type),
+                "rpe": s.rpe,
+                "feel": s.feel,
+                "feedback_note": s.feedback_note,
+                "changed": s.original_target is not None,
                 "compliance_score": s.compliance_score,
                 "gcal_event_id": s.gcal_event_id,
                 "adaptation_note": s.adaptation_note,
@@ -2339,6 +2356,7 @@ def serialize_plan_detail(
 
     out = serialize_plan_summary(plan)
     out["analytics"] = analytics
+    out["zones"] = tx.personal_zones(prefs.get("profile") or {}, analytics.get("baseline") or {})
     out["ai"] = gemini.get_ai_config(db)
     out["weeks"] = [
         {

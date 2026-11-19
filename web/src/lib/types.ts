@@ -5,6 +5,7 @@ export interface ActivityRow {
   avg_speed_ms: number | null; avg_hr: number | null; avg_power: number | null; load: number | null;
   has_track: boolean; trainer: boolean; commute: boolean; polyline: string | null;
   providers: string[]; copies: string[]; sync_locked: boolean;
+  visibility?: { by_provider: Record<string, string | null>; mismatch: boolean };
 }
 
 export interface Source {
@@ -77,7 +78,7 @@ export interface Preferences {
   places: Place[];
   trail_race?: TrailRaceGoal;
 }
-export interface DirectionPrefs { enabled: boolean; default_action: "sync" | "skip"; sync_photos?: boolean; defaults: Record<string, any> }
+export interface DirectionPrefs { enabled: boolean; default_action: "sync" | "skip"; sync_photos?: boolean; match_visibility?: boolean; defaults: Record<string, any> }
 
 export interface SyncRun { id: number; trigger: string; status: string; started_at: string; finished_at: string | null; stats: Record<string, any>; log: string[] }
 
