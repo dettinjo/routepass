@@ -270,6 +270,21 @@ class StravaClient:
     def athlete(self) -> dict[str, Any]:
         return self._call_with_fallback("athlete", lambda: self._request("GET", "/athlete").json())
 
+    def gear_map(self, athlete_id: str | int | None = None) -> dict[str, str]:
+        """Return `{gear_id: display_name}` for bikes and shoes."""
+        def _api() -> dict[str, str]:
+            ath = self._request("GET", "/athlete").json()
+            out: dict[str, str] = {}
+            for group in ("bikes", "shoes"):
+                for g in ath.get(group) or []:
+                    gid = g.get("id")
+                    name = (g.get("name") or g.get("nickname") or "").strip()
+                    if gid and name:
+                        out[str(gid)] = name
+            return out
+
+        return self._call_with_fallback("gear_map", _api, athlete_id)
+
     def list_activities(
         self, after: int | None = None, before: int | None = None, page: int = 1, per_page: int = 200
     ) -> list[dict[str, Any]]:
@@ -903,6 +918,49 @@ class StravaWebClient:
             if len(batch) < 20 or (after is not None and older_than_after == len(batch)):
                 break
         return collected
+
+    def gear_map(self, athlete_id: str | int | None = None) -> dict[str, str]:
+        """Fetch bike and shoe names from `/athletes/{id}/gear/{bikes,shoes}`."""
+        aid = athlete_id or self.cookies.get("strava_remember_id")
+        if not aid:
+            aid = self.athlete().get("id")
+        if not aid:
+            return {}
+        headers = {
+            "X-Requested-With": "XMLHttpRequest",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Referer": f"{BASE}/settings/gear",
+        }
+        out: dict[str, str] = {}
+        for kind, prefix in (("bikes", "b"), ("shoes", "g")):
+            url = f"{BASE}/athletes/{aid}/gear/{kind}"
+            resp = self._http.get(url, headers=headers)
+            self._sync_cookies(resp)
+            if self._is_auth_failure(resp) and self._try_renew_from_remember_token():
+                resp = self._http.get(url, headers=headers)
+                self._sync_cookies(resp)
+            if resp.status_code != 200:
+                continue
+            try:
+                items = resp.json()
+            except ValueError:
+                continue
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if not isinstance(item, dict) or not item.get("id"):
+                    continue
+                gid = str(item["id"]).strip()
+                name = (
+                    item.get("display_name")
+                    or item.get("name")
+                    or f"{item.get('brand_name') or ''} {item.get('model_name') or ''}".strip()
+                )
+                if gid and name:
+                    clean = html.unescape(str(name)).strip()
+                    out[gid] = clean
+                    out[f"{prefix}{gid}"] = clean
+        return out
 
     def activity(self, activity_id: str) -> dict[str, Any]:
         resp = self._http.get(

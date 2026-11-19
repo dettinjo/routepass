@@ -188,6 +188,18 @@ def import_strava(
 ) -> ImportStats:
     stats = ImportStats()
     state = store.get_value(db, "strava.import", {}) or {}
+    # Refresh Strava bike/shoe ID -> name map and replace any numeric IDs already stored.
+    try:
+        athlete_meta = store.get_value(db, "strava.athlete") or {}
+        if hasattr(client, "gear_map"):
+            fetched_gear = client.gear_map(athlete_meta.get("id"))
+            if fetched_gear:
+                merged_gear = {**(store.get_value(db, "strava.gear") or {}), **fetched_gear}
+                store.set_value(db, "strava.gear", merged_gear)
+                for gid, gname in merged_gear.items():
+                    db.execute(update(Activity).where(Activity.gear == gid).values(gear=gname))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Strava gear name lookup skipped: %s", exc)
     last_full = parse_iso(state.get("last_full"))
     full = full or all_time or last_full is None or utcnow() - last_full > FULL_RESCAN_EVERY
     history_start = None if all_time else _history_start(db)
@@ -414,7 +426,12 @@ def refresh_activity(db: Session, activity_id: int) -> Activity | None:
     act.work_kj = sr.get("kilojoules")
     act.trainer = bool(sr.get("trainer"))
     act.commute = bool(sr.get("commute"))
-    act.gear = sr.get("gear_id")
+    raw_gear = sr.get("gear_id")
+    if raw_gear is not None:
+        gear_names = store.get_value(db, "strava.gear") or {}
+        act.gear = gear_names.get(str(raw_gear), str(raw_gear))
+    else:
+        act.gear = None
     act.timezone = sr.get("timezone")
     act.start_local = parse_iso(sr.get("start_date_local")) if sr.get("start_date_local") else None
 

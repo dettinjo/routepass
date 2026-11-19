@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
+from routepass import store
 from routepass.analysis.track import BEST_DISTANCES_M, POWER_CURVE_S
 from routepass.models import Activity, Effort, ProviderActivity, Track
 from routepass.providers import sports
@@ -851,6 +852,7 @@ def goals_progress(
 def gear_stats(db: Session, f: Filters, prefs: dict[str, Any]) -> dict[str, Any]:
     """Aggregate mileage, hours, elevation and service-interval status per gear and recording device."""
     targets = prefs.get("gear_targets") or {}
+    gear_names = store.get_value(db, "strava.gear") or {}
     q = f.apply(
         select(
             Activity.gear,
@@ -873,7 +875,7 @@ def gear_stats(db: Session, f: Filters, prefs: dict[str, Any]) -> dict[str, Any]
             tcfg = targets.get(key) or {}
             item = {
                 "key": key,
-                "label": tcfg.get("label") or key,
+                "label": tcfg.get("label") or gear_names.get(key) or key,
                 "count": 0,
                 "distance_m": 0.0,
                 "moving_time_s": 0.0,
