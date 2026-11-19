@@ -1157,40 +1157,66 @@ class StravaWebClient:
             time.sleep(delay)
         raise StravaError(f"Strava upload {upload_id} still processing after {attempts * delay:.0f}s")
 
+    # Fields the activity edit form accepts, as activity[...] form keys.
+    _EDIT_FIELDS = {
+        "name": "name",
+        "description": "description",
+        "visibility": "visibility",
+        "sport_type": "sport_type",
+        "hide_from_home": "hide_from_home",
+    }
+
     def update_activity(self, activity_id: str, **fields: Any) -> dict[str, Any]:
-        csrf = self._ensure_csrf()
-        payload: dict[str, Any] = {}
-        for k, v in fields.items():
-            if v is None:
+        """Edit an activity the way strava.com's edit page does: a form POST (with _method=patch and the
+        page's authenticity token) to /activities/{id}. Strava answers a JSON PATCH with a 500."""
+        if fields.get("private") is not None and fields.get("visibility") is None:
+            fields["visibility"] = "only_me" if fields["private"] else "everyone"
+        form: dict[str, str] = {}
+        ignored = []
+        for key, value in fields.items():
+            if value is None or key == "private":
                 continue
-            if k == "sport_type":
-                payload["sport_type"] = v
-                payload["type"] = v
-            elif k == "private":
-                payload["private"] = bool(v)
-                payload.setdefault("visibility", "only_me" if v else "everyone")
-            elif k == "visibility":
-                payload["visibility"] = v
-                payload["private"] = v == "only_me"
-            else:
-                payload[k] = v
-        if not payload:
+            if key == "type":
+                key = "sport_type"
+            if key == "gear_id":  # API ids: b123 = bike, g123 = shoes
+                gid = str(value)
+                form["activity[bike_id]" if gid.startswith("b") else "activity[athlete_gear_id]"] = (
+                    gid.lstrip("bg")
+                )
+                continue
+            name = self._EDIT_FIELDS.get(key)
+            if name is None:
+                ignored.append(key)
+                continue
+            form[f"activity[{name}]"] = ("1" if value else "0") if isinstance(value, bool) else str(value)
+        if ignored:
+            logger.info("Strava web edit cannot set %s on %s; skipped", ", ".join(ignored), activity_id)
+        if not form:
             return {"id": activity_id}
-        resp = self._http.patch(
+
+        edit_url = f"{BASE}/activities/{activity_id}/edit"
+        page = self._http.get(edit_url, headers={"Accept": "text/html,application/xhtml+xml"})
+        self._check_redirect_or_login(page, f"/activities/{activity_id}/edit")
+        m = re.search(
+            r'id="edit-activity".*?name="authenticity_token" value="([^"]+)"', page.text, re.S
+        ) or re.search(r'name="authenticity_token" value="([^"]+)"', page.text)
+        if not m:
+            raise StravaError(f"Strava edit page for {activity_id} has no form (is it your activity?)")
+        resp = self._http.post(
             f"{BASE}/activities/{activity_id}",
-            headers={
-                "X-CSRF-Token": csrf,
-                "X-Requested-With": "XMLHttpRequest",
-                "Accept": "application/json, text/javascript, */*; q=0.01",
-                "Referer": f"{BASE}/activities/{activity_id}",
-            },
-            json=payload,
+            data={"utf8": "\u2713", "_method": "patch", "authenticity_token": m.group(1), **form},
+            headers={"Referer": edit_url, "Origin": BASE, "Accept": "text/html,application/xhtml+xml"},
         )
-        self._check_redirect_or_login(resp, f"/activities/{activity_id}")
-        try:
-            return resp.json()
-        except ValueError:
-            return {"id": activity_id, **payload}
+        self._sync_cookies(resp)
+        location = resp.headers.get("location", "")
+        if resp.status_code in (301, 302, 303) and ("/login" in location or "/session" in location):
+            raise StravaAuthError("Strava web session expired — sign in again in Settings → Strava")
+        if resp.status_code >= 400:
+            raise StravaError(f"Strava rejected the edit of {activity_id} ({resp.status_code})")
+        return {
+            "id": activity_id,
+            **{k.removeprefix("activity[").removesuffix("]"): v for k, v in form.items()},
+        }
 
     def activity_photos(self, activity_id: str) -> list[dict[str, Any]]:
         """Photos and videos of an activity, read from the photosJson the activity page embeds."""

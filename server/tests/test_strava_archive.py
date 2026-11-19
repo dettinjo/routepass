@@ -298,8 +298,14 @@ def test_strava_web_session_bidirectional_sync(client, mock_apis):
     mock_apis.get("https://www.strava.com/upload/progress").mock(
         return_value=httpx.Response(200, json={"progress": [{"id": 5001, "activity_id": 7099}]})
     )
-    mock_apis.patch("https://www.strava.com/activities/7099").mock(
-        return_value=httpx.Response(200, json={"id": 7099, "name": "Synced Hike"})
+    mock_apis.get("https://www.strava.com/activities/7099/edit").mock(
+        return_value=httpx.Response(
+            200,
+            text='<form id="edit-activity"><input type="hidden" name="authenticity_token" value="t" /></form>',
+        )
+    )
+    mock_apis.post("https://www.strava.com/activities/7099").mock(
+        return_value=httpx.Response(302, headers={"location": "https://www.strava.com/activities/7099"})
     )
 
     result = runner.run_cycle("test", tracks=True)
@@ -520,3 +526,46 @@ def test_userscript_handoff_is_private_revocable_and_idempotent(client, mock_api
         headers={**headers, "Authorization": f"Bearer {second}"},
     )
     assert public.status_code == 404
+
+
+def test_web_update_posts_the_edit_form(mock_apis) -> None:
+    """Strava answers a JSON PATCH with a 500; edits must go through the edit form."""
+    from urllib.parse import parse_qs
+
+    from routepass.providers.strava import StravaWebClient
+
+    page = (
+        '<form class="edit_activity" id="edit-activity" action="/activities/777" method="post">'
+        '<input type="hidden" name="_method" value="patch" />'
+        '<input type="hidden" name="authenticity_token" value="tok-123" />'
+        '<input name="activity[name]" value="Afternoon Workout" /></form>'
+    )
+    mock_apis.get("https://www.strava.com/activities/777/edit").mock(
+        return_value=httpx.Response(200, text=page)
+    )
+    post = mock_apis.post("https://www.strava.com/activities/777").mock(
+        return_value=httpx.Response(302, headers={"location": "https://www.strava.com/activities/777"})
+    )
+    with StravaWebClient({"_strava4_session": "s"}) as client:
+        out = client.update_activity(
+            "777", name="Garraf loop", description="From Komoot", private=True, gear_id="b42", commute=True
+        )
+    sent = parse_qs(post.calls.last.request.content.decode())
+    assert sent["_method"] == ["patch"] and sent["authenticity_token"] == ["tok-123"]
+    assert sent["activity[name]"] == ["Garraf loop"] and sent["activity[description]"] == ["From Komoot"]
+    assert sent["activity[visibility]"] == ["only_me"] and sent["activity[bike_id]"] == ["42"]
+    assert "activity[commute]" not in sent  # not an edit-form field: skipped, not sent
+    assert out["name"] == "Garraf loop"
+
+    mock_apis.post("https://www.strava.com/activities/778").mock(
+        return_value=httpx.Response(302, headers={"location": "https://www.strava.com/login"})
+    )
+    mock_apis.get("https://www.strava.com/activities/778/edit").mock(
+        return_value=httpx.Response(200, text=page)
+    )
+    with StravaWebClient({"_strava4_session": "s"}) as client:
+        try:
+            client.update_activity("778", name="x")
+            raise AssertionError("expected an auth error")
+        except Exception as exc:  # noqa: BLE001
+            assert "expired" in str(exc)
