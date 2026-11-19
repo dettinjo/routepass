@@ -468,3 +468,55 @@ def test_strava_userscript_and_session_handoff(client, mock_apis) -> None:
     assert body["ok"] is True
     assert body["has_remember_token"] is True
     assert body["athlete"]["id"] == 88888
+
+
+def test_userscript_handoff_is_private_revocable_and_idempotent(client, mock_apis, monkeypatch) -> None:
+    """Reinstalling revokes older scripts, identical cookies don't re-validate, the public host refuses."""
+    import re
+
+    from routepass.config import get_settings
+
+    def download() -> str:
+        r = client.get("/api/v1/connections/strava/userscript.user.js", headers=AUTH)
+        assert r.status_code == 200
+        assert "localStorage.setItem(FP_KEY" not in r.text  # no cookie fingerprint in strava.com storage
+        return re.search(r'const HANDOFF_TOKEN = "([^"]+)";', r.text).group(1)
+
+    first = download()
+    second = download()
+    dash = mock_apis.get("https://www.strava.com/dashboard").mock(
+        return_value=httpx.Response(200, text='<html><body><a href="/athletes/77">Me</a></body></html>')
+    )
+    body = {"cookies": {"_strava4_session": "s1", "strava_remember_token": "r1"}}
+    headers = {"Origin": "https://www.strava.com", "Sec-Fetch-Site": "cross-site"}
+
+    old = client.post(
+        "/api/v1/connections/strava/session/handoff",
+        json={**body, "token": first},
+        headers={**headers, "Authorization": f"Bearer {first}"},
+    )
+    assert old.status_code == 401  # superseded by the second download
+
+    ok = client.post(
+        "/api/v1/connections/strava/session/handoff",
+        json={**body, "token": second},
+        headers={**headers, "Authorization": f"Bearer {second}"},
+    )
+    assert ok.status_code == 200, ok.text
+    calls = dash.call_count
+    again = client.post(
+        "/api/v1/connections/strava/session/handoff",
+        json={**body, "token": second},
+        headers={**headers, "Authorization": f"Bearer {second}"},
+    )
+    assert again.status_code == 200 and again.json()["unchanged"] is True
+    assert dash.call_count == calls  # nothing sent to Strava for unchanged cookies
+
+    monkeypatch.setenv("ROUTEPASS_PUBLIC_PORT", "80")  # TestClient talks to port 80
+    get_settings.cache_clear()
+    public = client.post(
+        "/api/v1/connections/strava/session/handoff",
+        json={**body, "token": second},
+        headers={**headers, "Authorization": f"Bearer {second}"},
+    )
+    assert public.status_code == 404

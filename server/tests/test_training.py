@@ -50,7 +50,13 @@ def test_multi_sport_plan_lifecycle_and_predictions(db):
                 "start_date": (today - timedelta(days=7)).isoformat(),
                 "event_date": (today + timedelta(days=70)).isoformat(),
                 "goal_spec": {
-                    "targets": {"swim_km": 1.9, "bike_km": 90, "bike_elev_m": 1000, "run_km": 21.1, "run_elev_m": 200},
+                    "targets": {
+                        "swim_km": 1.9,
+                        "bike_km": 90,
+                        "bike_elev_m": 1000,
+                        "run_km": 21.1,
+                        "run_elev_m": 200,
+                    },
                     "target_time_s": 19800,
                 },
                 "schedule_prefs": {"max_weekly_hours": 10.0, "preferred_slot": "morning", "rest_days": [0]},
@@ -71,7 +77,13 @@ def test_multi_sport_plan_lifecycle_and_predictions(db):
 
         # 2. Deterministic adaptation responds to tiredness & missed sessions
         res = training.adapt_plan(
-            s, tri, prefs, trigger="manual", user_note="Legs very tired and sore today", today=today, force=True
+            s,
+            tri,
+            prefs,
+            trigger="manual",
+            user_note="Legs very tired and sore today",
+            today=today,
+            force=True,
         )
         assert res["adapted"] is True
         assert res["model_used"] == "deterministic"
@@ -258,8 +270,82 @@ def test_skip_adapt_recovery_and_simulated_race_activity(db, monkeypatch):
         assert r_sick.status_code == 200
         body_sick = r_sick.json()
         assert body_sick["result"]["reason"] == "sickness"
-        sick_s = next(
-            s for w in body_sick["plan"]["weeks"] for s in w["sessions"] if s["id"] == s_sick["id"]
-        )
+        sick_s = next(s for w in body_sick["plan"]["weeks"] for s in w["sessions"] if s["id"] == s_sick["id"])
         assert sick_s["status"] == "skipped"
 
+
+def test_plan_created_midweek_schedules_nothing_before_today(db):
+    thursday = date(2026, 11, 19)
+    with session_scope() as s:
+        prefs = store.get_preferences(s)
+        plan = training.create_plan(
+            s,
+            prefs,
+            {"name": "50k", "plan_type": "trail_run", "event_date": "2027-07-08"},
+            use_ai=False,
+            today=thursday,
+        )
+        assert plan.start_date == "2026-11-19"
+        detail = training.serialize_plan_detail(s, plan, prefs, today=thursday)
+        first_week = detail["weeks"][0]
+        assert first_week["start_date"] == "2026-11-16"  # the week grid still starts on Monday
+        dates = [x["scheduled_date"] for x in first_week["sessions"]]
+        assert dates and min(dates) >= "2026-11-19"
+        assert all(x["status"] != "missed" for w in detail["weeks"] for x in w["sessions"])
+        a = detail["analytics"]
+        assert a["alignment"]["enough_data"] is False
+        assert a["prediction"]["verdict"] == "early"
+        assert (
+            a["prediction"]["range_low_s"]
+            < a["prediction"]["race_day_trend_s"]
+            < a["prediction"]["range_high_s"]
+        )
+        assert a["data_quality"]["level"] == "low"
+
+
+def test_legacy_plan_drops_sessions_before_creation(db):
+    from routepass.models import TrainingSession
+
+    monday = date(2027, 2, 1)
+    with session_scope() as s:
+        prefs = store.get_preferences(s)
+        plan = training.create_plan(
+            s,
+            prefs,
+            {"name": "Old", "plan_type": "trail_run", "event_date": "2027-06-01"},
+            use_ai=False,
+            today=monday,
+        )
+        before = s.query(TrainingSession).filter(TrainingSession.plan_id == plan.id).all()
+        assert any(x.scheduled_date < "2027-02-04" for x in before)
+        plan.created_at = datetime(2027, 2, 4, 12, 24)  # created on Thursday, stored Monday as start
+        s.flush()
+        training.match_activities_to_plan(s, plan, today=date(2027, 2, 5))
+        left = s.query(TrainingSession).filter(TrainingSession.plan_id == plan.id).all()
+        assert left and all(x.scheduled_date >= "2027-02-04" for x in left)
+
+
+def test_data_quality_suggests_profile_values(db):
+    from routepass.analysis import insights
+
+    today = date(2026, 11, 19)
+    with session_scope() as s:
+        for i, hr in enumerate([171, 176, 182, 188, 240, 190]):  # 240 = strap glitch, ignored
+            d = today - timedelta(days=i + 1)
+            s.add(
+                Activity(
+                    start_time=datetime(d.year, d.month, d.day, 8),
+                    name="Run",
+                    sport="Run",
+                    family="run",
+                    moving_time_s=3600,
+                    load=60.0,
+                    load_method="estimate",
+                    max_hr=hr,
+                )
+            )
+        s.flush()
+        q = insights.data_quality(s, today)
+        assert q["level"] == "low"
+        assert q["suggestions"]["hr_max"] == 188  # second-highest plausible value
+        assert any(m["field"] == "hr_max" for m in q["missing"])

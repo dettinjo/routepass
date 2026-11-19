@@ -485,6 +485,15 @@ def get_gear(start: str | None = None, end: str | None = None) -> dict:
 
 
 @mcp.tool()
+def get_data_quality() -> dict:
+    """How much recent training load is measured (power / heart rate) rather than estimated, which profile
+    values are missing, and values (max HR, FTP) suggested from the recorded data. Set them with
+    update_settings to make load, zones and race predictions more accurate."""
+    with session_scope() as db:
+        return insights.data_quality(db)
+
+
+@mcp.tool()
 def list_duplicate_candidates(limit: int = 30) -> list:
     """Activities that look like the same recording but were not merged. Merge with merge_activities or
     dismiss with dismiss_duplicate_candidate."""
@@ -609,10 +618,15 @@ def get_training_plan(plan_id: int | None = None) -> dict[str, Any]:
         plan = (
             db.get(TrainingPlan, plan_id)
             if plan_id is not None
-            else db.scalar(select(TrainingPlan).where(TrainingPlan.status == "active").order_by(TrainingPlan.id.desc()))
+            else db.scalar(
+                select(TrainingPlan).where(TrainingPlan.status == "active").order_by(TrainingPlan.id.desc())
+            )
         )
         if plan is None:
-            return {"active_plan": None, "message": "No active training plan yet. Call create_training_plan to create one."}
+            return {
+                "active_plan": None,
+                "message": "No active training plan yet. Call create_training_plan to create one.",
+            }
         return training.serialize_plan_detail(db, plan, store.get_preferences(db))
 
 
@@ -680,11 +694,15 @@ def adapt_training_plan(plan_id: int | None = None, user_note: str = "") -> dict
         plan = (
             db.get(TrainingPlan, plan_id)
             if plan_id is not None
-            else db.scalar(select(TrainingPlan).where(TrainingPlan.status == "active").order_by(TrainingPlan.id.desc()))
+            else db.scalar(
+                select(TrainingPlan).where(TrainingPlan.status == "active").order_by(TrainingPlan.id.desc())
+            )
         )
         if plan is None:
             return {"error": "No active training plan found"}
-        return training.adapt_plan(db, plan, store.get_preferences(db), trigger="mcp", user_note=user_note, force=True)
+        return training.adapt_plan(
+            db, plan, store.get_preferences(db), trigger="mcp", user_note=user_note, force=True
+        )
 
 
 @mcp.tool()
@@ -711,4 +729,3 @@ def update_training_session(
             s.adaptation_note = note[:300]
         db.flush()
         return {"id": s.id, "scheduled_date": s.scheduled_date, "status": s.status, "note": s.adaptation_note}
-

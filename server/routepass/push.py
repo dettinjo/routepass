@@ -143,8 +143,12 @@ def encrypt_rfc8291(plaintext: bytes, ua_pub_b64: str, auth_b64: str) -> bytes:
     ikm_info = b"WebPush: info\x00" + ua_pub_bytes + as_pub_bytes
     ikm = HKDF(algorithm=hashes.SHA256(), length=32, salt=auth_secret, info=ikm_info).derive(shared)
 
-    cek = HKDF(algorithm=hashes.SHA256(), length=16, salt=salt, info=b"Content-Encoding: aes128gcm\x00").derive(ikm)
-    nonce = HKDF(algorithm=hashes.SHA256(), length=12, salt=salt, info=b"Content-Encoding: nonce\x00").derive(ikm)
+    cek = HKDF(
+        algorithm=hashes.SHA256(), length=16, salt=salt, info=b"Content-Encoding: aes128gcm\x00"
+    ).derive(ikm)
+    nonce = HKDF(algorithm=hashes.SHA256(), length=12, salt=salt, info=b"Content-Encoding: nonce\x00").derive(
+        ikm
+    )
 
     # Delimiter byte 0x02 marks final record
     ciphertext = AESGCM(cek).encrypt(nonce, plaintext + b"\x02", None)
@@ -155,7 +159,7 @@ def encrypt_rfc8291(plaintext: bytes, ua_pub_b64: str, auth_b64: str) -> bytes:
 def _vapid_headers(endpoint: str, vapid: dict[str, str]) -> dict[str, str]:
     parsed = urlparse(endpoint)
     aud = f"{parsed.scheme}://{parsed.netloc}"
-    sub_email = (get_settings().allowed_emails.split(",")[0].strip() if get_settings().allowed_emails else "")
+    sub_email = get_settings().allowed_emails.split(",")[0].strip() if get_settings().allowed_emails else ""
     sub = f"mailto:{sub_email}" if "@" in sub_email else "mailto:routepass@localhost"
     token = jwt.encode(
         {"aud": aud, "exp": int(time.time()) + 12 * 3600, "sub": sub},

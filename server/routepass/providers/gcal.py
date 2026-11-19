@@ -34,8 +34,7 @@ GCAL_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GCAL_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GCAL_API = "https://www.googleapis.com/calendar/v3"
 GCAL_SCOPES = (
-    "https://www.googleapis.com/auth/calendar.readonly "
-    "https://www.googleapis.com/auth/calendar.events"
+    "https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events"
 )
 # Reuse the same OAuth callback path already registered for Google Sign-In
 # (disambiguated by signed `state.kind == "gcal"`), preventing redirect_uri_mismatch.
@@ -101,7 +100,15 @@ def get_config(db: Session) -> dict[str, Any]:
 
 def save_config(db: Session, patch: dict[str, Any]) -> dict[str, Any]:
     cur = dict(store.get_value(db, _CONFIG_KEY) or {})
-    for k in ("target_calendar_id", "target_calendar_name", "busy_calendar_ids", "timezone", "buffer_minutes", "auto_sync", "slot_windows"):
+    for k in (
+        "target_calendar_id",
+        "target_calendar_name",
+        "busy_calendar_ids",
+        "timezone",
+        "buffer_minutes",
+        "auto_sync",
+        "slot_windows",
+    ):
         if k in patch and patch[k] is not None:
             cur[k] = patch[k]
     store.set_value(db, _CONFIG_KEY, cur)
@@ -349,7 +356,9 @@ def find_free_slot(
     return None
 
 
-def _event_body(plan: TrainingPlan, s: TrainingSession, start_dt: datetime, end_dt: datetime) -> dict[str, Any]:
+def _event_body(
+    plan: TrainingPlan, s: TrainingSession, start_dt: datetime, end_dt: datetime
+) -> dict[str, Any]:
     prefix = "✅ " if s.status == "completed" else ("↻ " if s.status == "moved" else "")
     title = f"{prefix}[{s.sport.replace('_', ' ').title()}] {s.title}"
     lines = [
@@ -432,7 +441,9 @@ def sync_plan_to_calendar(
                 continue
             if s.status == "skipped":
                 if s.gcal_event_id:
-                    client.delete(f"{GCAL_API}/calendars/{target_cal}/events/{s.gcal_event_id}", headers=headers)
+                    client.delete(
+                        f"{GCAL_API}/calendars/{target_cal}/events/{s.gcal_event_id}", headers=headers
+                    )
                     s.gcal_event_id = None
                     deleted += 1
                 continue

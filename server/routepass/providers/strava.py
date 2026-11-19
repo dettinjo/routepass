@@ -272,6 +272,7 @@ class StravaClient:
 
     def gear_map(self, athlete_id: str | int | None = None) -> dict[str, str]:
         """Return `{gear_id: display_name}` for bikes and shoes."""
+
         def _api() -> dict[str, str]:
             ath = self._request("GET", "/athlete").json()
             out: dict[str, str] = {}
@@ -1215,7 +1216,9 @@ class StravaWebClient:
                 )
                 self._sync_cookies(resp)
             if resp.status_code in (401, 403):
-                raise StravaAuthError("Strava web session rejected photo upload — reconnect Strava Web Session")
+                raise StravaAuthError(
+                    "Strava web session rejected photo upload — reconnect Strava Web Session"
+                )
             if 200 <= resp.status_code < 300:
                 try:
                     out = resp.json()

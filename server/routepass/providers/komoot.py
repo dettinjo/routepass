@@ -219,4 +219,3 @@ class KomootClient:
         if not ctype.startswith("image/"):
             ctype = "image/jpeg"
         return resp.content, ctype
-

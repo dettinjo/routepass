@@ -33,8 +33,20 @@ class _FakeKomoot:
 
     def tour_photos(self, tour_id: str) -> list[dict]:
         return [
-            {"id": "p1", "url": "https://photos.komoot.de/p1.jpg", "caption": "Summit view", "lat": 47.1, "lng": 10.2},
-            {"id": "p2", "url": "https://photos.komoot.de/p2.jpg", "caption": "Trailhead", "lat": 47.0, "lng": 10.1},
+            {
+                "id": "p1",
+                "url": "https://photos.komoot.de/p1.jpg",
+                "caption": "Summit view",
+                "lat": 47.1,
+                "lng": 10.2,
+            },
+            {
+                "id": "p2",
+                "url": "https://photos.komoot.de/p2.jpg",
+                "caption": "Trailhead",
+                "lat": 47.0,
+                "lng": 10.1,
+            },
         ]
 
     def download_photo(self, url: str) -> tuple[bytes, str]:
@@ -54,7 +66,9 @@ class _FakeStrava:
         return None
 
     def upload_gpx(self, gpx: bytes, name: str, description: str, sport_type: str, external_id: str) -> str:
-        self.uploads.append({"name": name, "description": description, "sport": sport_type, "external_id": external_id})
+        self.uploads.append(
+            {"name": name, "description": description, "sport": sport_type, "external_id": external_id}
+        )
         return "up-1"
 
     def wait_for_upload(self, upload_id: str) -> str:
@@ -73,7 +87,9 @@ class _FakeStrava:
         content_type: str = "image/jpeg",
         caption: str = "",
     ):
-        self.photos.append({"activity_id": activity_id, "filename": filename, "caption": caption, "size": len(image_bytes)})
+        self.photos.append(
+            {"activity_id": activity_id, "filename": filename, "caption": caption, "size": len(image_bytes)}
+        )
         return {"id": f"ph-{len(self.photos)}"}
 
 
