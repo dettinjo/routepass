@@ -2,11 +2,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { TrailTab } from "../components/TrailTab";
+import { AttachedRoute, ROUTE_SPORTS, RouteFinder } from "../components/RouteFinder";
 import {
   ICON, IconAdapt, IconAdapted, IconAttention, IconCalendarAdd, IconCalendarSynced, IconChevronDownSm, IconInjury, IconKeySession, IconLeft,
   IconPlus, IconRace, IconRight, IconSick, IconSore, IconStatusDone, IconStatusSkipped, IconStreak, IconSync, IconTime,
   IconTired, IconTraining, IconTrash, KEYED_ICON, MetricIcon, PlanSportIcon, SportIcon,
-  IconInfo, IconStatusFailed, IconStatusPlanned, IconUndo, IconCalendarStat, IconSparkles, IconWarn, IconDone,
+  IconInfo, IconStatusFailed, IconStatusPlanned, IconUndo, IconCalendarStat, IconSparkles, IconWarn, IconDone, IconMap,
 } from "../components/icons";
 import { Attention, Callout, Card, Empty, InfoTip, Menu, ProgressBar, Seg, Skeleton, Stat, StatusBadge, Tabs, useToast, type Severity } from "../components/ui";
 import { api } from "../lib/api";
@@ -731,6 +732,7 @@ function PlanView() {
   const [adaptOpen, setAdaptOpen] = useState(false);
   const [adaptNote, setAdaptNote] = useState("");
   const [weekView, setWeekView] = useState<"week" | "month">("week");
+  const [routeFor, setRouteFor] = useState<any | null>(null);
 
   const listQ = useQuery<any>({ queryKey: ["training-plans"], queryFn: () => api("/training/plans") });
   const plans = listQ.data?.plans || [];
@@ -785,6 +787,11 @@ function PlanView() {
       setPlan(r);
       toast(r.result.adjusted?.length ? `Thanks — the next ${r.result.adjusted.length} sessions were adjusted` : "Thanks — saved");
     },
+    onError: (e: Error) => toast(e.message, true),
+  });
+  const detachRouteMut = useMutation({
+    mutationFn: (id: number) => api<any>(`/training/sessions/${id}/route`, { method: "DELETE" }),
+    onSuccess: (r) => { setPlan(r); toast("Route removed"); },
     onError: (e: Error) => toast(e.message, true),
   });
   const deleteMut = useMutation({
@@ -860,6 +867,7 @@ function PlanView() {
         {s.session_type !== "easy" && s.session_type !== "recovery" && <button onClick={() => variantMut.mutate({ id: s.id, kind: "easier" })}><IconTired size={ICON.button} />Easier</button>}
         <button onClick={() => variantMut.mutate({ id: s.id, kind: "swap" })}><IconSync size={ICON.button} />Swap with next</button>
         <button onClick={() => setSkipId(s.id)}><IconStatusSkipped size={ICON.button} />Skip and adapt…</button>
+        {ROUTE_SPORTS.has(s.sport) && <button onClick={() => setRouteFor(s)}><IconMap size={ICON.button} />{s.route ? "Choose another route" : "Find a route"}</button>}
       </>}
     </Menu>
   );
@@ -970,6 +978,7 @@ function PlanView() {
         <Callout kind="warn">The AI coach isn't reaching Gemini ({aiInfo.status.last_error}). The built-in rules keep the plan up to date meanwhile. <Link to="/settings/training">Check the AI coach settings</Link></Callout>
       )}
       <Attention items={attention} />
+      {routeFor && <RouteFinder session={routeFor} planId={plan.id} onClose={() => setRouteFor(null)} />}
 
       <div className="training-grid">
         <div className="stack gap16">
@@ -999,6 +1008,9 @@ function PlanView() {
                   {next.workout_steps?.length > 0 && <ul className="steps-list small secondary" style={{ margin: "6px 0 0 18px", padding: 0 }}>{next.workout_steps.map((st: string, i: number) => <li key={i}>{annotate(st, zones, next.sport)}</li>)}</ul>}
                   <WhyLine text={next.why} />
                   {next.adaptation_note && <div className="note"><IconAdapted size={ICON.inline} />{next.adaptation_note}</div>}
+                  {next.route
+                    ? <AttachedRoute route={next.route} onChange={() => setRouteFor(next)} onRemove={() => detachRouteMut.mutate(next.id)} />
+                    : ROUTE_SPORTS.has(next.sport) && <button className="sm mt8" onClick={() => setRouteFor(next)}><IconMap size={ICON.button} />Find a route for this session</button>}
                   <div className="today-actions">
                     <SessionOptions s={next} busy={variantMut.isPending} onVariant={(kind, minutes) => variantMut.mutate({ id: next.id, kind, minutes })} onSkip={() => setSkipId(skipId === next.id ? null : next.id)} />
                   </div>
@@ -1072,6 +1084,7 @@ function PlanView() {
                         </div>
                         <SessionMetrics s={s} />
                         {!done && <Targets s={s} zones={zones} />}
+                        {s.route && <AttachedRoute route={s.route} onChange={() => setRouteFor(s)} onRemove={() => detachRouteMut.mutate(s.id)} />}
                         {s.matched_activity && <LinkedActivity a={s.matched_activity} compliance={s.compliance_score} />}
                         <CoachNote text={s.coach_feedback} />
                         {done && <Feedback s={s} busy={feedbackMut.isPending} onSave={(rpe, feel) => feedbackMut.mutate({ id: s.id, rpe, feel })} />}

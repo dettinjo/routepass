@@ -316,3 +316,53 @@ export function PlacePicker({ value, radiusKm, places, onPick }: {
   }, [value?.[0], value?.[1], radiusKm]); // eslint-disable-line react-hooks/exhaustive-deps
   return <div ref={el} className="map" style={{ height: 240 }} aria-label="Tap the map to choose the place" />;
 }
+
+/** Route suggestions on one map: the start point, every route that has a line (quiet), and the selected
+ *  one on top in the accent colour. Tapping a line selects it. */
+export function RoutePreviewMap({ start, radiusKm, routes, selected, onSelect, height = 260 }: {
+  start: [number, number];
+  radiusKm: number;
+  routes: { id: string; points: [number, number][] }[];
+  selected: string | null;
+  onSelect: (id: string) => void;
+  height?: number;
+}) {
+  const el = useRef<HTMLDivElement>(null);
+  const map = useRef<L.Map | null>(null);
+  const layer = useRef<L.LayerGroup | null>(null);
+  const cb = useRef(onSelect);
+  cb.current = onSelect;
+  useEffect(() => {
+    if (!el.current) return;
+    const { map: m } = createMap(el.current, "osm", true);
+    map.current = m;
+    layer.current = L.layerGroup().addTo(m);
+    m.setView(start, 12, { animate: false });
+    // The map can mount inside an opening sheet: measure again once it has its size.
+    const t = window.setTimeout(() => m.invalidateSize({ animate: false }), 250);
+    return () => { window.clearTimeout(t); m.stop(); m.remove(); map.current = null; layer.current = null; };
+  }, []); // one map for the sheet's lifetime; a new start only moves it
+  useEffect(() => {
+    const m = map.current;
+    const g = layer.current;
+    if (!m || !g) return;
+    g.clearLayers();
+    const quiet = cssVar("--text-muted");
+    const accent = cssVar("--accent");
+    L.circle(start, { radius: radiusKm * 1000, color: quiet, weight: 1, dashArray: "4 4", fill: false, interactive: false }).addTo(g);
+    let sel: L.Polyline | null = null;
+    for (const r of routes) {
+      if (r.points.length < 2) continue;
+      const isSel = r.id === selected;
+      const line = L.polyline(r.points, { color: isSel ? accent : quiet, weight: isSel ? 5 : 3, opacity: isSel ? 1 : 0.55 });
+      line.on("click", () => cb.current(r.id));
+      line.addTo(g);
+      if (isSel) sel = line;
+    }
+    sel?.bringToFront();
+    L.circleMarker(start, { radius: 7, color: "#fff", weight: 2, fillColor: cssVar("--text-primary"), fillOpacity: 1 }).addTo(g).bindTooltip("Start");
+    if (sel) m.fitBounds((sel as L.Polyline).getBounds().extend(start), { padding: [24, 24], maxZoom: 15, animate: false });
+    else m.setView(start, 12, { animate: false });
+  }, [routes, selected, start[0], start[1], radiusKm]); // eslint-disable-line react-hooks/exhaustive-deps
+  return <div ref={el} className="map" style={{ height, minHeight: height, flex: "none" }} aria-label="Map of the suggested routes" />;
+}

@@ -219,3 +219,86 @@ class KomootClient:
         if not ctype.startswith("image/"):
             ctype = "image/jpeg"
         return resp.content, ctype
+
+
+# ── route suggestions (read-only) ──────────────────────────────────────────────
+
+
+def _komoot_image(tour: dict[str, Any], width: int = 400, height: int = 260) -> str | None:
+    """Static map of a tour from its URI template (…{?width,height,crop} or …/?width={width}…)."""
+    src = ((tour.get("map_image") or {}).get("src") or "").strip()
+    if not src:
+        return None
+    return (
+        src.replace("{width}", str(width)).replace("{height}", str(height)).replace("{crop}", "true")
+        if "{width}" in src
+        else src.split("{", 1)[0] + f"?width={width}&height={height}&crop=true"
+    )
+
+
+def planned_tours(client: KomootClient, max_tours: int = 300) -> list[dict[str, Any]]:
+    """The user's saved (planned) tours, newest first, up to max_tours."""
+    out: list[dict[str, Any]] = []
+    page = 0
+    while len(out) < max_tours:
+        data = client._call(
+            "GET",
+            f"{V007}/users/{client.user_id}/tours/",
+            params={
+                "type": "tour_planned",
+                "limit": 100,
+                "page": page,
+                "sort_field": "date",
+                "sort_direction": "desc",
+                "status": "private,public,friends",
+            },
+        ).json()
+        tours = (data.get("_embedded") or {}).get("tours") or []
+        out.extend(tours)
+        page += 1
+        if not tours or page >= (data.get("page") or {}).get("totalPages", 1):
+            break
+    return [{**t, "_image": _komoot_image(t)} for t in out[:max_tours]]
+
+
+def discover_tours(
+    client: KomootClient,
+    lat: float,
+    lng: float,
+    *,
+    sport: str,
+    radius_km: float,
+    min_length_m: int | None = None,
+    max_length_m: int | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Komoot's suggested tours (editorial and community) starting near a point."""
+    params: dict[str, Any] = {
+        "lat": f"{lat:.5f}",
+        "lng": f"{lng:.5f}",
+        "sport": sport,
+        "max_distance": int(radius_km * 1000),
+        "limit": limit,
+    }
+    if min_length_m:
+        params["min_length"] = int(min_length_m)
+    if max_length_m:
+        params["max_length"] = int(max_length_m)
+    data = client._call("GET", f"{V007}/discover_tours/", params=params).json()
+    items = (data.get("_embedded") or {}).get("items") or []
+    return [{**t, "_image": _komoot_image(t)} for t in items]
+
+
+def tour_coordinates(client: KomootClient, tour_id: str, discovered: bool) -> list[tuple[float, float]]:
+    if discovered:
+        data = client._call(
+            "GET", f"{V007}/discover_tours/{tour_id}", params={"_embedded": "coordinates"}
+        ).json()
+        items = ((data.get("_embedded") or {}).get("coordinates") or {}).get("items") or []
+    else:
+        items = client.coordinates(tour_id)
+    return [(float(p["lat"]), float(p["lng"])) for p in items if p.get("lat") is not None]
+
+
+def planner_url(lat: float, lng: float, sport: str) -> str:
+    return f"https://www.komoot.com/plan/@{lat:.5f},{lng:.5f},13z?sport={sport}"

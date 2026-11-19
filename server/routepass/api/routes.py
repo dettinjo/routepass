@@ -1514,6 +1514,84 @@ def training_session_variant(
     return {"result": result, "plan": training.serialize_plan_detail(db, plan, store.get_preferences(db))}
 
 
+@router.get("/training/sessions/{session_id}/routes", tags=["training"])
+def find_session_routes(
+    session_id: int,
+    lat: float | None = Query(None, ge=-90, le=90),
+    lng: float | None = Query(None, ge=-180, le=180),
+    label: str | None = Query(None, max_length=120),
+    radius_km: float = Query(10.0, ge=1.0, le=60.0),
+    db: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """Routes that fit a session near a start point (saved Home by default): your own history (repeats
+    grouped), your saved Komoot tours and Komoot's suggestions nearby, scored 0–100. Read-only."""
+    from routepass.analysis import routes_finder
+    from routepass.models import TrainingSession
+
+    s = db.get(TrainingSession, session_id)
+    if s is None:
+        raise HTTPException(404, "Training session not found")
+    return routes_finder.find_routes(
+        db, s, store.get_preferences(db), lat=lat, lng=lng, label=label, radius_km=radius_km
+    )
+
+
+@router.get("/routes/geometry", tags=["training"])
+def route_geometry(
+    source: Literal["history", "komoot_saved", "komoot_nearby"],
+    ref: str = Query(..., max_length=40),
+    db: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """Encoded line of a suggested route, for the map."""
+    from routepass.analysis import routes_finder
+
+    try:
+        return routes_finder.geometry(db, source, ref)
+    except komoot.KomootError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+class AttachRouteBody(BaseModel):
+    route: dict[str, Any]
+
+
+@router.put("/training/sessions/{session_id}/route", tags=["training"])
+def attach_session_route(
+    session_id: int, body: AttachRouteBody, db: Session = Depends(get_session)
+) -> dict[str, Any]:
+    """Attach a chosen route to the session. Nothing is created on Komoot."""
+    from routepass.analysis import routes_finder, training
+    from routepass.models import TrainingPlan, TrainingSession
+
+    s = db.get(TrainingSession, session_id)
+    if s is None:
+        raise HTTPException(404, "Training session not found")
+    route = routes_finder.attach(db, s, body.route)
+    plan = db.get(TrainingPlan, s.plan_id)
+    return {"route": route, "plan": training.serialize_plan_detail(db, plan, store.get_preferences(db))}
+
+
+@router.delete("/training/sessions/{session_id}/route", tags=["training"])
+def detach_session_route(session_id: int, db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass.analysis import routes_finder, training
+    from routepass.models import TrainingPlan, TrainingSession
+
+    s = db.get(TrainingSession, session_id)
+    if s is None:
+        raise HTTPException(404, "Training session not found")
+    routes_finder.detach(db, s)
+    plan = db.get(TrainingPlan, s.plan_id)
+    return {"plan": training.serialize_plan_detail(db, plan, store.get_preferences(db))}
+
+
+@router.get("/geocode", tags=["training"])
+def geocode(q: str = Query(..., min_length=3, max_length=120)) -> list[dict[str, Any]]:
+    """Places matching a search (OpenStreetMap), for choosing where a route starts."""
+    from routepass.analysis import routes_finder
+
+    return routes_finder.geocode(q)
+
+
 class SkipAdaptSessionBody(BaseModel):
     reason: Literal["time", "sickness", "muscle_pain", "fatigue", "injury"]
     severity: Literal["mild", "moderate", "severe"] = "moderate"
