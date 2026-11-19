@@ -202,3 +202,117 @@ class Setting(Base):
     key: Mapped[str] = mapped_column(String(80), primary_key=True)
     value: Mapped[dict | list | str | int | float | bool | None] = mapped_column(JSON)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class TrainingPlan(Base):
+    """Multi-sport adaptive training plan (trail run, road run, cycling, triathlon, duathlon, base)."""
+
+    __tablename__ = "training_plans"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)  # active|completed|archived
+    plan_type: Mapped[str] = mapped_column(String(24), default="trail_run")
+    start_date: Mapped[str] = mapped_column(String(10))  # ISO YYYY-MM-DD (Monday of week 1)
+    event_date: Mapped[str] = mapped_column(String(10))  # ISO YYYY-MM-DD
+    goal_spec: Mapped[dict] = mapped_column(JSON, default=dict)
+    schedule_prefs: Mapped[dict] = mapped_column(JSON, default=dict)
+    baseline: Mapped[dict] = mapped_column(JSON, default=dict)
+    coach_summary: Mapped[str] = mapped_column(Text, default="")
+    last_adapted_hash: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    weeks: Mapped[list[TrainingWeek]] = relationship(
+        back_populates="plan", cascade="all, delete-orphan", order_by="TrainingWeek.week_index"
+    )
+    sessions: Mapped[list[TrainingSession]] = relationship(
+        back_populates="plan", cascade="all, delete-orphan", order_by="TrainingSession.scheduled_date"
+    )
+    adaptations: Mapped[list[PlanAdaptation]] = relationship(
+        back_populates="plan", cascade="all, delete-orphan", order_by="PlanAdaptation.created_at.desc()"
+    )
+
+
+class TrainingWeek(Base):
+    __tablename__ = "training_weeks"
+    __table_args__ = (UniqueConstraint("plan_id", "week_index"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("training_plans.id", ondelete="CASCADE"), index=True)
+    week_index: Mapped[int] = mapped_column(Integer)  # 1-based
+    start_date: Mapped[str] = mapped_column(String(10))  # Monday ISO YYYY-MM-DD
+    phase: Mapped[str] = mapped_column(String(20), default="base")  # base|build|peak|taper|race_week|recovery
+    target_tss: Mapped[float] = mapped_column(Float, default=0.0)
+    target_duration_s: Mapped[float] = mapped_column(Float, default=0.0)
+    target_distance_km: Mapped[float] = mapped_column(Float, default=0.0)
+    target_elev_m: Mapped[float] = mapped_column(Float, default=0.0)
+    discipline_split: Mapped[dict] = mapped_column(JSON, default=dict)
+    coach_focus: Mapped[str] = mapped_column(Text, default="")
+
+    plan: Mapped[TrainingPlan] = relationship(back_populates="weeks")
+    sessions: Mapped[list[TrainingSession]] = relationship(
+        back_populates="week", cascade="all, delete-orphan", order_by="TrainingSession.scheduled_date"
+    )
+
+
+class TrainingSession(Base):
+    __tablename__ = "training_sessions"
+    __table_args__ = (Index("ix_training_sessions_plan_date", "plan_id", "scheduled_date"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("training_plans.id", ondelete="CASCADE"), index=True)
+    week_id: Mapped[int] = mapped_column(ForeignKey("training_weeks.id", ondelete="CASCADE"), index=True)
+    scheduled_date: Mapped[str] = mapped_column(String(10))  # ISO YYYY-MM-DD
+    scheduled_slot: Mapped[str] = mapped_column(String(16), default="flexible")  # morning|midday|afternoon|evening|flexible
+    scheduled_start: Mapped[str | None] = mapped_column(String(32))  # ISO datetime when placed on calendar
+    scheduled_end: Mapped[str | None] = mapped_column(String(32))
+    sport: Mapped[str] = mapped_column(String(20), default="run")  # run|trail_run|bike|swim|strength|brick|rest
+    session_type: Mapped[str] = mapped_column(String(20), default="easy")  # easy|long|tempo|intervals|hills|brick|recovery|race
+    priority: Mapped[str] = mapped_column(String(12), default="supporting")  # key|supporting|optional
+    title: Mapped[str] = mapped_column(String(200), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    workout_steps: Mapped[list] = mapped_column(JSON, default=list)
+    target_duration_s: Mapped[float] = mapped_column(Float, default=0.0)
+    target_distance_km: Mapped[float] = mapped_column(Float, default=0.0)
+    target_elev_m: Mapped[float] = mapped_column(Float, default=0.0)
+    target_tss: Mapped[float] = mapped_column(Float, default=0.0)
+    status: Mapped[str] = mapped_column(String(16), default="planned")  # planned|completed|partial|missed|moved|skipped
+    matched_activity_id: Mapped[int | None] = mapped_column(
+        ForeignKey("activities.id", ondelete="SET NULL"), index=True
+    )
+    compliance_score: Mapped[float | None] = mapped_column(Float)
+    gcal_event_id: Mapped[str | None] = mapped_column(String(160))
+    adaptation_note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    plan: Mapped[TrainingPlan] = relationship(back_populates="sessions")
+    week: Mapped[TrainingWeek] = relationship(back_populates="sessions")
+
+
+class PlanAdaptation(Base):
+    __tablename__ = "plan_adaptations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("training_plans.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    trigger: Mapped[str] = mapped_column(String(32), default="manual")
+    model_used: Mapped[str] = mapped_column(String(64), default="deterministic")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    diff: Mapped[list] = mapped_column(JSON, default=list)
+
+    plan: Mapped[TrainingPlan] = relationship(back_populates="adaptations")
+
+
+class AIUsageLog(Base):
+    __tablename__ = "ai_usage_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    feature: Mapped[str] = mapped_column(String(40))
+    model: Mapped[str] = mapped_column(String(64))
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+

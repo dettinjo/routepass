@@ -45,6 +45,15 @@ class Settings(BaseSettings):
     poll_interval_minutes: int = 30
     scheduler_enabled: bool = True
 
+    # Gemini AI Coach (supports Google AI Studio or Vertex AI Express keys billed to GCP credits).
+    gemini_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("ROUTEPASS_GEMINI_API_KEY", "GEMINI_API_KEY"),
+    )
+    gemini_monthly_budget_usd: float = 8.0
+    gemini_model_fast: str = "gemini-2.5-flash"
+    gemini_model_pro: str = "gemini-2.5-pro"
+
     log_level: str = "INFO"
 
     @property

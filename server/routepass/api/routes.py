@@ -1063,3 +1063,222 @@ def strava_archive_from_file(body: ArchiveFile) -> dict[str, Any]:
         raise HTTPException(404, f"{path.name} not found in imports/")
     strava_archive.start(path)
     return {"phase": "queued", "file": path.name}
+
+
+# ── Multi-sport Adaptive Training Plans & Gemini AI Coach ────────────────────
+
+
+class CreateTrainingPlanBody(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    plan_type: Literal["trail_run", "road_run", "cycling", "triathlon", "duathlon", "base_build"] = "trail_run"
+    start_date: str | None = None
+    event_date: str
+    goal_spec: dict[str, Any] = Field(default_factory=dict)
+    schedule_prefs: dict[str, Any] = Field(default_factory=dict)
+    use_ai: bool = True
+    set_active: bool = True
+
+
+class UpdateTrainingPlanBody(BaseModel):
+    name: str | None = None
+    status: Literal["active", "completed", "archived"] | None = None
+    event_date: str | None = None
+    goal_spec: dict[str, Any] | None = None
+    schedule_prefs: dict[str, Any] | None = None
+
+
+class UpdateTrainingSessionBody(BaseModel):
+    scheduled_date: str | None = None
+    scheduled_slot: Literal["morning", "midday", "afternoon", "evening", "flexible"] | None = None
+    status: Literal["planned", "completed", "partial", "missed", "moved", "skipped"] | None = None
+    title: str | None = None
+    description: str | None = None
+    adaptation_note: str | None = None
+
+
+class AdaptTrainingPlanBody(BaseModel):
+    user_note: str = ""
+    force: bool = True
+
+
+class AIConfigBody(BaseModel):
+    api_key: str | None = None
+    clear_api_key: bool = False
+    monthly_budget_usd: float | None = Field(default=None, ge=0.5, le=100.0)
+    model_fast: str | None = None
+    model_pro: str | None = None
+
+
+@router.get("/training/plans", tags=["training"])
+def list_training_plans(db: Session = Depends(get_session)) -> dict[str, Any]:
+    from sqlalchemy import select
+
+    from routepass.ai import gemini
+    from routepass.analysis import training
+    from routepass.models import TrainingPlan
+
+    plans = list(
+        db.scalars(
+            select(TrainingPlan).order_by(
+                TrainingPlan.status.asc(), TrainingPlan.created_at.desc()
+            )
+        )
+    )
+    return {
+        "plans": [training.serialize_plan_summary(p) for p in plans],
+        "ai": gemini.get_ai_config(db),
+    }
+
+
+@router.post("/training/plans", tags=["training"])
+def create_training_plan(
+    body: CreateTrainingPlanBody, db: Session = Depends(get_session)
+) -> dict[str, Any]:
+    from routepass.analysis import training
+
+    prefs = store.get_preferences(db)
+    plan = training.create_plan(db, prefs, body.model_dump(), use_ai=body.use_ai)
+    return training.serialize_plan_detail(db, plan, prefs)
+
+
+@router.get("/training/plans/{plan_id}", tags=["training"])
+def get_training_plan(plan_id: int, db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass.analysis import training
+    from routepass.models import TrainingPlan
+
+    plan = db.get(TrainingPlan, plan_id)
+    if plan is None:
+        raise HTTPException(404, "Training plan not found")
+    return training.serialize_plan_detail(db, plan, store.get_preferences(db))
+
+
+@router.patch("/training/plans/{plan_id}", tags=["training"])
+def update_training_plan(
+    plan_id: int, body: UpdateTrainingPlanBody, db: Session = Depends(get_session)
+) -> dict[str, Any]:
+    from sqlalchemy import select
+
+    from routepass.analysis import training
+    from routepass.models import TrainingPlan
+
+    plan = db.get(TrainingPlan, plan_id)
+    if plan is None:
+        raise HTTPException(404, "Training plan not found")
+    if body.name is not None:
+        plan.name = body.name.strip()[:200]
+    if body.status is not None:
+        if body.status == "active":
+            for prev in db.scalars(select(TrainingPlan).where(TrainingPlan.status == "active", TrainingPlan.id != plan.id)):
+                prev.status = "archived"
+        plan.status = body.status
+    if body.event_date is not None:
+        plan.event_date = body.event_date[:10]
+    if body.goal_spec is not None:
+        plan.goal_spec = {**(plan.goal_spec or {}), **body.goal_spec}
+    if body.schedule_prefs is not None:
+        plan.schedule_prefs = {**(plan.schedule_prefs or {}), **body.schedule_prefs}
+    db.flush()
+    return training.serialize_plan_detail(db, plan, store.get_preferences(db))
+
+
+@router.delete("/training/plans/{plan_id}", tags=["training"])
+def delete_training_plan(plan_id: int, db: Session = Depends(get_session)) -> dict[str, bool]:
+    from routepass.models import TrainingPlan
+
+    plan = db.get(TrainingPlan, plan_id)
+    if plan is None:
+        raise HTTPException(404, "Training plan not found")
+    db.delete(plan)
+    db.flush()
+    return {"deleted": True}
+
+
+@router.post("/training/plans/{plan_id}/match", tags=["training"])
+def match_training_plan(plan_id: int, db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass.analysis import training
+    from routepass.models import TrainingPlan
+
+    plan = db.get(TrainingPlan, plan_id)
+    if plan is None:
+        raise HTTPException(404, "Training plan not found")
+    match_stats = training.match_activities_to_plan(db, plan)
+    return {"match": match_stats, "plan": training.serialize_plan_detail(db, plan, store.get_preferences(db))}
+
+
+@router.post("/training/plans/{plan_id}/adapt", tags=["training"])
+def adapt_training_plan(
+    plan_id: int, body: AdaptTrainingPlanBody, db: Session = Depends(get_session)
+) -> dict[str, Any]:
+    from routepass.analysis import training
+    from routepass.models import TrainingPlan
+
+    plan = db.get(TrainingPlan, plan_id)
+    if plan is None:
+        raise HTTPException(404, "Training plan not found")
+    prefs = store.get_preferences(db)
+    result = training.adapt_plan(
+        db, plan, prefs, trigger="manual", user_note=body.user_note, force=body.force
+    )
+    return {"result": result, "plan": training.serialize_plan_detail(db, plan, prefs)}
+
+
+@router.patch("/training/sessions/{session_id}", tags=["training"])
+def update_training_session(
+    session_id: int, body: UpdateTrainingSessionBody, db: Session = Depends(get_session)
+) -> dict[str, Any]:
+    from routepass.models import TrainingSession
+
+    s = db.get(TrainingSession, session_id)
+    if s is None:
+        raise HTTPException(404, "Training session not found")
+    if body.scheduled_date is not None:
+        s.scheduled_date = body.scheduled_date[:10]
+        if body.status is None and s.status == "planned":
+            s.status = "moved"
+    if body.scheduled_slot is not None:
+        s.scheduled_slot = body.scheduled_slot
+    if body.status is not None:
+        s.status = body.status
+        if body.status == "completed" and s.compliance_score is None:
+            s.compliance_score = 100.0
+        elif body.status in ("missed", "skipped"):
+            s.compliance_score = 0.0
+    if body.title is not None:
+        s.title = body.title.strip()[:200]
+    if body.description is not None:
+        s.description = body.description.strip()[:1000]
+    if body.adaptation_note is not None:
+        s.adaptation_note = body.adaptation_note.strip()[:300]
+    db.flush()
+    return {
+        "id": s.id,
+        "scheduled_date": s.scheduled_date,
+        "scheduled_slot": s.scheduled_slot,
+        "status": s.status,
+        "compliance_score": s.compliance_score,
+        "adaptation_note": s.adaptation_note,
+    }
+
+
+@router.get("/training/ai-config", tags=["training"])
+def get_training_ai_config(db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass.ai import gemini
+
+    return gemini.get_ai_config(db)
+
+
+@router.put("/training/ai-config", tags=["training"])
+def update_training_ai_config(
+    body: AIConfigBody, db: Session = Depends(get_session)
+) -> dict[str, Any]:
+    from routepass.ai import gemini
+
+    return gemini.save_ai_config(
+        db,
+        api_key=body.api_key,
+        clear_api_key=body.clear_api_key,
+        monthly_budget_usd=body.monthly_budget_usd,
+        model_fast=body.model_fast,
+        model_pro=body.model_pro,
+    )
+

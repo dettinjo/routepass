@@ -140,6 +140,20 @@ def _cycle(trigger: str, full: bool, tracks: bool) -> dict[str, Any]:
             note(f"track download failed: {exc}")
             logger.exception("track download failed")
 
+    try:
+        from routepass.analysis import training
+
+        with session_scope() as db:
+            t_stats = training.sync_active_plans_after_ingest(db, prefs)
+        if t_stats["plans"] > 0:
+            stats["training"] = t_stats
+            note(
+                f"training: {t_stats['matched']} matched, {t_stats['missed']} missed, {t_stats['adapted']} adapted"
+            )
+    except Exception as exc:  # noqa: BLE001
+        note(f"training sync failed: {exc}")
+        logger.exception("training sync failed")
+
     with session_scope() as db:
         run = db.get(SyncRun, run_id)
         run.finished_at = utcnow()

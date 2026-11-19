@@ -594,3 +594,121 @@ def trail_coach_review(focus: str = "weekly review and next-week plan") -> str:
         "4. Concrete Next-Week Plan (key sessions, target km & D+, fueling practice, and recovery advice).\n"
         f"Additional focus from athlete: {focus}"
     )
+
+
+@mcp.tool()
+def get_training_plan(plan_id: int | None = None) -> dict[str, Any]:
+    """Return the active (or specified) multi-sport training plan with alignment score, race finish-time
+    prediction, CTL trajectory graph, upcoming sessions, and recent AI adaptations."""
+    from sqlalchemy import select
+
+    from routepass.analysis import training
+    from routepass.models import TrainingPlan
+
+    with session_scope() as db:
+        plan = (
+            db.get(TrainingPlan, plan_id)
+            if plan_id is not None
+            else db.scalar(select(TrainingPlan).where(TrainingPlan.status == "active").order_by(TrainingPlan.id.desc()))
+        )
+        if plan is None:
+            return {"active_plan": None, "message": "No active training plan yet. Call create_training_plan to create one."}
+        return training.serialize_plan_detail(db, plan, store.get_preferences(db))
+
+
+@mcp.tool()
+def create_training_plan(
+    name: str,
+    plan_type: str,
+    event_date: str,
+    run_km: float | None = None,
+    run_elev_m: float | None = None,
+    bike_km: float | None = None,
+    bike_elev_m: float | None = None,
+    swim_km: float | None = None,
+    target_time_s: int | None = None,
+    max_weekly_hours: float = 8.0,
+    preferred_slot: str = "evening",
+    use_ai: bool = True,
+) -> dict[str, Any]:
+    """Create a multi-sport adaptive training plan (`trail_run`, `road_run`, `cycling`, `triathlon`,
+    `duathlon`, or `base_build`) ending on `event_date` (YYYY-MM-DD)."""
+    from routepass.analysis import training
+
+    targets: dict[str, Any] = {}
+    if run_km is not None:
+        targets["run_km"] = run_km
+    if run_elev_m is not None:
+        targets["run_elev_m"] = run_elev_m
+    if bike_km is not None:
+        targets["bike_km"] = bike_km
+    if bike_elev_m is not None:
+        targets["bike_elev_m"] = bike_elev_m
+    if swim_km is not None:
+        targets["swim_km"] = swim_km
+    goal_spec: dict[str, Any] = {"targets": targets}
+    if target_time_s is not None:
+        goal_spec["target_time_s"] = target_time_s
+
+    with session_scope() as db:
+        prefs = store.get_preferences(db)
+        plan = training.create_plan(
+            db,
+            prefs,
+            {
+                "name": name,
+                "plan_type": plan_type,
+                "event_date": event_date,
+                "goal_spec": goal_spec,
+                "schedule_prefs": {"max_weekly_hours": max_weekly_hours, "preferred_slot": preferred_slot},
+            },
+            use_ai=use_ai,
+        )
+        return training.serialize_plan_detail(db, plan, prefs)
+
+
+@mcp.tool()
+def adapt_training_plan(plan_id: int | None = None, user_note: str = "") -> dict[str, Any]:
+    """Match recorded activities to the active training plan and adapt upcoming 14 days using Gemini AI
+    (or deterministic fallback if budget/key unavailable)."""
+    from sqlalchemy import select
+
+    from routepass.analysis import training
+    from routepass.models import TrainingPlan
+
+    with session_scope() as db:
+        plan = (
+            db.get(TrainingPlan, plan_id)
+            if plan_id is not None
+            else db.scalar(select(TrainingPlan).where(TrainingPlan.status == "active").order_by(TrainingPlan.id.desc()))
+        )
+        if plan is None:
+            return {"error": "No active training plan found"}
+        return training.adapt_plan(db, plan, store.get_preferences(db), trigger="mcp", user_note=user_note, force=True)
+
+
+@mcp.tool()
+def update_training_session(
+    session_id: int,
+    status: str | None = None,
+    scheduled_date: str | None = None,
+    note: str | None = None,
+) -> dict[str, Any]:
+    """Update a planned training session (mark completed/skipped or move to a new YYYY-MM-DD date)."""
+    from routepass.models import TrainingSession
+
+    with session_scope() as db:
+        s = db.get(TrainingSession, session_id)
+        if s is None:
+            return {"error": f"Session {session_id} not found"}
+        if scheduled_date:
+            s.scheduled_date = scheduled_date[:10]
+            if not status:
+                s.status = "moved"
+        if status:
+            s.status = status
+        if note:
+            s.adaptation_note = note[:300]
+        db.flush()
+        return {"id": s.id, "scheduled_date": s.scheduled_date, "status": s.status, "note": s.adaptation_note}
+

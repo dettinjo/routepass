@@ -265,6 +265,7 @@ export default function Settings() {
           </>
         )}
         <AppearanceCard />
+        <GeminiAICard />
 
         <Card title="API & MCP" icon={IconApi} hint="Everything in this UI is available programmatically">
           <div className="stack">
@@ -288,5 +289,106 @@ export default function Settings() {
         </Card>
       </div>
     </>
+  );
+}
+
+function GeminiAICard() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const { data } = useQuery<any>({
+    queryKey: ["training-ai-config"],
+    queryFn: () => api("/training/ai-config"),
+  });
+  const [apiKey, setApiKey] = useState("");
+  const [budget, setBudget] = useState("");
+
+  useEffect(() => {
+    if (data?.monthly_budget_usd != null && budget === "") {
+      setBudget(String(data.monthly_budget_usd));
+    }
+  }, [data, budget]);
+
+  const save = useMutation({
+    mutationFn: (body: Record<string, unknown>) => api("/training/ai-config", { method: "PUT", body }),
+    onSuccess: (res) => {
+      qc.setQueryData(["training-ai-config"], res);
+      qc.invalidateQueries({ queryKey: ["training-plans"] });
+      setApiKey("");
+      toast("Saved Gemini AI Coach settings");
+    },
+    onError: (e: Error) => toast(e.message, true),
+  });
+
+  return (
+    <Card
+      title="AI Coach (Gemini)"
+      hint="Powers adaptive training plans using your Google Cloud credits with a hard monthly spend cap"
+      actions={
+        data?.configured ? (
+          <span className="badge good">connected ({data.key_source})</span>
+        ) : (
+          <span className="badge">not configured</span>
+        )
+      }
+    >
+      <div className="stack">
+        {data && (
+          <div className="row between xs muted" style={{ flexWrap: "wrap", gap: 8 }}>
+            <span>
+              Month <b>{data.usage.month}</b>: <b>${data.usage.spent_usd.toFixed(4)}</b> / ${data.monthly_budget_usd.toFixed(2)} USD
+              ({data.usage.calls} calls · {int(data.usage.input_tokens + data.usage.output_tokens)} tokens)
+            </span>
+            <span>
+              Models: <span className="mono">{data.model_fast}</span> / <span className="mono">{data.model_pro}</span>
+            </span>
+          </div>
+        )}
+        <div className="fields">
+          <label className="field">
+            Gemini API Key (Vertex AI Express <span className="mono">AQ.…</span> or AI Studio <span className="mono">AIza…</span>)
+            <input
+              type="password"
+              placeholder={data?.configured ? "Saved (paste new key to replace)" : "Paste key or set ROUTEPASS_GEMINI_API_KEY"}
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            Monthly Budget Cap (USD)
+            <input
+              type="number"
+              step="0.5"
+              min="0.5"
+              max="100"
+              value={budget}
+              onChange={(e) => setBudget(e.target.value)}
+            />
+          </label>
+        </div>
+        <div className="row" style={{ gap: 8 }}>
+          <button
+            className="sm primary"
+            disabled={save.isPending}
+            onClick={() =>
+              save.mutate({
+                ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
+                ...(budget ? { monthly_budget_usd: Number(budget) } : {}),
+              })
+            }
+          >
+            Save AI settings
+          </button>
+          {data?.key_source === "settings" && (
+            <button
+              className="sm ghost danger"
+              disabled={save.isPending}
+              onClick={() => save.mutate({ clear_api_key: true })}
+            >
+              Remove saved key
+            </button>
+          )}
+        </div>
+      </div>
+    </Card>
   );
 }
