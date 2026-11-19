@@ -19,7 +19,10 @@ exactly once. Small and fast: one container, one SQLite file, no queue or cache 
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-The scheduler and manual/API/MCP triggers share one lock, so cycles never overlap.
+The scheduler and manual/API/MCP triggers share one lock, so cycles never overlap. Automatic syncs run every
+30 min (or 1/2/6 h, or never — manual only); webhooks and new connections trigger a cycle immediately. Queued
+copies (e.g. an all-time sync) are worked off every 2 min between scheduled syncs without re-polling the
+platforms, so a backlog never multiplies API traffic.
 
 ## Data model
 

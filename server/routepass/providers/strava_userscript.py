@@ -161,7 +161,10 @@ def render_userscript(base_url: str, token: str) -> str:
     GM_xmlhttpRequest({{
       method: "POST",
       url: ROUTEPASS_URL + "/api/v1/connections/strava/session/handoff",
-      headers: {{ "Content-Type": "application/json" }},
+      headers: {{
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + HANDOFF_TOKEN,
+      }},
       data: JSON.stringify({{
         token: HANDOFF_TOKEN,
         cookies: cookies,

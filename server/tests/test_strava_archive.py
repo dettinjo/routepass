@@ -357,24 +357,6 @@ def test_strava_oauth_inactive_falls_back_to_web_session(client, connected, mock
     assert res["stats"]["import_strava"]["new"] == 1
 
 
-def test_instant_poll_interval_preference(client) -> None:
-    """Option 3: poll_interval_minutes can be lowered to 1 minute and wakes the scheduler."""
-    from routepass.engine import runner
-
-    runner._wake.clear()
-    r = client.patch(
-        "/api/v1/settings",
-        json={"poll_interval_minutes": 1, "sync": {"delay_minutes": 0}},
-        headers=AUTH,
-    )
-    assert r.status_code == 200
-    body = r.json()
-    assert body["poll_interval_minutes"] == 1
-    assert body["sync"]["delay_minutes"] == 0
-    assert runner._interval_s() == 60.0
-    assert runner._wake.is_set()
-
-
 def test_strava_remember_token_auto_renews_expired_session(mock_apis) -> None:
     """When _strava4_session expires, StravaWebClient uses strava_remember_token to mint a new session cookie."""
     from routepass.providers import strava
@@ -428,7 +410,7 @@ def test_strava_remember_token_auto_renews_expired_session(mock_apis) -> None:
 
 
 def test_strava_userscript_and_session_handoff(client, mock_apis) -> None:
-    """Option 1: 1-click userscript download and scoped HMAC session handoff work end-to-end."""
+    """Option 1: 1-click userscript download and cross-site scoped HMAC session handoff work end-to-end."""
     import re
 
     r = client.get("/api/v1/connections/strava/userscript.user.js", headers=AUTH)
@@ -446,10 +428,11 @@ def test_strava_userscript_and_session_handoff(client, mock_apis) -> None:
     bad = client.post(
         "/api/v1/connections/strava/session/handoff",
         json={"token": "invalid.token", "cookies": {"_strava4_session": "abc"}},
+        headers={"Authorization": "Bearer invalid.token", "Origin": "https://www.strava.com"},
     )
     assert bad.status_code == 401
 
-    # Valid scoped token connects Strava without needing the master API token
+    # Valid scoped token from strava.com origin passes PR #25 CSRF gate and connects Strava
     mock_apis.get("https://www.strava.com/dashboard").mock(
         return_value=httpx.Response(
             200,
@@ -465,6 +448,11 @@ def test_strava_userscript_and_session_handoff(client, mock_apis) -> None:
                 "_strava4_session": "userscript-session-val",
                 "strava_remember_token": "userscript-remember-val",
             },
+        },
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Origin": "https://www.strava.com",
+            "Sec-Fetch-Site": "cross-site",
         },
     )
     assert ok.status_code == 200, ok.text

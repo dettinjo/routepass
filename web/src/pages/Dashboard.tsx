@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Legend, LineChart, StackedBars } from "../components/charts";
-import { BrandIcon, IconArrowRight, IconCheck, IconList, IconSparkles, IconSync, IconTimeline, IconTrophy, MetricIcon } from "../components/icons";
+import { BrandIcon, IconArrowRight, IconCheck, IconList, IconSparkles, IconSync, IconTarget, IconTimeline, IconTrophy, MetricIcon } from "../components/icons";
 import { ActivityList, FamilyChips, METRICS, metricFormat, type Metric } from "../components/shared";
 import { Callout, Card, Seg, Skeleton, Stat } from "../components/ui";
 import { api } from "../lib/api";
@@ -43,6 +43,31 @@ function SetupCard({ strava, komoot }: { strava: boolean; komoot: boolean }) {
         <Link to={strava && komoot ? "/sync" : "/settings"} className="btn primary" style={{ background: "var(--accent)", color: "var(--accent-ink)", borderColor: "var(--accent)" }}>
           {strava && komoot ? "Set up sync" : "Connect accounts"}<IconArrowRight size={16} />
         </Link>
+      </div>
+    </Card>
+  );
+}
+
+function GoalsStrip({ families }: { families: string[] }) {
+  const { data } = useQuery<any[]>({ queryKey: ["goals", families], queryFn: () => api("/insights/goals", { params: { family: families } }) });
+  if (!data?.length) return null;
+  return (
+    <Card title="Goals" icon={IconTarget} actions={<Link to="/settings" className="small">Edit</Link>}>
+      <div className="stack" style={{ gap: 14 }}>
+        {data.map((g) => (
+          <div key={g.key} className="stack" style={{ gap: 5 }}>
+            <div className="row between small">
+              <span>{g.label}</span>
+              <span className="num"><b>{int(g.current)}</b> / {int(g.target)} {g.unit}</span>
+            </div>
+            <div className="progress" style={{ position: "relative" }}>
+              <span style={{ width: `${g.pct}%`, background: g.on_track ? "var(--good)" : "var(--warn)" }} />
+            </div>
+            <span className="xs muted">
+              {g.on_track ? "On track" : `${int(Math.abs(g.ahead_behind))} ${g.unit} behind`} · at this pace about {int(g.projected)} {g.unit}
+            </span>
+          </div>
+        ))}
       </div>
     </Card>
   );
@@ -180,6 +205,8 @@ export default function Dashboard() {
                 ) : <div className="empty">No training load yet</div>}
               </Card>
             </div>
+
+            <GoalsStrip families={families} />
 
             <Card title="Weekly volume" icon={MetricIcon.distance} hint="Last 6 months — tap a week to see its activities"
               actions={<select value={metric} onChange={(e) => setMetric(e.target.value as Metric)} style={{ width: "auto", minHeight: 36 }} aria-label="Metric">

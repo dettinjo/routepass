@@ -21,7 +21,8 @@ from routepass.timeutil import utcnow
 logger = logging.getLogger(__name__)
 
 _lock = threading.Lock()
-BACKLOG_INTERVAL_S = 30
+BACKLOG_INTERVAL_S = 120  # how often queued copies are worked off between scheduled syncs
+POLL_CHOICES_MIN = (30, 60, 120, 360)  # automatic sync intervals; 0 = manual only
 _wake = threading.Event()
 _stop = threading.Event()
 _thread: threading.Thread | None = None
@@ -214,22 +215,62 @@ def trigger_soon(delay_s: float = 0) -> None:
     timer.start()
 
 
-def _interval_s() -> float:
+_reschedule = threading.Event()
+
+
+def reschedule() -> None:
+    """Recompute the next scheduled run (after a settings change) without syncing now."""
+    _reschedule.set()
+    _wake.set()
+
+
+def poll_interval_min() -> int:
+    """Minutes between automatic syncs; 0 means manual only."""
     with session_scope() as db:
-        minutes = store.get_preferences(db).get("poll_interval_minutes")
-    return max(1, minutes or get_settings().poll_interval_minutes) * 60.0
+        value = store.get_preferences(db).get("poll_interval_minutes")
+    if value is None:
+        value = get_settings().poll_interval_minutes
+    value = int(value)
+    if value <= 0:
+        return 0
+    return max(POLL_CHOICES_MIN[0], value)
+
+
+def drain_backlog() -> dict[str, int] | None:
+    """Work off queued copies without polling the platforms (respects the cycle lock)."""
+    if not _lock.acquire(blocking=False):
+        return None
+    try:
+        return _drain_jobs()
+    finally:
+        _lock.release()
 
 
 def _loop() -> None:
     _stop.wait(15)  # let the app finish starting
+    last_cycle = 0.0
     while not _stop.is_set():
-        try:
-            run_cycle("schedule")
-        except Exception:  # noqa: BLE001
-            logger.exception("scheduled cycle crashed")
-        # A backlog (e.g. an all-time sync) keeps the loop busy instead of waiting a full interval.
-        _wake.wait(BACKLOG_INTERVAL_S if backlog() else _interval_s())
+        woken = _wake.is_set() and not _reschedule.is_set()
         _wake.clear()
+        _reschedule.clear()
+        interval_s = poll_interval_min() * 60
+        due = bool(interval_s) and time.monotonic() - last_cycle >= interval_s
+        try:
+            if woken or due:
+                # explicit triggers (webhook, new connection, settings change) and the schedule
+                run_cycle("schedule" if due and not woken else "trigger")
+                last_cycle = time.monotonic()
+            elif backlog():
+                drain_backlog()
+        except Exception:  # noqa: BLE001
+            logger.exception("scheduler step crashed")
+        if backlog():
+            timeout = BACKLOG_INTERVAL_S
+        elif interval_s:
+            timeout = max(5.0, interval_s - (time.monotonic() - last_cycle))
+        else:
+            timeout = 3600.0  # manual only: sleep until something wakes us
+        _wake.wait(timeout)
 
 
 def start_scheduler() -> None:

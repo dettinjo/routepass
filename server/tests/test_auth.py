@@ -104,3 +104,26 @@ def test_google_sign_in_round_trip(client, settings, mock_apis):
     cb = client.get(f"/api/v1/auth/google/callback?code=c&state={state}", follow_redirects=False)
     assert "/login?error=" in cb.headers["location"]
     assert client.get("/api/v1/status").status_code == 401
+
+
+def test_cross_site_requests_are_refused(client, settings):
+    settings(allowed_emails="me@example.com", trust_tailscale_headers="true")
+    me = {"Tailscale-User-Login": "me@example.com"}
+    # a page on another site making the browser POST with the ambient Tailscale identity
+    evil = client.post("/api/v1/sync/reevaluate", headers={**me, "Origin": "https://evil.example"})
+    assert evil.status_code == 403
+    assert client.post("/api/v1/sync/run", headers={**me, "Sec-Fetch-Site": "cross-site"}).status_code == 403
+    # same-origin browser requests and plain API clients still work
+    ok = client.post(
+        "/api/v1/sync/reevaluate",
+        headers={**me, "Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"},
+    )
+    assert ok.status_code == 200
+    assert (
+        client.post("/api/v1/sync/reevaluate", headers={**AUTH, "Origin": "https://evil.example"}).status_code
+        == 200
+    )
+    # reads stay possible (the browser blocks other sites from reading the response anyway)
+    assert client.get("/api/v1/status", headers={**me, "Origin": "https://evil.example"}).status_code == 200
+    # Strava's webhook sends no browser headers
+    assert client.post("/api/v1/webhooks/strava", json={"owner_id": 1}).status_code == 200

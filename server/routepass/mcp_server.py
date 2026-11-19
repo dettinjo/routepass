@@ -431,3 +431,69 @@ def strava_archive_import(file: str | None = None) -> dict[str, Any]:
         strava_archive.start(path)
         return {"phase": "queued", "file": path.name}
     return {**st, "available": sorted(p.name for p in strava_archive.archive_dir().glob("*.zip"))}
+
+
+@mcp.tool()
+def get_explorer_tiles(
+    start: str | None = None, end: str | None = None, families: list[Family] | None = None
+) -> dict:
+    """Explorer tiles (zoom-14 map squares visited): total, max square, max cluster and new tiles per year."""
+    with session_scope() as db:
+        out = insights.explorer_tiles(db, _f(start, end, families, None))
+    return {k: v for k, v in out.items() if k != "tiles"}
+
+
+@mcp.tool()
+def get_zone_distribution(
+    grain: Literal["week", "month", "year"] = "month",
+    start: str | None = None,
+    end: str | None = None,
+    families: list[Family] | None = None,
+) -> dict:
+    """Time in heart-rate and power zones across activities plus polarisation (low/threshold/high %)."""
+    with session_scope() as db:
+        return insights.zone_distribution(db, _f(start, end, families, None), grain)
+
+
+@mcp.tool()
+def get_efficiency_trend(
+    start: str | None = None, end: str | None = None, families: list[Family] | None = None
+) -> list:
+    """Aerobic efficiency factor (power or speed per heartbeat) and decoupling per activity, oldest first."""
+    with session_scope() as db:
+        return insights.efficiency_trend(db, _f(start, end, families, None))
+
+
+@mcp.tool()
+def get_goals(families: list[Family] | None = None) -> list:
+    """Progress against the weekly/monthly/yearly goals set in settings, with on-track projection."""
+    with session_scope() as db:
+        return insights.goals_progress(
+            db, date.today(), store.get_preferences(db), list(families) if families else None
+        )
+
+
+@mcp.tool()
+def get_gear(start: str | None = None, end: str | None = None) -> dict:
+    """Distance, time and climbing per gear and recording device, with service-interval status."""
+    with session_scope() as db:
+        return insights.gear_stats(db, _f(start, end, None, None), store.get_preferences(db))
+
+
+@mcp.tool()
+def list_duplicate_candidates(limit: int = 30) -> list:
+    """Activities that look like the same recording but were not merged. Merge with merge_activities or
+    dismiss with dismiss_duplicate_candidate."""
+    with session_scope() as db:
+        rows = services.duplicate_candidates(db, limit)
+    for r in rows:
+        r["activity"].pop("polyline", None)
+        r["candidate"].pop("polyline", None)
+    return rows
+
+
+@mcp.tool()
+def dismiss_duplicate_candidate(activity_id: int, other_id: int) -> dict:
+    """Mark a suggested duplicate pair as different activities so it is not suggested again."""
+    with session_scope() as db:
+        return services.dismiss_duplicate(db, activity_id, other_id)
