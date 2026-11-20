@@ -17,6 +17,7 @@ from routepass.db import session_scope
 from routepass.models import Activity, AIUsageLog, PlanAdaptation, TrainingPlan, TrainingSession, TrainingWeek
 
 STUDIO = "https://generativelanguage.googleapis.com/v1beta/models/gemini-4-hydrogen:generateContent"
+STUDIO_V1 = STUDIO.replace("v1beta", "v1")
 VERTEX = "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-4-hydrogen:generateContent"
 
 
@@ -69,9 +70,11 @@ def test_key_in_header_retry_on_overload_and_thinking_tokens_billed(key):
             httpx.Response(200, json=_answer('{"ok": true}', thoughts=400)),
         ]
     )
+    v1 = respx.post(STUDIO_V1).mock(return_value=httpx.Response(503, json={"error": {"message": "busy"}}))
+    respx.post(VERTEX).mock(return_value=httpx.Response(403, json={"error": {"message": "disabled"}}))
     res, model = gemini.generate_json(feature="test", system_prompt="s", user_payload={})
     assert res == {"ok": True} and model == "gemini-4-hydrogen"
-    assert route.call_count == 2
+    assert route.call_count == 2 and v1.call_count == 1  # tried the other endpoint before waiting
     req = route.calls[-1].request
     assert req.headers["x-goog-api-key"] == "AQ.test-key-123456789"
     assert "key=" not in str(req.url)
@@ -97,6 +100,10 @@ def test_failure_is_recorded_for_the_ui(key):
     respx.post(STUDIO).mock(
         return_value=httpx.Response(503, json={"error": {"code": 503, "message": "busy"}})
     )
+    respx.post(STUDIO_V1).mock(
+        return_value=httpx.Response(503, json={"error": {"code": 503, "message": "busy"}})
+    )
+    respx.post(VERTEX).mock(return_value=httpx.Response(403, json={"error": {"message": "API disabled"}}))
     with pytest.raises(gemini.GeminiError, match="busy"):
         gemini.generate_json(feature="plan_adapt", system_prompt="s", user_payload={})
     with session_scope() as db:

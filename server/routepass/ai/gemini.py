@@ -228,12 +228,15 @@ def _short(exc_or_text: Any) -> str:
     return text[:240]
 
 
-def _post(api_key: str, model: str, body: dict[str, Any], *, timeout_s: float) -> dict[str, Any]:
+def _post(
+    api_key: str, model: str, body: dict[str, Any], *, timeout_s: float, retries: int | None = None
+) -> dict[str, Any]:
     """One request with endpoint discovery and retries; touches no database."""
     headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
     last: str = "Gemini request failed"
     with httpx.Client(timeout=httpx.Timeout(timeout_s, connect=15.0)) as client:
-        for attempt in range(len(RETRY_WAITS_S) + 1):
+        waits = RETRY_WAITS_S if retries is None else RETRY_WAITS_S[:retries]
+        for attempt in range(len(waits) + 1):
             retry = False
             for name in _endpoint_order(api_key):
                 url = _ENDPOINTS[name].format(model=model)
@@ -246,20 +249,21 @@ def _post(api_key: str, model: str, body: dict[str, Any], *, timeout_s: float) -
                     last = f"Network error calling Gemini: {type(exc).__name__}"
                     continue
                 if resp.status_code in (401, 403, 404):
-                    last = f"HTTP {resp.status_code}: {_short(resp.text)}"
+                    if not retry:  # keep the overload message; it is the one that matters
+                        last = f"HTTP {resp.status_code}: {_short(resp.text)}"
                     continue  # this endpoint does not take this key or model; try the next
                 if resp.status_code in RETRY_STATUS:
-                    _working_endpoint[api_key[-12:]] = name
+                    # overloaded: the other endpoint is sometimes served by other capacity
                     last, retry = f"HTTP {resp.status_code}: {_short(resp.text)}", True
-                    break
+                    continue
                 if resp.status_code >= 400:
                     raise GeminiError(f"HTTP {resp.status_code}: {_short(resp.text)}")
                 _working_endpoint[api_key[-12:]] = name
                 return resp.json()
-            if not retry or attempt == len(RETRY_WAITS_S):
+            if not retry or attempt == len(waits):
                 break
-            logger.info("Gemini busy (%s); retrying in %.0f s", last, RETRY_WAITS_S[attempt])
-            time.sleep(RETRY_WAITS_S[attempt])
+            logger.info("Gemini busy (%s); retrying in %.0f s", last, waits[attempt])
+            time.sleep(waits[attempt])
     raise GeminiError(last)
 
 
@@ -285,6 +289,7 @@ def generate_json(
     temperature: float = 0.25,
     max_output_tokens: int = 4096,
     timeout_s: float = TIMEOUT_S,
+    retries: int | None = None,
 ) -> tuple[dict[str, Any], str]:
     """Ask Gemini for a JSON object, within the monthly budget, and log the spend.
 
@@ -325,7 +330,7 @@ def generate_json(
 
     started = time.monotonic()
     try:
-        data = _post(api_key, model, body, timeout_s=timeout_s)
+        data = _post(api_key, model, body, timeout_s=timeout_s, retries=retries)
     except GeminiError as exc:
         with session_scope() as db:
             _record_status(db, ok=False, feature=feature, model=model, latency_s=0, error=str(exc))

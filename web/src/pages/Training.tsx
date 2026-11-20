@@ -956,7 +956,7 @@ function PlanView() {
                 ? <span className="xs muted">The built-in rules adapt the plan right away.</span>
                 : aiInfo.status?.last_ok === false
                   ? <span className="xs muted">Gemini didn't answer last time ({ago(aiInfo.status.last_error_at)}); if it still doesn't, the built-in rules adapt the plan.</span>
-                  : <span className="xs muted">The AI coach takes about a minute; you can leave this page.</span>}
+                  : <span className="xs muted">The AI coach takes up to two minutes (the built-in rules step in if Gemini is busy); you can leave this page.</span>}
             </div>
           </div>
         </Card>

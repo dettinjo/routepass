@@ -40,7 +40,7 @@ WRITE_AHEAD_DAYS = 14
 WEEKS_PER_CALL = 2
 FEEDBACK_DAYS = 4  # matched workouts this recent get a note; older ones are left alone
 FEEDBACK_PER_SWEEP = 3
-RETRY_AFTER_FAILURE_S = 3 * 3600
+RETRY_AFTER_FAILURE_S = 3600  # Gemini overload usually passes within the hour
 
 ADAPT_PROMPT = (
     "You are an endurance coach adapting an athlete's next 14 days. You get recent sessions (with "
@@ -212,7 +212,13 @@ def _backing_off(key: str) -> bool:
 
 
 def _ask(
-    feature: str, prompt: str, payload: dict[str, Any], *, tier: str = "fast", max_tokens: int = 2048
+    feature: str,
+    prompt: str,
+    payload: dict[str, Any],
+    *,
+    tier: str = "fast",
+    max_tokens: int = 2048,
+    impatient: bool = False,
 ) -> tuple[dict[str, Any] | None, str, str | None]:
     """(answer, model, error). Never raises for Gemini problems."""
     try:
@@ -266,7 +272,12 @@ def adapt(
         return None
     ai, err = None, None
     if use_ai:
-        res, model, err = _ask("plan_adapt", ADAPT_PROMPT, ctx["payload"])
+        res, model, err = _ask(
+            "plan_adapt",
+            ADAPT_PROMPT,
+            ctx["payload"],
+            impatient=trigger == "manual" or trigger.startswith("skip_"),
+        )
         if res is not None:
             ai = {"summary": res.get("summary"), "mutations": res.get("mutations"), "model": model}
     with session_scope() as db:
