@@ -1,108 +1,112 @@
+<!-- portfolio:date=2026-04-15 -->
 # RoutePass
 
-Self-hosted, single-user **Strava ⇄ Komoot sync** with a deduplicated activity history and
-in-depth analysis. One small container: API, MCP server, web UI and background sync, backed by
-one SQLite file.
+**[English](README.md) · [Deutsch](README.de.md)**
 
-- **Sync in both directions** — Komoot → Strava and Strava → Komoot, each switchable, with
-  ordered rules (sport, distance, elevation, duration, name, weekday, date, commute/indoor,
-  HR/power) that skip or shape the copy (title/description templates, sport mapping, Komoot
-  visibility, Strava feed muting/commute/gear). Dry-run preview before anything is uploaded.
-- **Everything up to date, once** — "Bring everything up to date" imports the complete history of
-  both platforms, merges duplicates, previews what is missing on each side and then copies it in the
-  background within Strava's rate limits.
-- **All sports** — every Strava sport type (50) and every recordable Komoot sport (25) is mapped
-  explicitly in both directions (`server/routepass/providers/sports.py`, enforced by tests).
-- **No duplicates** — every Strava activity and Komoot tour is matched into one *activity*
-  (start time + distance + sport). Something already on the target platform is never copied,
-  RoutePass' own uploads are recognised, and a settle delay lets devices that upload to both
-  platforms arrive before anything is copied. Wrong matches can be split or merged by hand.
-- **Analysis** — dashboard (week/month/year vs previous), weekly/monthly volume by sport,
-  year-over-year, calendar heatmap, fitness/fatigue/form (CTL/ATL/TSB), records and best
-  efforts, mean-maximal power curve, habits (weekday×hour), streaks, Eddington number, a map of
-  every route, and per activity: map with linked stream charts, HR/power zones, splits,
-  climbs, best efforts, peak power, aerobic decoupling and repeats of the same route.
-  Select several activities to copy them in bulk or to analyse them as one multi-day trip.
-- **More insights** — heart-rate/power zones with polarisation, aerobic efficiency trend, Explorer tiles
-  (map, max square, max cluster, new tiles per year), goals with projection on Home, gear mileage with service
-  intervals, review of possible duplicates (merge or dismiss), and CSV export of every activity.
-- **Places & geofences** — save places such as "Home" (from your phone's location) and use them in rules
-  ("starts near Home → don't copy").
-- **Installable app (PWA)** — add RoutePass to your phone's home screen; recent data stays readable offline and
-  is cleared on sign-out. Light/dark/automatic theme.
-- **API & MCP** — everything the UI does is in the REST API (`/api/docs`) and as MCP tools
-  (`/mcp`, streamable HTTP) for AI assistants.
+RoutePass is a self-hosted Strava ⇄ Komoot sync and training app for one athlete. Both platforms are merged into one deduplicated activity history that a FastAPI backend, a React web app and an MCP server for AI assistants all work on.
 
-## Strava without the API
+- **Deduplicating two-way sync** — Strava activities and Komoot tours are matched into one activity (±10 min, ±15 % distance); rules decide each copy and a retrying job queue respects Strava's rate limits.
+- **LLM coach with guardrails** — Gemini runs on a background worker and only writes text or proposes plan changes; the code computes every number and rejects unsafe changes, with rule-based fallbacks.
+- **Track analytics in NumPy** — despiked elevation gain, normalized power and TSS/hrTSS, heart-rate and power zones, climb detection, grade-adjusted pace (Minetti) and aerobic decoupling, checked against ten real Komoot recordings (distance within 1–4 %).
+- **Fitness estimates from physics** — cycling threshold and VO2max from a power meter or, without one, from steady climbs (gravity, rolling and air resistance); running VO2max (Daniels VDOT), race predictions and a six-week fitness outlook.
+- **Adaptive training plans** — periodised plans for trail, road, cycling and triathlon goals; recorded activities are matched to sessions and scored, effort ratings feed the load, and each session gets route suggestions from your history and Komoot.
+- **One service layer, two interfaces** — 126 REST endpoints (OpenAPI) and 60 MCP tools call the same functions, so an AI assistant can do everything the web app does.
+- **Small to run** — one container (API, scheduler, MCP, static web build) and one SQLite file in WAL mode with versioned migrations; stored credentials are Fernet-encrypted.
 
-Strava's API now needs a paid subscription on the app owner's account (`403 Application Status: Inactive`) and restricts storing API data. RoutePass gives you two ways to sync without paying for the API:
+## Screenshots
 
-1. **Continuous Web Session sync (both directions, `Strava ⇄ Komoot`, 0 MB Docker overhead)** — install the tiny 1-click Tampermonkey userscript from **Settings → Strava → Install 1-click connector**, then click **Sign in to Strava**. Sign in normally on `strava.com` (Email 6-digit One-Time Code, Google, Apple, or password); the userscript reads the `HttpOnly` `_strava4_session` and `strava_remember_token` cookies via `GM_cookie` and sends them to RoutePass with a scoped HMAC token. RoutePass then automatically renews `_strava4_session` on background polls using `strava_remember_token` (`StravaWebClient`), and also supports pasting a cookie / *Copy as cURL* manually.
-   ⚠️ Strava's terms of service forbid automated access to the website; using this mode risks your Strava account being suspended. RoutePass paces website requests (≥1.5 s apart, at most 20 recordings per sync run) but cannot make it compliant. The data export import (below) and the paid API are the sanctioned routes.
-2. **Bulk Strava archive import** — import Strava's free personal data export (**Settings → Strava → Import your Strava data export**): the complete history with original FIT/GPX/TCX recordings, merged with Komoot like any other source.
+<p align="center"><img src="docs/screenshots/insights.png" alt="Insights: volume over time by sport" width="100%" /></p>
 
-## Interface
+<p align="center">
+  <img src="docs/screenshots/training.png" alt="Training plan with today's session and race prediction" width="32%" /> <img src="docs/screenshots/fitness.png" alt="Fitness level: cycling and running estimates" width="32%" /> <img src="docs/screenshots/activity.png" alt="Activity with map, metrics and streams" width="32%" />
+</p>
 
-Mobile first: bottom tab bar and card lists on phones, sidebar on desktop; light and dark mode.
-Strava and Komoot are shown with their official marks; sports and metrics with Tabler icons.
+All screenshots use the synthetic demo data from `server/scripts/seed_demo.py`.
+
+## What it does
+
+- **Sync** — Komoot → Strava and Strava → Komoot, each switchable. Rules (sport, distance, climbing, duration, name, weekday, date, commute/indoor, heart rate/power, places) skip or shape a copy: title and description templates, sport mapping, visibility, gear. A dry run shows what a rule would do before anything is uploaded. Every Strava sport type (50) and every recordable Komoot sport (25) has an explicit mapping, enforced by tests.
+- **One history** — RoutePass recognises its own uploads, never copies an activity that already exists on the target, and waits a settle delay so devices that upload to both platforms arrive first. Wrong matches can be split or merged by hand. Copies follow the original's visibility; photos from both platforms are shown per activity.
+- **Analysis** — dashboard with period comparison, volume by sport, year over year, calendar heatmap, fitness/fatigue/form (CTL/ATL/TSB), records and best efforts, power curve, zones with polarisation, efficiency trend, habits, streaks, Eddington number, Explorer tiles, gear mileage and a map of every route. Per activity: map linked to stream charts, splits, climbs (with estimated watts on rides without a power meter), zones and best efforts.
+- **Training** — plans with phases, key sessions, a race prediction and calendar export; "shorter / easier / swap" options for a single day; skip reasons (no time, illness, soreness or fatigue, injury) that reshape the following days.
+- **AI coach (optional, Gemini)** — writes the next two weeks' sessions with your personal zones, adapts the next 14 days after training or a note, comments on each matched workout, writes a weekly review and a monthly fitness report, and analyses single activities on request. It runs within a monthly spending cap; when Gemini is unavailable or over quota, the built-in rules take over and the app says why.
+- **Web app** — mobile first (bottom tabs on phones, sidebar on desktop), light and dark mode, installable as a PWA.
+
+## Architecture
+
+```
+┌──────────────── routepass container (one Python process) ─────────────────┐
+│  /             React app (static build)                                   │
+│  /api/v1/*     REST (FastAPI, OpenAPI at /api/docs)  ─┐                   │
+│  /mcp          MCP, streamable HTTP                  ─┼─► services.py     │
+│  scheduler     sync cycle every 30 min / on webhook  ─┤    engine/        │
+│  AI coach      background worker, one job at a time  ─┘    analysis/      │
+│                                                                           │
+│  SQLite (WAL)  /data/routepass.db       Fernet key  /data/secret.key      │
+└───────────────────────────────────────────────────────────────────────────┘
+```
+
+- **Sync cycle** (`engine/runner.py`): import both platforms incrementally → match records into activities (`engine/ingest.py`) → plan copies by rules (`engine/sync.py`) → upload as GPX with heart rate, cadence and power → download recordings in the background. Failed uploads retry with backoff (15 min to 12 h, at most 5 attempts); rate limits defer a job without counting an attempt, and background work keeps part of Strava's 15-minute and daily limits free.
+- **Analysis** (`analysis/`): pure NumPy track metrics; aggregates read only the deduplicated `activities` table, so nothing is counted twice.
+- **Two listeners in one process**: a private port for the web app (session cookies after sign-in) and an optional public port that serves only `/api/v1/*` and `/mcp` with a bearer token, for OAuth callbacks, Strava webhooks and remote MCP clients.
+- **AI calls** never run inside a request or an open database transaction: each job reads in one short session, calls Gemini with none open, and validates and writes the answer in another.
+
+More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+### Strava access
+
+Since mid-2026 Strava's API only works while the app owner has a paid subscription. RoutePass works with the API, with Strava's free personal data export (complete history with original FIT/GPX/TCX files), or with an optional browser-session connector. That connector uses the website rather than the API, which Strava's terms do not allow; see the architecture notes before using it.
+
+## Tech stack
+
+**Backend:** Python 3.12 · FastAPI · SQLAlchemy · SQLite · NumPy · httpx · MCP Python SDK · Gemini API
+**Frontend:** React · TypeScript · Vite · TanStack Query · uPlot · Leaflet · Tabler Icons
+**Delivery:** Docker (multi-stage build) · GitHub Actions → GitHub Container Registry · pytest with respx-mocked provider APIs (85 tests) · Ruff
 
 ## Run
 
 ```bash
-cp .env.example .env            # set ROUTEPASS_API_TOKEN and your Strava app id/secret
+cp .env.example .env            # set ROUTEPASS_API_TOKEN, optionally your Strava app id/secret
 docker compose up --build       # http://localhost:8000
 ```
 
-Then in **Settings**: connect Strava (OAuth with your own API app from
-<https://www.strava.com/settings/api>, callback domain = this host) and Komoot (email +
-password, stored Fernet-encrypted). The first import runs immediately; recordings are
-downloaded in the background within Strava's rate limits.
+Then connect Strava and Komoot in **Settings**. The first import starts right away; recordings are downloaded in the background.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ROUTEPASS_API_TOKEN` | *(empty)* | Bearer token for API and MCP clients; also a fallback UI login |
-| `ROUTEPASS_ALLOWED_EMAILS` | *(empty)* | Who may sign in to the UI (comma-separated). With no token and no e-mails the instance is open |
-| `ROUTEPASS_TRUST_TAILSCALE_HEADERS` | `false` | Sign in automatically from `Tailscale-User-Login` (only behind `tailscale serve`; never on the public port) |
-| `ROUTEPASS_GOOGLE_CLIENT_ID` / `_SECRET` | | "Sign in with Google" (redirect URI: `<PUBLIC_URL>/api/v1/auth/google/callback`) |
-| `ROUTEPASS_PORT` / `ROUTEPASS_PUBLIC_PORT` | `8000` / off | Private listener (UI) and optional public listener (API paths only, API token only) |
+| `ROUTEPASS_API_TOKEN` | *(empty)* | Bearer token for API and MCP clients; also a fallback web sign-in |
+| `ROUTEPASS_ALLOWED_EMAILS` | *(empty)* | Who may sign in to the web app (comma-separated) |
 | `ROUTEPASS_BASE_URL` | `http://localhost:8000` | URL users open; builds the Strava OAuth redirect |
+| `ROUTEPASS_PUBLIC_URL` | | Internet-facing URL that exposes only the API paths (OAuth callback, webhook, REST, MCP) |
+| `ROUTEPASS_PORT` / `ROUTEPASS_PUBLIC_PORT` | `8000` / off | Private listener (web app) and optional public listener (API paths only) |
 | `ROUTEPASS_STRAVA_CLIENT_ID` / `_SECRET` | | Strava API app (can also be entered in Settings) |
-| `ROUTEPASS_PUBLIC_URL` | | Internet-facing URL that exposes only the API paths (OAuth callback, Strava webhook, REST, MCP); used for the Strava redirect and webhook |
-| `ROUTEPASS_STRAVA_WEBHOOK_VERIFY_TOKEN` | | Shared secret for Strava push events (instant sync); enable under Settings → Strava |
-| `ROUTEPASS_STRAVA_REDIRECT_URI` | | Override the OAuth redirect; paste the returned `code` in Settings |
+| `ROUTEPASS_STRAVA_WEBHOOK_VERIFY_TOKEN` | | Shared secret for Strava push events (instant sync) |
+| `ROUTEPASS_GOOGLE_CLIENT_ID` / `_SECRET` | | Optional "Sign in with Google" |
+| `ROUTEPASS_TRUST_TAILSCALE_HEADERS` | `false` | Sign in from the identity header set by `tailscale serve` (private port only) |
+| `ROUTEPASS_GEMINI_API_KEY` | | Optional AI coach key (can also be entered in Settings) |
 | `ROUTEPASS_SECRET_KEY` | generated | Fernet key for stored credentials (else `/data/secret.key`) |
-| `ROUTEPASS_POLL_INTERVAL_MINUTES` | `30` | Automatic sync interval: `0` = manual only, else 30/60/120/360 (Settings overrides it) |
-| `ROUTEPASS_DATA_DIR` | `/data` | SQLite database + key |
+| `ROUTEPASS_POLL_INTERVAL_MINUTES` | `30` | Automatic sync: `0` = manual only, else 30/60/120/360 |
+| `ROUTEPASS_DATA_DIR` | `/data` | SQLite database and key |
 
-## Sign-in
-
-The UI uses a session cookie. On devices in your tailnet you are signed in automatically (Tailscale identity),
-elsewhere with Google; the API token remains for scripts, MCP clients and as a fallback.
-
-## MCP
+### MCP
 
 ```json
-{ "mcpServers": { "routepass": { "type": "http", "url": "https://<host>/mcp",
+{ "mcpServers": { "routepass": { "type": "http", "url": "https://<your-host>/mcp",
   "headers": { "Authorization": "Bearer <ROUTEPASS_API_TOKEN>" } } } }
 ```
 
-Tools cover status and sync runs, activity search/detail/streams/similar routes, totals,
-period comparison, time series, training load, records, power curve, habits, Eddington,
-year-over-year, settings, rules (list/save/delete/preview), the job queue, and manual
-merge/split/lock/sync of single activities.
+The tools cover sync status and runs, activity search and detail, all insights, fitness estimates, training plans and sessions, rules (with dry run), the job queue and manual merge/split/lock of single activities.
 
-## Develop
+### Develop
 
 ```bash
 cd server && python -m venv .venv && . .venv/bin/activate && pip install -r requirements-dev.txt
 pytest && ruff check . && ruff format --check .
-ROUTEPASS_DATA_DIR=./data python -m scripts.seed_demo   # optional: 2 years of synthetic data
+ROUTEPASS_DATA_DIR=./data python -m scripts.seed_demo   # optional: two years of synthetic data
 uvicorn routepass.asgi:app --reload                     # :8000
 
 cd web && npm ci && npm run dev                         # :5173, proxies /api and /mcp
 ```
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design.
 
 ## License
 
