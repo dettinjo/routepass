@@ -112,6 +112,8 @@ LABELS = {
     "feedback": "Reviewing a workout",
     "weekly_review": "Writing the weekly review",
     "sweep": "Checking what to do",
+    "fitness_report": "Writing your fitness report",
+    "activity_analysis": "Analysing an activity",
 }
 
 
@@ -121,7 +123,7 @@ def _key(kind: str, kw: dict[str, Any]) -> str:
 
 def submit(kind: str, **kw: Any) -> dict[str, Any]:
     """Queue a job (deduplicated). Without a running worker (tests, CLI) it runs right away."""
-    if kind not in JOBS:
+    if kind not in JOBS and kind not in FITNESS_JOBS:
         raise ValueError(f"unknown AI coach job {kind}")
     if _thread is None:
         _run(kind, kw)
@@ -133,6 +135,11 @@ def submit(kind: str, **kw: Any) -> dict[str, Any]:
         _pending.add(k)
     _queue.put((kind, kw))
     return {"queued": True, "kind": kind}
+
+
+def pending() -> list[str]:
+    with _lock:
+        return list(_pending)
 
 
 def status() -> dict[str, Any]:
@@ -151,6 +158,7 @@ def status() -> dict[str, Any]:
 def _run(kind: str, kw: dict[str, Any]) -> None:
     global _current
     _current = {
+        "activity_id": kw.get("activity_id"),
         "kind": kind,
         "label": LABELS.get(kind, kind),
         "plan_id": kw.get("plan_id"),
@@ -159,7 +167,7 @@ def _run(kind: str, kw: dict[str, Any]) -> None:
     started = time.monotonic()
     ok, error = True, ""
     try:
-        JOBS[kind](**kw)
+        _job(kind)(**kw)
     except Exception as exc:  # noqa: BLE001
         ok, error = False, str(exc)[:300]
         logger.exception("AI coach job %s failed", kind)
@@ -735,6 +743,11 @@ def sweep() -> None:
             ):
                 if not _backing_off(f"feedback:{sid}"):
                     todo.append(("feedback", {"session_id": sid}))
+    with session_scope() as db:
+        from routepass.ai import fitness_coach
+
+        if fitness_coach.report_due(db, now.date()) and not _backing_off("fitness_report"):
+            todo.append(("fitness_report", {"trigger": "monthly"}))
     for kind, kw in todo:
         submit(kind, **kw)
 
@@ -746,3 +759,14 @@ JOBS = {
     "weekly_review": weekly_review,
     "sweep": sweep,
 }
+
+# Fitness jobs live in fitness_coach, which imports this module: looked up when they run.
+FITNESS_JOBS = ("fitness_report", "activity_analysis")
+
+
+def _job(kind: str):
+    if kind in FITNESS_JOBS:
+        from routepass.ai import fitness_coach
+
+        return getattr(fitness_coach, kind)
+    return JOBS[kind]

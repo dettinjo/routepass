@@ -122,7 +122,24 @@ def activity_detail(db: Session, activity_id: int) -> dict[str, Any]:
     )
     out["prev_id"], out["next_id"] = prev_id, next_id
     out["tiles"] = insights.activity_tile_stats(db, act)
+    _estimate_climb_power(db, act, out)
     return out
+
+
+def _estimate_climb_power(db: Session, act: Activity, out: dict[str, Any]) -> None:
+    """Rides without a power meter: the watts each steady climb took (gravity, rolling, air)."""
+    from routepass.analysis import fitness
+
+    climbs = (out.get("analysis") or {}).get("climbs")
+    kg = (store.get_preferences(db).get("profile") or {}).get("weight_kg")
+    if not climbs or act.family != "ride" or act.avg_power or not kg:
+        return
+    climbs = [dict(c) for c in climbs]  # copies: the track's stored detail must stay untouched
+    out["analysis"]["climbs"] = climbs
+    for c in climbs:
+        if (c.get("grade_pct") or 0) >= 3 and (c.get("duration_s") or 0) >= 120:
+            p = fitness.climb_power(c, kg)
+            c["est_power_w"] = round(p) if p else None
 
 
 def activity_track(db: Session, activity_id: int) -> dict[str, Any]:

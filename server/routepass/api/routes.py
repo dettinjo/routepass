@@ -410,6 +410,38 @@ def activity_media(
     return media.activity_media(db, act, refresh)
 
 
+@router.get("/activities/{activity_id}/analysis", tags=["activities"])
+def activity_analysis(activity_id: int, db: Session = Depends(get_session)) -> dict[str, Any]:
+    """The AI coach's analysis of this activity, if one was asked for, and whether it is working on it."""
+    from routepass.ai import coach
+    from routepass.analysis import training
+
+    act = _call(services.get_activity, db, activity_id)
+    st = coach.status()
+    working = bool(
+        (st["current"] or {}).get("kind") == "activity_analysis"
+        and (st["current"] or {}).get("activity_id") == act.id
+    ) or any(k.startswith("activity_analysis") and f'"activity_id": {act.id}}}' in k for k in coach.pending())
+    info = training.ai_info(db)
+    return {
+        "analysis": act.coach_analysis,
+        "working": working,
+        "available": info["configured"] and info["remaining_usd"] > 0,
+    }
+
+
+@router.post("/activities/{activity_id}/analysis", tags=["activities"])
+def request_activity_analysis(activity_id: int, db: Session = Depends(get_session)) -> dict[str, Any]:
+    """Ask the AI coach to analyse this activity (in the background; GET follows it)."""
+    from routepass.ai import coach
+    from routepass.analysis import training
+
+    act = _call(services.get_activity, db, activity_id)
+    if not training.ai_enabled(db):
+        raise HTTPException(409, "Add a Gemini key in Settings → Training to use the AI coach")
+    return coach.submit("activity_analysis", activity_id=act.id)
+
+
 class VisibilityBody(BaseModel):
     level: Literal["public", "friends", "private"]
     providers: list[Literal["strava", "komoot"]] | None = None
@@ -588,6 +620,46 @@ def data_quality(db: Session = Depends(get_session)) -> dict[str, Any]:
     """How much of the recent training load is measured (power / heart rate) vs estimated, which profile
     values are missing, and values suggested from the recorded data."""
     return insights.data_quality(db)
+
+
+@router.get("/insights/fitness", tags=["insights"])
+def fitness_estimates(
+    months: int = Query(24, ge=3, le=60), db: Session = Depends(get_session)
+) -> dict[str, Any]:
+    """Fitness estimates computed from your recordings: cycling threshold and VO2max (power meter or
+    climbs), running VO2max, threshold pace and race predictions, durability, load outlook, a one-line
+    summary, what would improve the estimates, and the month-by-month trend."""
+    from routepass.analysis import fitness
+
+    return {**fitness.estimates(db), "trend": fitness.trend(db, months)}
+
+
+@router.get("/insights/fitness-report", tags=["insights"])
+def fitness_report(db: Session = Depends(get_session)) -> dict[str, Any]:
+    """The AI coach's latest fitness report, earlier headlines, and what the coach is doing."""
+    from routepass.ai import coach, fitness_coach
+    from routepass.analysis import training
+
+    rs = fitness_coach.reports(db)
+    st = coach.status()
+    return {
+        "working": (st["current"] or {}).get("kind") == "fitness_report"
+        or any(k.startswith("fitness_report") for k in coach.pending()),
+        "latest": rs[0] if rs else None,
+        "history": [
+            {"created_at": r["created_at"], "headline": r["headline"], "numbers": r.get("numbers")}
+            for r in rs[1:]
+        ],
+        "ai": training.ai_info(db),
+    }
+
+
+@router.post("/insights/fitness-report", tags=["insights"])
+def request_fitness_report() -> dict[str, Any]:
+    """Write a new fitness report now (in the background; GET follows it)."""
+    from routepass.ai import coach
+
+    return coach.submit("fitness_report", trigger="manual")
 
 
 @router.get("/insights/coverage", tags=["insights"])

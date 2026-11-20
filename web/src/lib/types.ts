@@ -36,7 +36,7 @@ export interface ActivityDetail extends ActivityRow {
     power_zones?: { bounds: number[]; seconds: number[]; ftp: number };
     splits?: { index: number; distance_m: number; duration_s: number; speed_ms: number | null; gap_speed_ms?: number | null; hr: number | null; power: number | null; gain_m: number; loss_m: number }[];
     split_m?: number;
-    climbs?: { start_m: number; end_m: number; length_m: number; gain_m: number; grade_pct: number; duration_s: number; vam: number | null; top_m: number }[];
+    climbs?: { start_m: number; end_m: number; length_m: number; gain_m: number; grade_pct: number; duration_s: number; vam: number | null; top_m: number; est_power_w?: number | null }[];
     power_curve?: Record<string, number>;
     best_times?: Record<string, number>;
     decoupling?: { metric: string; pct: number };

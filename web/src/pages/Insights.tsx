@@ -3,6 +3,7 @@ import { useCallback, useMemo, useState, type ComponentType } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { CalendarHeatmap, GridHeatmap, HBars, HeatLegend, Legend, LineChart, StackedBars } from "../components/charts";
 import { DataQualityNote } from "../components/DataQuality";
+import { FitnessLevel, FitnessStateLine } from "../components/FitnessLevel";
 import { RoutesMap } from "../components/maps";
 import { GearTab, TilesTab, ZonesTab } from "../components/InsightsExtras";
 import {
@@ -15,13 +16,13 @@ import { FAMILIES, FAMILY_LABEL, familyColor, heatScale, yearColor } from "../li
 import { duration, hours, int, km, num, speed } from "../lib/format";
 import { FamilyChips, METRICS, metricFormat, type Metric } from "../components/shared";
 
-type Tab = "trends" | "calendar" | "habits" | "fitness" | "zones" | "records" | "power" | "map" | "tiles" | "gear";
+type Tab = "trends" | "calendar" | "habits" | "level" | "fitness" | "zones" | "records" | "power" | "map" | "tiles" | "gear";
 type Group = "overview" | "performance" | "places" | "gear";
 type Range = "all" | "1y" | "ytd" | "90d";
 
 const GROUPS: { value: Group; label: string; icon: ComponentType<{ size?: number }>; tabs: { value: Tab; label: string }[] }[] = [
   { value: "overview", label: "Overview", icon: IconOverview, tabs: [{ value: "trends", label: "Trends" }, { value: "calendar", label: "Calendar" }, { value: "habits", label: "Habits" }] },
-  { value: "performance", label: "Performance", icon: IconPerformance, tabs: [{ value: "fitness", label: "Fitness & form" }, { value: "zones", label: "Zones" }, { value: "records", label: "Records" }, { value: "power", label: "Power" }] },
+  { value: "performance", label: "Performance", icon: IconPerformance, tabs: [{ value: "level", label: "Fitness level" }, { value: "fitness", label: "Load & form" }, { value: "zones", label: "Zones" }, { value: "records", label: "Records" }, { value: "power", label: "Power" }] },
   { value: "places", label: "Places", icon: IconPlaces, tabs: [{ value: "map", label: "Route map" }, { value: "tiles", label: "Explorer tiles" }] },
   { value: "gear", label: "Gear", icon: IconGear, tabs: [{ value: "gear", label: "Gear" }] },
 ];
@@ -88,6 +89,7 @@ function Trends({ families, range, start }: F) {
   const sports = allSports ? bySport : bySport.slice(0, 6);
   return (
     <div className="stack gap16">
+      <FitnessStateLine link />
       {t && (
         <Card>
           <div className="stats">
@@ -447,6 +449,7 @@ export default function Insights() {
       {tab === "trends" && <Trends {...f} />}
       {tab === "calendar" && <CalendarTab {...f} />}
       {tab === "habits" && <Habits {...f} />}
+      {tab === "level" && <FitnessLevel />}
       {tab === "fitness" && <Fitness {...f} />}
       {tab === "zones" && <ZonesTab families={families} start={f.start} />}
       {tab === "records" && <Records {...f} />}

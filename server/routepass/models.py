@@ -78,6 +78,7 @@ class Activity(Base):
     has_track: Mapped[bool] = mapped_column(Boolean, default=False)
     track_provider: Mapped[str | None] = mapped_column(String(20))
     sync_locked: Mapped[bool] = mapped_column(Boolean, default=False)  # never sync this one
+    coach_analysis: Mapped[dict | None] = mapped_column(JSON)  # the AI coach's look at this activity
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
