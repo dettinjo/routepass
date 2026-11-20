@@ -15,7 +15,7 @@ import json
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
@@ -91,6 +91,40 @@ class BudgetExceededError(GeminiError):
     """Raised when the monthly Gemini USD budget cap has been reached."""
 
 
+class QuotaPausedError(GeminiError):
+    """Google's quota for the key is used up (e.g. the free tier's requests per day): no calls until
+    `until` (UTC ISO), which Google tells us."""
+
+    def __init__(self, message: str, until: str):
+        super().__init__(message)
+        self.until = until
+
+
+def _quota_pause(resp: httpx.Response) -> tuple[str, float] | None:
+    """For a 429 that retrying won't fix (a daily quota): (message, seconds until it resets)."""
+    try:
+        err = resp.json().get("error") or {}
+    except ValueError:
+        return None
+    delay, daily, msg = 0.0, False, err.get("message") or "quota exceeded"
+    for d in err.get("details") or []:
+        if d.get("@type", "").endswith("QuotaFailure"):
+            for v in d.get("violations") or []:
+                daily = daily or "PerDay" in (v.get("quotaId") or "")
+                if v.get("description"):
+                    msg = v["description"]
+                    if v.get("quotaValue"):
+                        msg += f" (limit {v['quotaValue']})"
+        if d.get("@type", "").endswith("RetryInfo"):
+            try:
+                delay = float(str(d.get("retryDelay", "0")).rstrip("s"))
+            except ValueError:
+                delay = 0.0
+    if daily or delay > 300:
+        return msg, max(delay, 600.0)
+    return None
+
+
 def get_api_key(db: Session) -> str:
     """Return configured Gemini API key (encrypted DB secret takes precedence over env var)."""
     secret = store.get_secret(db, _SECRET_KEY)
@@ -120,6 +154,7 @@ def get_ai_config(db: Session) -> dict[str, Any]:
         "usage": usage,
         "remaining_usd": round(max(0.0, budget - usage["spent_usd"]), 4),
         "status": store.get_value(db, _STATUS_KEY) or {},
+        "paused_until": paused_until(db),
     }
 
 
@@ -185,6 +220,12 @@ _working_endpoint: dict[str, str] = {}
 RETRY_STATUS = {429, 500, 502, 503, 504}
 RETRY_WAITS_S = (10.0, 30.0)  # two retries when the model is overloaded or slow
 TIMEOUT_S = 150.0  # gemini-4 models think before answering; a minute is normal under load
+
+
+def paused_until(db: Session) -> str | None:
+    """When Google's quota for the key is used up: the UTC time it resets, else None."""
+    until = (store.get_value(db, _STATUS_KEY) or {}).get("paused_until")
+    return until if until and until > utcnow().isoformat() + "Z" else None
 
 
 def _endpoint_order(api_key: str) -> list[str]:
@@ -265,6 +306,9 @@ def _post(
                     if not retry:  # keep the overload message; it is the one that matters
                         last = f"HTTP {resp.status_code}: {_short(resp.text)}"
                     continue  # this endpoint does not take this key or model; try the next
+                if resp.status_code == 429 and (pause := _quota_pause(resp)) is not None:
+                    until = (utcnow() + timedelta(seconds=pause[1])).isoformat() + "Z"
+                    raise QuotaPausedError(f"Google quota used up: {pause[0]}", until)
                 if resp.status_code in RETRY_STATUS:
                     # overloaded: the other endpoint is sometimes served by other capacity
                     last, retry = f"HTTP {resp.status_code}: {_short(resp.text)}", True
@@ -281,11 +325,21 @@ def _post(
 
 
 def _record_status(
-    db: Session, *, ok: bool, feature: str, model: str, latency_s: float, error: str = ""
+    db: Session,
+    *,
+    ok: bool,
+    feature: str,
+    model: str,
+    latency_s: float,
+    error: str = "",
+    paused_until: str | None = None,
 ) -> None:
     status = dict(store.get_value(db, _STATUS_KEY) or {})
     now = utcnow().isoformat() + "Z"
     status.update({"last_at": now, "last_feature": feature, "last_model": model, "last_ok": ok})
+    status.pop("paused_until", None)
+    if paused_until:
+        status["paused_until"] = paused_until
     if ok:
         status.update({"last_ok_at": now, "last_latency_s": round(latency_s, 1)})
     else:
@@ -318,6 +372,11 @@ def generate_json(
         if not api_key:
             raise GeminiNotConfiguredError("Gemini API key is not configured")
         cfg = get_ai_config(db)
+    paused = (cfg.get("status") or {}).get("paused_until")
+    if paused and paused > utcnow().isoformat() + "Z":
+        raise QuotaPausedError(
+            f"Google quota used up; the AI coach resumes at {paused[:16].replace('T', ' ')} UTC", paused
+        )
     if cfg["usage"]["spent_usd"] >= cfg["monthly_budget_usd"]:
         raise BudgetExceededError(
             f"Monthly Gemini budget reached (${cfg['usage']['spent_usd']:.2f} of ${cfg['monthly_budget_usd']:.2f})"
@@ -347,7 +406,15 @@ def generate_json(
         data = _post(api_key, model, body, timeout_s=timeout_s, retries=retries)
     except GeminiError as exc:
         with session_scope() as db:
-            _record_status(db, ok=False, feature=feature, model=model, latency_s=0, error=str(exc))
+            _record_status(
+                db,
+                ok=False,
+                feature=feature,
+                model=model,
+                latency_s=0,
+                error=str(exc),
+                paused_until=getattr(exc, "until", None),
+            )
         raise
 
     meta = data.get("usageMetadata") or {}

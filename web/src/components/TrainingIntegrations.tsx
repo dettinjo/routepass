@@ -290,8 +290,10 @@ export function AICoachCard() {
     },
     onError: (e: Error) => toast(e.message, true),
   });
+  const pausedAt = data?.paused_until ? new Date(data.paused_until).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" }) : null;
   const health = !data?.configured ? { s: "planned", l: "No key" }
     : test.isPending ? { s: "running", l: "Testing" }
+      : pausedAt ? { s: "partial", l: `Paused until ${pausedAt}` }
       : st.last_ok === true ? { s: "completed", l: "Working" }
         : st.last_ok === false ? { s: "failed", l: "Not answering" } : { s: "planned", l: "Not tested yet" };
 
@@ -306,12 +308,14 @@ export function AICoachCard() {
         {data?.configured && (
           <div className="row between wrap">
             <span className="xs muted">
-              {st.last_ok === false
+              {pausedAt
+                ? <>Google's limit for this key is used up ({st.last_error?.replace(/^Google quota used up: /, "")}). The coach resumes {pausedAt}; until then the built-in rules adapt your plan. A paid Gemini tier (billing on the key's project) removes the daily limit.</>
+                : st.last_ok === false
                 ? <>Last try {ago(st.last_error_at)}: {st.last_error}. Plans are adapted with the built-in rules until it answers again.</>
                 : st.last_ok_at ? <>Last answer {ago(st.last_ok_at)}, took {st.last_latency_s} s.</>
                   : <>Gemini hasn't been asked anything yet.</>}
             </span>
-            <button className="sm" disabled={test.isPending} onClick={() => test.mutate()}>
+            <button className="sm" disabled={test.isPending || Boolean(pausedAt)} onClick={() => test.mutate()}>
               <IconRefresh size={ICON.button} className={test.isPending ? "spin" : undefined} />{test.isPending ? "Waiting for Gemini…" : "Test connection"}
             </button>
           </div>
