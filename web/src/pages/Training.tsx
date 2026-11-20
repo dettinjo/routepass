@@ -963,7 +963,10 @@ function PlanView() {
       )}
 
       <CoachWorking ai={aiInfo} />
-      {aiInfo?.configured && plan.ai_coach && aiInfo.status?.last_ok === false && !aiInfo.coach?.busy && (
+      {aiInfo?.configured && plan.ai_coach && aiInfo.paused_until && (
+        <Callout kind="warn">Your Gemini key's daily limit is used up, so the AI coach is paused until {new Date(aiInfo.paused_until).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" })}. The built-in rules keep the plan up to date meanwhile. <Link to="/settings/training">AI coach settings</Link></Callout>
+      )}
+      {aiInfo?.configured && plan.ai_coach && !aiInfo.paused_until && aiInfo.status?.last_ok === false && !aiInfo.coach?.busy && (
         <Callout kind="warn">The AI coach isn't reaching Gemini ({aiInfo.status.last_error}). The built-in rules keep the plan up to date meanwhile. <Link to="/settings/training">Check the AI coach settings</Link></Callout>
       )}
       <Attention items={attention} />

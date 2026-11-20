@@ -390,3 +390,62 @@ def test_lenient_json_and_one_reask_on_garbage(key):
     assert res == {"headline": "fine"} and route.call_count == 2
     with session_scope() as db:
         assert len(list(db.scalars(select(AIUsageLog)))) == 2  # both answers are billed
+
+
+def _quota_429(per_day: bool = True) -> httpx.Response:
+    return httpx.Response(
+        429,
+        json={
+            "error": {
+                "code": 429,
+                "message": "You exceeded your current quota",
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+                        "violations": [
+                            {
+                                "description": "Generate content requests per day limit exceeded on Free Tier.",
+                                "quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+                                if per_day
+                                else "GenerateRequestsPerMinutePerProjectPerModel-FreeTier",
+                                "quotaValue": "20",
+                            }
+                        ],
+                    },
+                    {
+                        "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                        "retryDelay": "7200s" if per_day else "20s",
+                    },
+                ],
+            }
+        },
+    )
+
+
+def test_daily_quota_pauses_the_coach_without_retrying(key):
+    with respx.mock:
+        route = respx.post(STUDIO).mock(return_value=_quota_429())
+        with pytest.raises(gemini.QuotaPausedError, match="per day"):
+            gemini.generate_json(feature="plan_adapt", system_prompt="s", user_payload={})
+        assert route.call_count == 1  # no retries, no endpoint hopping
+        with session_scope() as db:
+            until = gemini.paused_until(db)
+            assert until is not None
+            assert not training.ai_enabled(db)  # plan changes use the rules right away
+        with pytest.raises(gemini.QuotaPausedError, match="resumes"):
+            gemini.generate_json(feature="plan_adapt", system_prompt="s", user_payload={})
+        assert route.call_count == 1  # paused: Google is not asked again
+
+
+def test_per_minute_limit_is_retried(key):
+    with respx.mock:
+        route = respx.post(STUDIO).mock(
+            side_effect=[_quota_429(per_day=False), httpx.Response(200, json=_answer('{"ok": 1}'))]
+        )
+        respx.post(STUDIO_V1).mock(return_value=_quota_429(per_day=False))
+        respx.post(VERTEX).mock(return_value=httpx.Response(403, json={"error": {"message": "disabled"}}))
+        res, _ = gemini.generate_json(feature="test", system_prompt="s", user_payload={})
+    assert res == {"ok": 1} and route.call_count == 2
+    with session_scope() as db:
+        assert gemini.paused_until(db) is None

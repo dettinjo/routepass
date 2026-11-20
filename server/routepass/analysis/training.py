@@ -1674,7 +1674,7 @@ def _state_hash(recent: list[TrainingSession], upcoming: list[TrainingSession], 
 def ai_enabled(db: Session, plan: TrainingPlan | None = None) -> bool:
     """The AI coach works on this plan: a key is set, budget is left and the plan has it on."""
     cfg = gemini.get_ai_config(db)
-    if not cfg["configured"] or cfg["remaining_usd"] <= 0:
+    if not cfg["configured"] or cfg["remaining_usd"] <= 0 or cfg["paused_until"]:
         return False
     return plan is None or bool((plan.schedule_prefs or {}).get("ai_coach", True))
 

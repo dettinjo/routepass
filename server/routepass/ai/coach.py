@@ -719,11 +719,13 @@ def sweep() -> None:
 
     now = datetime.now()
     with session_scope() as db:
+        # Google's daily quota used up: reviews and reports wait for it instead of going without AI
+        waiting = gemini.paused_until(db) is not None
         plans = list(db.scalars(select(TrainingPlan).where(TrainingPlan.status == "active")))
         todo: list[tuple[str, dict[str, Any]]] = []
         for plan in plans:
             week = _review_week_due(plan, now)
-            if week is not None and not _has_review(db, plan.id, week.isoformat()):
+            if week is not None and not waiting and not _has_review(db, plan.id, week.isoformat()):
                 todo.append(("weekly_review", {"plan_id": plan.id, "week_start": week.isoformat()}))
             if not training.ai_enabled(db, plan):
                 continue
@@ -746,7 +748,7 @@ def sweep() -> None:
     with session_scope() as db:
         from routepass.ai import fitness_coach
 
-        if fitness_coach.report_due(db, now.date()) and not _backing_off("fitness_report"):
+        if fitness_coach.report_due(db, now.date()) and not waiting:
             todo.append(("fitness_report", {"trigger": "monthly"}))
     for kind, kw in todo:
         submit(kind, **kw)

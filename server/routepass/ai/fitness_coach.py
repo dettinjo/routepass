@@ -62,6 +62,8 @@ def report_due(db, today: date) -> bool:
     if not rs:
         return db.scalar(select(Activity.id).limit(1)) is not None
     last = date.fromisoformat(rs[0]["created_at"][:10])
+    if rs[0].get("ai_error") and (today - last).days >= 1:
+        return True  # the AI was unavailable last time: try again the next day
     return (today - last).days >= REPORT_EVERY_DAYS
 
 
