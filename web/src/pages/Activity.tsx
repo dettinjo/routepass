@@ -3,6 +3,7 @@ import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { HBars } from "../components/charts";
 import { PhotoGallery, VisibilityCard, VisibilityMark } from "../components/ActivityMedia";
+import { CoachAnalysis } from "../components/CoachAnalysis";
 import { ICON,
   BrandIcon, IconDownload, IconExternal, IconHistory, IconLeft, IconLock, IconMap, IconRefresh, IconRight,
   IconCheck, IconSync, IconTarget, IconTrophy, IconUnlock, IconX, MetricIcon, providerName,
@@ -131,6 +132,7 @@ function Analysis({ a, onSelectClimb }: { a: ActivityDetail; onSelectClimb?: (id
                     <span><MetricIcon.distance size={ICON.inline} />km {km(c.start_m)} – {km(c.end_m)}</span>
                     <span><MetricIcon.time size={ICON.inline} />{duration(c.duration_s, true)}</span>
                     <span><MetricIcon.speed size={ICON.inline} />{int(c.vam)} m/h</span>
+                    {c.est_power_w != null && <span title="Estimated from speed, gradient and your weight (no power meter)"><MetricIcon.power size={ICON.inline} />≈ {int(c.est_power_w)} W</span>}
                   </div>
                 </div>
               </div>
@@ -394,6 +396,7 @@ export default function ActivityPage() {
               )}
             </Card>
           </div>
+          <CoachAnalysis activityId={a.id} />
           <VisibilityCard a={a} />
         </div>
       )}

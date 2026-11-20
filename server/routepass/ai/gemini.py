@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from datetime import datetime
 from typing import Any
@@ -217,6 +218,18 @@ def _extract_json_text(payload: dict[str, Any]) -> str:
     return text
 
 
+def _parse_lenient(text: str) -> Any:
+    """json.loads, forgiving the slips models make: text around the object, trailing commas."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        fixed = re.sub(r",\s*([}\]])", r"\1", text[start : end + 1])
+        return json.loads(fixed)
+
+
 def _short(exc_or_text: Any) -> str:
     text = str(exc_or_text)
     try:
@@ -290,6 +303,7 @@ def generate_json(
     max_output_tokens: int = 4096,
     timeout_s: float = TIMEOUT_S,
     retries: int | None = None,
+    retry_invalid: bool = True,
 ) -> tuple[dict[str, Any], str]:
     """Ask Gemini for a JSON object, within the monthly budget, and log the spend.
 
@@ -343,7 +357,7 @@ def generate_json(
     error = ""
     parsed: Any = None
     try:
-        parsed = json.loads(_extract_json_text(data))
+        parsed = _parse_lenient(_extract_json_text(data))
         if not isinstance(parsed, dict):
             error = "Gemini's answer was not a JSON object"
     except json.JSONDecodeError as exc:
@@ -365,6 +379,19 @@ def generate_json(
         )
     if error:
         logger.warning("Gemini %s: %s", feature, error)
+        if error.startswith("Gemini returned invalid JSON") and retry_invalid:
+            # a malformed answer is rare and random: ask once more
+            return generate_json(
+                feature=feature,
+                system_prompt=system_prompt,
+                user_payload=user_payload,
+                tier=tier,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+                timeout_s=timeout_s,
+                retries=0,
+                retry_invalid=False,
+            )
         raise GeminiError(error)
     return parsed, model
 

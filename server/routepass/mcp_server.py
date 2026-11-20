@@ -513,6 +513,51 @@ def set_activity_visibility(activity_id: int, level: str, providers: list[str] |
 
 
 @mcp.tool()
+def get_fitness_estimates(months: int = 12) -> dict:
+    """Fitness level computed from the recordings: cycling threshold W/kg and VO2max (from a power meter
+    or estimated from climbs), running VO2max, threshold pace and race predictions (Daniels), durability
+    (heart-rate drift), load now / 6 weeks ago / a year ago / 6 weeks ahead, a one-line summary, what
+    would make the estimates better, and the month-by-month trend. Each estimate states its basis and
+    confidence."""
+    from routepass.analysis import fitness
+
+    with session_scope() as db:
+        return {**fitness.estimates(db), "trend": fitness.trend(db, max(3, min(60, months)))}
+
+
+@mcp.tool()
+def get_fitness_report(write_new: bool = False) -> dict:
+    """The AI coach's latest fitness report (headline, summary, strengths, limiters, changes, focus for
+    the next 4 weeks). write_new=true asks for a fresh one in the background (up to two minutes)."""
+    from routepass.ai import coach, fitness_coach
+
+    queued = coach.submit("fitness_report", trigger="manual") if write_new else None
+    with session_scope() as db:
+        rs = fitness_coach.reports(db)
+        return {"latest": rs[0] if rs else None, "older": [r["headline"] for r in rs[1:4]], "queued": queued}
+
+
+@mcp.tool()
+def analyse_activity(activity_id: int, refresh: bool = False) -> dict:
+    """The AI coach's analysis of one activity (pacing, climbs with estimated power, comparison with
+    similar activities, a tip). Returns the stored one; refresh=true (or none yet) asks for a new one
+    in the background — call again in a minute or two."""
+    from routepass.ai import coach
+    from routepass.analysis import training
+    from routepass.models import Activity
+
+    with session_scope() as db:
+        a = db.get(Activity, activity_id)
+        if a is None:
+            return {"error": f"Activity {activity_id} not found"}
+        current = a.coach_analysis
+        enabled = training.ai_enabled(db)
+    if (refresh or not (current or {}).get("headline")) and enabled:
+        return {"analysis": current, "queued": coach.submit("activity_analysis", activity_id=activity_id)}
+    return {"analysis": current, "queued": None, "ai_enabled": enabled}
+
+
+@mcp.tool()
 def get_data_quality() -> dict:
     """How much recent training load is measured (power / heart rate) rather than estimated, which profile
     values are missing, and values (max HR, FTP) suggested from the recorded data. Set them with

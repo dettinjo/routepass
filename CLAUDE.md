@@ -10,7 +10,7 @@ billing, admin, docs site) — that code is only in git history (before the v2 m
 server/routepass/   FastAPI app (one process): api/routes.py, mcp_server.py, services.py (shared by both),
                     engine/ (ingest+dedup, rules, sync, runner/scheduler), analysis/ (track metrics, insights),
                     providers/ (strava, komoot, gpx, sports), models.py, db.py, store.py (settings/secrets),
-                    ai/ (gemini.py client + budget, coach.py background AI coach jobs)
+                    ai/ (gemini.py client + budget, coach.py background AI coach jobs, fitness_coach.py report + activity analysis)
 server/tests/       pytest; provider HTTP mocked with respx
 server/scripts/     seed_demo.py (synthetic data for UI work)
 web/                Vite + React + TanStack Query + uPlot + Leaflet; builds into server/routepass/static
@@ -34,7 +34,8 @@ cd web && npx tsc -p . --noEmit && npx vite build
 - Credentials are only stored through `store.set_secret` (Fernet).
 - AI coach: Gemini is only called from `ai/coach.py` jobs on its worker thread, never inside a request
   or an open DB transaction (gemini-4 models can take a minute). The code computes every number; the
-  model writes text or proposes changes that `training._apply_mutations` checks. Every AI job has a
+  model writes text or proposes changes that `training._apply_mutations` checks. Fitness estimates
+  (threshold/VO2max from power or climbs, VDOT, predictions) live in `analysis/fitness.py`. Every AI job has a
   built-in-rules or numbers-only fallback, and the reason is stored (`ai_error`) and shown.
 - Schema change: bump `SCHEMA_VERSION` in `db.py` and add the ALTER statements to `_MIGRATIONS`.
 - Sports: change mappings only in `providers/sports.py`, then bump `SPORTS_VERSION` in `engine/ingest.py`

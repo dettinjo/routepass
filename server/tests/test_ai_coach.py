@@ -375,3 +375,18 @@ def test_api_create_plan_hands_writing_to_the_coach(monkeypatch, client):
     assert r.json()["result"]["queued"] is True and jobs[-1][0] == "adapt"
     with session_scope() as db:
         assert db.scalar(select(TrainingWeek).where(TrainingWeek.ai_written_at.is_not(None))) is None
+
+
+def test_lenient_json_and_one_reask_on_garbage(key):
+    assert gemini._parse_lenient('Sure! {"a": [1, 2,], "b": 1,}\n') == {"a": [1, 2], "b": 1}
+    with respx.mock:
+        route = respx.post(STUDIO).mock(
+            side_effect=[
+                httpx.Response(200, json=_answer('{"headline": "x" "oops"}')),
+                httpx.Response(200, json=_answer('{"headline": "fine"}')),
+            ]
+        )
+        res, _ = gemini.generate_json(feature="test", system_prompt="s", user_payload={})
+    assert res == {"headline": "fine"} and route.call_count == 2
+    with session_scope() as db:
+        assert len(list(db.scalars(select(AIUsageLog)))) == 2  # both answers are billed
