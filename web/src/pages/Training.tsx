@@ -6,12 +6,12 @@ import {
   ICON, IconAdapt, IconAdapted, IconAttention, IconCalendarAdd, IconCalendarSynced, IconChevronDownSm, IconInjury, IconKeySession, IconLeft,
   IconPlus, IconRace, IconRight, IconSick, IconSore, IconStatusDone, IconStatusSkipped, IconStreak, IconSync, IconTime,
   IconTired, IconTraining, IconTrash, KEYED_ICON, MetricIcon, PlanSportIcon, SportIcon,
-  IconInfo, IconStatusFailed, IconStatusPlanned, IconUndo, IconCalendarStat,
+  IconInfo, IconStatusFailed, IconStatusPlanned, IconUndo, IconCalendarStat, IconSparkles, IconWarn, IconDone,
 } from "../components/icons";
-import { Attention, Card, Empty, InfoTip, Menu, ProgressBar, Seg, Skeleton, Stat, StatusBadge, Tabs, useToast, type Severity } from "../components/ui";
+import { Attention, Callout, Card, Empty, InfoTip, Menu, ProgressBar, Seg, Skeleton, Stat, StatusBadge, Tabs, useToast, type Severity } from "../components/ui";
 import { api } from "../lib/api";
 import { planSportColor } from "../lib/colors";
-import { duration, int, num } from "../lib/format";
+import { ago, duration, int, num } from "../lib/format";
 import { useSavePrefs } from "../lib/hooks";
 
 type PlanType = "trail_run" | "road_run" | "cycling" | "triathlon" | "duathlon" | "base_build";
@@ -489,7 +489,11 @@ function CreatePlanWizard({ onCreated, onCancel, aiConfigured }: { onCreated: (i
         },
       });
     },
-    onSuccess: (p) => { qc.invalidateQueries({ queryKey: ["training-plans"] }); toast(`Created ${p.name}`); onCreated(p.id); },
+    onSuccess: (p) => {
+      qc.invalidateQueries({ queryKey: ["training-plans"] });
+      toast(p.ai?.coach?.busy ? `Created ${p.name} — the AI coach is writing the first sessions` : `Created ${p.name}`);
+      onCreated(p.id);
+    },
     onError: (e: Error) => toast(e.message, true),
   });
 
@@ -534,7 +538,7 @@ function CreatePlanWizard({ onCreated, onCancel, aiConfigured }: { onCreated: (i
         </div>
         <label className="row small" style={{ gap: 8, cursor: "pointer" }}>
           <input type="checkbox" checked={useAi} disabled={!aiConfigured} onChange={(e) => setUseAi(e.target.checked)} />
-          <span>Let the AI coach write the first four weeks {!aiConfigured && <Link to="/settings/training" className="muted">(add a Gemini key first)</Link>}</span>
+          <span>Let the AI coach write the sessions as the weeks come up {!aiConfigured && <Link to="/settings/training" className="muted">(add a Gemini key first)</Link>}</span>
         </label>
         <div><button className="primary" disabled={create.isPending} onClick={() => create.mutate()}><IconPlus size={ICON.button} />{create.isPending ? "Building plan…" : "Create plan"}</button></div>
       </div>
@@ -612,6 +616,107 @@ function RaceCard({ pred, plan }: { pred: any; plan: any }) {
 }
 
 // ── page ──────────────────────────────────────────────────────────────────────
+// ── AI coach ──────────────────────────────────────────────────────────────────
+const TRIGGER_LABEL: Record<string, string> = {
+  manual: "You asked", auto_sync: "After a sync", plan_created: "Plan created", ai_write: "Sessions written",
+  mcp: "Via MCP", weekly_review: "Weekly review",
+};
+const triggerLabel = (t: string) => TRIGGER_LABEL[t] ?? (t.startsWith("skip_") ? `Skipped session (${t.slice(5).replaceAll("_", " ")})` : t.replaceAll("_", " "));
+const shortDay = (iso: string) => asDate(iso).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+
+/** The coach's note on a workout matched to the plan. */
+function CoachNote({ text }: { text?: string | null }) {
+  if (!text) return null;
+  return <div className="coach-note"><IconSparkles size={ICON.inline} /><span>{text}</span></div>;
+}
+
+/** Shown while the AI coach works in the background; the page refreshes when it is done. */
+function CoachWorking({ ai }: { ai: any }) {
+  const c = ai?.coach;
+  if (!c?.busy) return null;
+  return (
+    <div className="coach-working" role="status">
+      <IconSparkles size={ICON.button} className="pulse" />
+      <span><b>AI coach:</b> {c.current?.label ?? "Queued"}{c.queued > 0 && c.current ? ` (+${c.queued} more)` : ""}… Gemini can take a minute — this page updates by itself.</span>
+    </div>
+  );
+}
+
+function WeeklyReview({ r, weeks }: { r: any; weeks: any[] }) {
+  if (!r) return null;
+  const w = weeks.find((x) => x.start_date === r.week_start);
+  const st = r.stats || {};
+  const pct = st.planned_load ? Math.round((st.actual_load / st.planned_load) * 100) : null;
+  return (
+    <Card title={w ? `Week ${w.week_index} review` : "Weekly review"} icon={IconSparkles}
+      hint={`${shortDay(r.week_start)} – ${shortDay(addDays(r.week_start, 6))}`}>
+      <div className="stack" style={{ gap: 10 }}>
+        <p className="review-headline">{r.headline}</p>
+        <div className="row" style={{ gap: 6 }}>
+          <span className="badge neutral">{st.done}/{st.planned} sessions</span>
+          {pct != null && <span className="badge neutral">{pct}% of planned load</span>}
+          <span className="badge neutral">{st.actual_hours} h of {st.planned_hours} h</span>
+        </div>
+        {r.went_well?.length > 0 && <ul className="review-list good">{r.went_well.map((t: string, i: number) => <li key={i}><IconDone size={ICON.inline} />{t}</li>)}</ul>}
+        {r.watch?.length > 0 && <ul className="review-list warn">{r.watch.map((t: string, i: number) => <li key={i}><IconWarn size={ICON.inline} />{t}</li>)}</ul>}
+        {r.next_week && <p className="small secondary"><b>Next week:</b> {r.next_week}</p>}
+        <span className="xs muted">
+          {r.model_used === "deterministic" ? "From your numbers" : "AI coach"} · {ago(r.created_at)}
+          {r.ai_error && <InfoTip label="Why the AI coach didn't write this">The AI coach was unavailable ({r.ai_error}), so this review comes from the numbers alone.</InfoTip>}
+        </span>
+      </div>
+    </Card>
+  );
+}
+
+function CoachLog({ items }: { items: any[] }) {
+  if (!items?.length) return null;
+  return (
+    <Card title="Coach log" icon={IconAdapted}>
+      <details className="more">
+        <summary><IconRight size={ICON.button} />{items.length} {items.length === 1 ? "entry" : "entries"}</summary>
+        <div className="stack mt8" style={{ gap: 10 }}>
+          {items.map((ad: any) => {
+            const refused = ad.details?.rejected?.length ?? 0;
+            return (
+              <div key={ad.id} className="log-entry">
+                <div className="row between xs muted">
+                  <span className="row nowrap" style={{ gap: 4 }}>
+                    {triggerLabel(ad.trigger)} · {ad.model_used === "deterministic" ? "built-in rules" : "AI coach"}
+                    {ad.ai_error && <InfoTip label="Why the built-in rules were used">The AI coach was unavailable: {ad.ai_error}</InfoTip>}
+                  </span>
+                  <span>{new Date(ad.created_at).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+                </div>
+                <div className="small" style={{ marginTop: 3 }}>{ad.summary}</div>
+                {ad.details?.user_note && ad.trigger === "manual" && <div className="xs muted">Your note: “{ad.details.user_note}”</div>}
+                {ad.diff?.length > 0 && (
+                  <ul className="log-diff xs secondary">
+                    {ad.diff.map((d: any, i: number) => (
+                      <li key={i}>
+                        <b>{d.after.title}</b>
+                        {d.before.scheduled_date !== d.after.scheduled_date && <> · {shortDay(d.before.scheduled_date)} → {shortDay(d.after.scheduled_date)}</>}
+                        {d.before.duration_min !== d.after.duration_min && <> · {d.before.duration_min} → {d.after.duration_min} min</>}
+                        {d.after.status === "skipped" && <> · skipped</>}
+                        {d.note && <span className="muted"> — {d.note}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {refused > 0 && (
+                  <details className="xs muted">
+                    <summary>{refused} proposed {refused === 1 ? "change" : "changes"} refused</summary>
+                    <ul className="log-diff">{ad.details.rejected.map((r: any, i: number) => <li key={i}>{r.action ?? "change"}: {r.reason}</li>)}</ul>
+                  </details>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </details>
+    </Card>
+  );
+}
+
 function PlanView() {
   const qc = useQueryClient();
   const toast = useToast();
@@ -630,7 +735,11 @@ function PlanView() {
   const listQ = useQuery<any>({ queryKey: ["training-plans"], queryFn: () => api("/training/plans") });
   const plans = listQ.data?.plans || [];
   const activeId = selectedPlanId ?? (plans.find((p: any) => p.status === "active") || plans[0])?.id ?? null;
-  const detailQ = useQuery<any>({ queryKey: ["training-plan", activeId], queryFn: () => api(`/training/plans/${activeId}`), enabled: activeId != null });
+  const detailQ = useQuery<any>({
+    queryKey: ["training-plan", activeId], queryFn: () => api(`/training/plans/${activeId}`), enabled: activeId != null,
+    // while the AI coach works in the background, follow it; one more fetch picks up its result
+    refetchInterval: (q) => ((q.state.data as any)?.ai?.coach?.busy ? 4000 : false),
+  });
   useEffect(() => {
     if (detailQ.data?.analytics?.current_week_index && weekIdx == null) setWeekIdx(detailQ.data.analytics.current_week_index);
   }, [detailQ.data, weekIdx]);
@@ -640,7 +749,10 @@ function PlanView() {
   const calMut = useMutation({ mutationFn: () => api<any>(`/training/plans/${activeId}/sync-calendar`, { method: "POST" }), onSuccess: (r) => { setPlan(r); toast(`Calendar: ${r.calendar.created} added, ${r.calendar.updated} updated`); }, onError: (e: Error) => toast(e.message, true) });
   const adaptMut = useMutation({
     mutationFn: () => api<any>(`/training/plans/${activeId}/adapt`, { method: "POST", body: { user_note: adaptNote, force: true } }),
-    onSuccess: (r) => { setPlan(r); setAdaptNote(""); setAdaptOpen(false); toast(r.result.summary || "Plan adapted"); },
+    onSuccess: (r) => {
+      setPlan(r); setAdaptNote(""); setAdaptOpen(false);
+      toast(r.result.queued ? "The AI coach is looking at your plan — changes show up in the coach log" : r.result.summary || r.result.reason || "Plan adapted");
+    },
     onError: (e: Error) => toast(e.message, true),
   });
   const sessionMut = useMutation({
@@ -651,7 +763,10 @@ function PlanView() {
   const skipMut = useMutation({
     mutationFn: ({ id, reason, severity, note }: { id: number; reason: SkipReason; severity: SkipSeverity; note: string }) =>
       api<any>(`/training/sessions/${id}/skip-adapt`, { method: "POST", body: { reason, severity, note } }),
-    onSuccess: (r) => { setPlan(r); setSkipId(null); toast(r.result?.immediate_actions?.[0] || r.result?.adaptation?.summary || "Plan adapted"); },
+    onSuccess: (r) => {
+      setPlan(r); setSkipId(null);
+      toast([r.result?.immediate_actions?.[0], r.result?.adaptation?.queued ? "The AI coach is adjusting the coming days." : r.result?.adaptation?.summary].filter(Boolean).join(" ") || "Plan adapted");
+    },
     onError: (e: Error) => toast(e.message, true),
   });
   const variantMut = useMutation({
@@ -837,12 +952,20 @@ function PlanView() {
             <input autoFocus placeholder="Anything the coach should know? e.g. “legs heavy”, “busy Thursday evening”" value={adaptNote} onChange={(e) => setAdaptNote(e.target.value)} />
             <div className="row">
               <button className="primary sm" disabled={adaptMut.isPending} onClick={() => adaptMut.mutate()}><IconAdapt size={ICON.button} />{adaptMut.isPending ? "Adapting…" : "Adapt plan"}</button>
-              {!aiInfo?.configured && <span className="xs muted">Without a Gemini key the built-in rules adapt the plan.</span>}
+              {!aiInfo?.configured || !plan.ai_coach
+                ? <span className="xs muted">The built-in rules adapt the plan right away.</span>
+                : aiInfo.status?.last_ok === false
+                  ? <span className="xs muted">Gemini didn't answer last time ({ago(aiInfo.status.last_error_at)}); if it still doesn't, the built-in rules adapt the plan.</span>
+                  : <span className="xs muted">The AI coach takes up to two minutes (the built-in rules step in if Gemini is busy); you can leave this page.</span>}
             </div>
           </div>
         </Card>
       )}
 
+      <CoachWorking ai={aiInfo} />
+      {aiInfo?.configured && plan.ai_coach && aiInfo.status?.last_ok === false && !aiInfo.coach?.busy && (
+        <Callout kind="warn">The AI coach isn't reaching Gemini ({aiInfo.status.last_error}). The built-in rules keep the plan up to date meanwhile. <Link to="/settings/training">Check the AI coach settings</Link></Callout>
+      )}
       <Attention items={attention} />
 
       <div className="training-grid">
@@ -853,6 +976,7 @@ function PlanView() {
               <div key={s.id} className="stack" style={{ gap: 6, marginBottom: 12 }}>
                 <span className="row small"><StatusBadge status="completed" label="Done today" />{s.title}</span>
                 {s.matched_activity && <LinkedActivity a={s.matched_activity} compliance={s.compliance_score} />}
+                <CoachNote text={s.coach_feedback} />
                 <Feedback s={s} busy={feedbackMut.isPending} onSave={(rpe, feel) => feedbackMut.mutate({ id: s.id, rpe, feel })} />
               </div>
             ))}
@@ -946,6 +1070,7 @@ function PlanView() {
                         <SessionMetrics s={s} />
                         {!done && <Targets s={s} zones={zones} />}
                         {s.matched_activity && <LinkedActivity a={s.matched_activity} compliance={s.compliance_score} />}
+                        <CoachNote text={s.coach_feedback} />
                         {done && <Feedback s={s} busy={feedbackMut.isPending} onSave={(rpe, feel) => feedbackMut.mutate({ id: s.id, rpe, feel })} />}
                         {s.adaptation_note && <div className="note"><IconAdapted size={ICON.inline} />{s.adaptation_note}</div>}
                         {(s.description || s.workout_steps?.length > 0 || s.why) && (
@@ -969,6 +1094,7 @@ function PlanView() {
         </div>
 
         <div className="stack gap16">
+          <WeeklyReview r={plan.weekly_review} weeks={weeks} />
           <RaceCard pred={pred} plan={plan} />
           <Card title="Where you are heading" icon={MetricIcon.load}
             info="Fitness (CTL) is your 6-week training load. Solid: what happened. Dashed black: where your current consistency leads. Grey: following the plan fully."
@@ -993,21 +1119,7 @@ function PlanView() {
               </div>
             </Card>
           )}
-          {plan.adaptations?.length > 0 && (
-            <Card title="Coach log" icon={IconAdapted}>
-              <details className="more">
-                <summary><IconRight size={ICON.button} />{plan.adaptations.length} {plan.adaptations.length === 1 ? "change" : "changes"}</summary>
-                <div className="stack mt8" style={{ gap: 10 }}>
-                  {plan.adaptations.map((ad: any) => (
-                    <div key={ad.id} style={{ borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
-                      <div className="row between xs muted"><span>{ad.trigger.replaceAll("_", " ")} · {ad.model_used === "deterministic" ? "built-in rules" : "AI coach"}</span><span>{new Date(ad.created_at).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span></div>
-                      <div className="small" style={{ marginTop: 3 }}>{ad.summary}</div>
-                    </div>
-                  ))}
-                </div>
-              </details>
-            </Card>
-          )}
+          <CoachLog items={plan.adaptations} />
         </div>
       </div>
     </div>

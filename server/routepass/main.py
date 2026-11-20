@@ -96,11 +96,15 @@ def create_app(*, start_scheduler: bool = True) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        from routepass.ai import coach
+
         if start_scheduler:
             runner.start_scheduler()
+            coach.start()
         async with mcp.session_manager.run():
             yield
         runner.stop_scheduler()
+        coach.stop()
 
     app = FastAPI(
         title="RoutePass",

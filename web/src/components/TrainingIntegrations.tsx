@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
-import { int } from "../lib/format";
+import { ago, int } from "../lib/format";
 import { useDebouncedCallback } from "../lib/hooks";
 import { ICON, IconBellRing, IconCalendarAdd, IconCopy2, IconKey, IconPlus, IconRefresh, IconRight, IconSparkles, IconTrash } from "./icons";
 import { Callout, Card, Menu, SavedMark, StatusBadge, Switch, useToast } from "./ui";
@@ -281,15 +281,41 @@ export function AICoachCard() {
   );
   const spent = data?.usage?.spent_usd ?? 0;
   const cap = data?.monthly_budget_usd ?? 8;
+  const st = data?.status || {};
+  const test = useMutation({
+    mutationFn: () => api<any>("/training/ai-config/test", { method: "POST" }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["training-ai-config"] });
+      toast(res.ok ? `Gemini answered in ${res.latency_s} s` : `Gemini did not answer: ${res.error}`, !res.ok);
+    },
+    onError: (e: Error) => toast(e.message, true),
+  });
+  const health = !data?.configured ? { s: "planned", l: "No key" }
+    : test.isPending ? { s: "running", l: "Testing" }
+      : st.last_ok === true ? { s: "completed", l: "Working" }
+        : st.last_ok === false ? { s: "failed", l: "Not answering" } : { s: "planned", l: "Not tested yet" };
 
   return (
     <Card title="AI coach" icon={IconSparkles} hint="Writes and adapts plan sessions with Gemini, within a monthly spending cap"
-      actions={<div className="row nowrap"><SavedMark at={savedAt} /><StatusBadge status={data?.configured ? "completed" : "planned"} label={data?.configured ? "Ready" : "No key"} />
+      actions={<div className="row nowrap"><SavedMark at={savedAt} /><StatusBadge status={health.s} label={health.l} />
         {data?.key_source === "settings" && (
           <Menu><button className="danger" onClick={() => save.mutate({ clear_api_key: true })}><IconTrash size={ICON.button} />Remove saved key</button></Menu>
         )}
       </div>}>
       <div className="stack">
+        {data?.configured && (
+          <div className="row between wrap">
+            <span className="xs muted">
+              {st.last_ok === false
+                ? <>Last try {ago(st.last_error_at)}: {st.last_error}. Plans are adapted with the built-in rules until it answers again.</>
+                : st.last_ok_at ? <>Last answer {ago(st.last_ok_at)}, took {st.last_latency_s} s.</>
+                  : <>Gemini hasn't been asked anything yet.</>}
+            </span>
+            <button className="sm" disabled={test.isPending} onClick={() => test.mutate()}>
+              <IconRefresh size={ICON.button} className={test.isPending ? "spin" : undefined} />{test.isPending ? "Waiting for Gemini…" : "Test connection"}
+            </button>
+          </div>
+        )}
         {data && (
           <div>
             <div className="pbar" style={{ "--pbar-color": spent / cap > 0.9 ? "var(--warn)" : "var(--text-secondary)" } as React.CSSProperties}>
@@ -309,9 +335,15 @@ export function AICoachCard() {
           <label className="field">Monthly cap (USD)
             <input type="number" step="0.5" min="0.5" max="100" value={budget ?? String(cap)} onChange={(e) => { setBudget(e.target.value); saveBudget(e.target.value); }} />
           </label>
-          {models.length > 0 && modelSelect("Daily adjustments", "Fast model for small changes", "model_fast")}
-          {models.length > 0 && modelSelect("New plans", "Deeper model for whole plans", "model_pro")}
+          {models.length > 0 && modelSelect("Changes, feedback, reviews", "Quick thinking", "model_fast")}
+          {models.length > 0 && modelSelect("Writing sessions", "Thinks longer", "model_pro")}
         </div>
+        <ul className="xs muted plain-list">
+          <li>Writes the sessions of the next two weeks as they come up, with your zones.</li>
+          <li>Adapts the next 14 days after each sync, a skipped session or your note.</li>
+          <li>Comments on each workout matched to the plan, and reviews every week on Sunday evening.</li>
+          <li>All numbers come from RoutePass; changes that break the plan's rules are refused.</li>
+        </ul>
       </div>
     </Card>
   );

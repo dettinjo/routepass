@@ -252,6 +252,7 @@ class TrainingWeek(Base):
     target_elev_m: Mapped[float] = mapped_column(Float, default=0.0)
     discipline_split: Mapped[dict] = mapped_column(JSON, default=dict)
     coach_focus: Mapped[str] = mapped_column(Text, default="")
+    ai_written_at: Mapped[datetime | None] = mapped_column(DateTime)  # the AI coach wrote its sessions
 
     plan: Mapped[TrainingPlan] = relationship(back_populates="weeks")
     sessions: Mapped[list[TrainingSession]] = relationship(
@@ -299,6 +300,7 @@ class TrainingSession(Base):
     feel: Mapped[str | None] = mapped_column(String(12))  # easy | right | hard
     feedback_note: Mapped[str | None] = mapped_column(Text)
     original_target: Mapped[dict | None] = mapped_column(JSON)  # before a shorter/easier/swap variant
+    coach_feedback: Mapped[str | None] = mapped_column(Text)  # the AI coach's note on the matched activity
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -316,6 +318,8 @@ class PlanAdaptation(Base):
     model_used: Mapped[str] = mapped_column(String(64), default="deterministic")
     summary: Mapped[str] = mapped_column(Text, default="")
     diff: Mapped[list] = mapped_column(JSON, default=list)
+    details: Mapped[dict | None] = mapped_column(JSON)  # weekly review content, rejected AI changes
+    ai_error: Mapped[str | None] = mapped_column(Text)  # why the built-in rules were used instead
 
     plan: Mapped[TrainingPlan] = relationship(back_populates="adaptations")
 

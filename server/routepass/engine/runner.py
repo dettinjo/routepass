@@ -165,6 +165,15 @@ def _cycle(trigger: str, full: bool, tracks: bool) -> dict[str, Any]:
         note(f"training sync failed: {exc}")
         logger.exception("training sync failed")
 
+    try:
+        from routepass.ai import coach
+
+        for plan_id in (stats.get("training") or {}).get("ai_adapt", []):
+            coach.submit("adapt", plan_id=plan_id, trigger="auto_sync")
+        coach.submit("sweep")  # weekly review, weeks to write, notes on new workouts
+    except Exception:  # noqa: BLE001
+        logger.exception("could not queue AI coach work")
+
     with session_scope() as db:
         run = db.get(SyncRun, run_id)
         run.finished_at = utcnow()

@@ -4,14 +4,16 @@ Supports both:
 - Google Cloud Vertex AI Express / API keys (`AQ....`) via aiplatform.googleapis.com
 - Google AI Studio API keys (`AIza...`) via generativelanguage.googleapis.com
 
-Enforces a hard monthly USD budget cap tracked in `ai_usage_log` so your $10/mo
-Google Cloud credits are used efficiently and never unexpectedly exceeded.
+Enforces a monthly USD budget cap tracked in `ai_usage_log` (thinking tokens count as output).
+Requests run from the AI coach's background worker (routepass.ai.coach), never inside a request
+handler or an open database transaction: gemini-4 models can take a minute to answer.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime
 from typing import Any
 
@@ -73,6 +75,7 @@ AVAILABLE_MODELS: list[dict[str, Any]] = [
 
 _SECRET_KEY = "gemini.credentials"
 _CONFIG_KEY = "gemini.config"
+_STATUS_KEY = "gemini.status"  # last call: ok or error, when, how long
 
 
 class GeminiError(RuntimeError):
@@ -115,6 +118,7 @@ def get_ai_config(db: Session) -> dict[str, Any]:
         "available_models": AVAILABLE_MODELS,
         "usage": usage,
         "remaining_usd": round(max(0.0, budget - usage["spent_usd"]), 4),
+        "status": store.get_value(db, _STATUS_KEY) or {},
     }
 
 
@@ -129,8 +133,10 @@ def save_ai_config(
 ) -> dict[str, Any]:
     if clear_api_key:
         store.delete_value(db, _SECRET_KEY)
+        store.delete_value(db, _STATUS_KEY)
     elif api_key is not None and api_key.strip():
         store.set_secret(db, _SECRET_KEY, {"api_key": api_key.strip()})
+        store.delete_value(db, _STATUS_KEY)  # a new key starts with a clean slate
 
     cfg = dict(store.get_value(db, _CONFIG_KEY) or {})
     if monthly_budget_usd is not None:
@@ -168,27 +174,36 @@ def monthly_usage(db: Session, *, now: datetime | None = None) -> dict[str, Any]
     }
 
 
-def _endpoints_for_key(api_key: str, model: str) -> list[str]:
-    """Return ordered candidate REST endpoints for a given API key format."""
-    vertex_url = (
-        f"https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent?key={api_key}"
-    )
-    aistudio_v1 = f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={api_key}"
-    aistudio_v1beta = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    )
-    # Vertex AI Express keys start with "AQ."; AI Studio keys start with "AIza"
-    if api_key.startswith("AQ."):
-        return [vertex_url, aistudio_v1, aistudio_v1beta]
-    return [aistudio_v1, aistudio_v1beta, vertex_url]
+_ENDPOINTS = {
+    "studio_v1beta": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+    "studio_v1": "https://generativelanguage.googleapis.com/v1/models/{model}:generateContent",
+    "vertex": "https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent",
+}
+# The endpoint that last answered for a key, so later calls go straight there.
+_working_endpoint: dict[str, str] = {}
+RETRY_STATUS = {429, 500, 502, 503, 504}
+RETRY_WAITS_S = (10.0, 30.0)  # two retries when the model is overloaded or slow
+TIMEOUT_S = 150.0  # gemini-4 models think before answering; a minute is normal under load
+
+
+def _endpoint_order(api_key: str) -> list[str]:
+    """Google AI Studio first for every key (Vertex Express keys work there too); Vertex last,
+    for keys that only that endpoint accepts. The key goes in a header, never in the URL."""
+    order = ["studio_v1beta", "studio_v1", "vertex"]
+    known = _working_endpoint.get(api_key[-12:])
+    if known in order:
+        order.remove(known)
+        order.insert(0, known)
+    return order
 
 
 def _extract_json_text(payload: dict[str, Any]) -> str:
     candidates = payload.get("candidates") or []
     if not candidates:
-        raise GeminiError("Gemini returned no candidates")
+        reason = (payload.get("promptFeedback") or {}).get("blockReason")
+        raise GeminiError(f"Gemini returned no answer{f' ({reason})' if reason else ''}")
     parts = (candidates[0].get("content") or {}).get("parts") or []
-    text = "".join(str(p.get("text") or "") for p in parts).strip()
+    text = "".join(str(p.get("text") or "") for p in parts if not p.get("thought")).strip()
     if text.startswith("```"):
         lines = text.splitlines()
         if lines and lines[0].startswith("```"):
@@ -196,11 +211,76 @@ def _extract_json_text(payload: dict[str, Any]) -> str:
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
         text = "\n".join(lines).strip()
+    if not text:
+        finish = candidates[0].get("finishReason")
+        raise GeminiError(f"Gemini returned an empty answer ({finish or 'no reason given'})")
     return text
 
 
+def _short(exc_or_text: Any) -> str:
+    text = str(exc_or_text)
+    try:
+        err = json.loads(text[text.index("{") :]).get("error") or {}
+        if err.get("message"):
+            return f"{err.get('code', '')} {err['message']}".strip()[:240]
+    except (ValueError, AttributeError):
+        pass
+    return text[:240]
+
+
+def _post(
+    api_key: str, model: str, body: dict[str, Any], *, timeout_s: float, retries: int | None = None
+) -> dict[str, Any]:
+    """One request with endpoint discovery and retries; touches no database."""
+    headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
+    last: str = "Gemini request failed"
+    with httpx.Client(timeout=httpx.Timeout(timeout_s, connect=15.0)) as client:
+        waits = RETRY_WAITS_S if retries is None else RETRY_WAITS_S[:retries]
+        for attempt in range(len(waits) + 1):
+            retry = False
+            for name in _endpoint_order(api_key):
+                url = _ENDPOINTS[name].format(model=model)
+                try:
+                    resp = client.post(url, json=body, headers=headers)
+                except httpx.TimeoutException:
+                    last, retry = f"Gemini did not answer within {timeout_s:.0f} s", True
+                    break  # the endpoint is right, the model is slow: retry later, don't hop
+                except httpx.HTTPError as exc:
+                    last = f"Network error calling Gemini: {type(exc).__name__}"
+                    continue
+                if resp.status_code in (401, 403, 404):
+                    if not retry:  # keep the overload message; it is the one that matters
+                        last = f"HTTP {resp.status_code}: {_short(resp.text)}"
+                    continue  # this endpoint does not take this key or model; try the next
+                if resp.status_code in RETRY_STATUS:
+                    # overloaded: the other endpoint is sometimes served by other capacity
+                    last, retry = f"HTTP {resp.status_code}: {_short(resp.text)}", True
+                    continue
+                if resp.status_code >= 400:
+                    raise GeminiError(f"HTTP {resp.status_code}: {_short(resp.text)}")
+                _working_endpoint[api_key[-12:]] = name
+                return resp.json()
+            if not retry or attempt == len(waits):
+                break
+            logger.info("Gemini busy (%s); retrying in %.0f s", last, waits[attempt])
+            time.sleep(waits[attempt])
+    raise GeminiError(last)
+
+
+def _record_status(
+    db: Session, *, ok: bool, feature: str, model: str, latency_s: float, error: str = ""
+) -> None:
+    status = dict(store.get_value(db, _STATUS_KEY) or {})
+    now = utcnow().isoformat() + "Z"
+    status.update({"last_at": now, "last_feature": feature, "last_model": model, "last_ok": ok})
+    if ok:
+        status.update({"last_ok_at": now, "last_latency_s": round(latency_s, 1)})
+    else:
+        status.update({"last_error": error[:300], "last_error_at": now})
+    store.set_value(db, _STATUS_KEY, status)
+
+
 def generate_json(
-    db: Session,
     *,
     feature: str,
     system_prompt: str,
@@ -208,22 +288,25 @@ def generate_json(
     tier: str = "fast",
     temperature: float = 0.25,
     max_output_tokens: int = 4096,
-    timeout_s: float = 45.0,
+    timeout_s: float = TIMEOUT_S,
+    retries: int | None = None,
 ) -> tuple[dict[str, Any], str]:
-    """Call Gemini with JSON output mode, enforcing monthly budget & logging token spend.
+    """Ask Gemini for a JSON object, within the monthly budget, and log the spend.
 
-    Uses Gemini 4 `thinkingConfig.thinkingLevel` (`low` for fast micro-adaptations,
-    `high` for deep plan generation) to optimize token spend & latency.
+    Opens its own short database sessions and holds none while waiting for Gemini, so a slow model
+    never blocks the rest of the app. Call it from background work, not from a request handler.
     Returns `(parsed_json, model_used)`.
     """
-    api_key = get_api_key(db)
-    if not api_key:
-        raise GeminiNotConfiguredError("Gemini API key is not configured")
+    from routepass.db import session_scope
 
-    cfg = get_ai_config(db)
+    with session_scope() as db:
+        api_key = get_api_key(db)
+        if not api_key:
+            raise GeminiNotConfiguredError("Gemini API key is not configured")
+        cfg = get_ai_config(db)
     if cfg["usage"]["spent_usd"] >= cfg["monthly_budget_usd"]:
         raise BudgetExceededError(
-            f"Monthly Gemini budget reached (${cfg['usage']['spent_usd']:.2f} / ${cfg['monthly_budget_usd']:.2f})"
+            f"Monthly Gemini budget reached (${cfg['usage']['spent_usd']:.2f} of ${cfg['monthly_budget_usd']:.2f})"
         )
 
     model = cfg["model_pro"] if tier == "pro" else cfg["model_fast"]
@@ -234,7 +317,6 @@ def generate_json(
     }
     if model.startswith("gemini-4-"):
         gen_cfg["thinkingConfig"] = {"thinkingLevel": "high" if tier == "pro" else "low"}
-
     body: dict[str, Any] = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": [
@@ -246,47 +328,57 @@ def generate_json(
         "generationConfig": gen_cfg,
     }
 
-    last_err: Exception | None = None
-    data: dict[str, Any] | None = None
-    with httpx.Client(timeout=timeout_s) as client:
-        for url in _endpoints_for_key(api_key, model):
-            try:
-                resp = client.post(url, json=body)
-                if resp.status_code in (401, 403, 404):
-                    last_err = GeminiError(f"HTTP {resp.status_code}: {resp.text[:240]}")
-                    continue
-                if resp.status_code >= 400:
-                    raise GeminiError(f"HTTP {resp.status_code}: {resp.text[:300]}")
-                data = resp.json()
-                break
-            except httpx.HTTPError as exc:
-                last_err = GeminiError(f"Network error calling Gemini: {exc}")
-                continue
-
-    if data is None:
-        raise last_err or GeminiError("Gemini request failed")
+    started = time.monotonic()
+    try:
+        data = _post(api_key, model, body, timeout_s=timeout_s, retries=retries)
+    except GeminiError as exc:
+        with session_scope() as db:
+            _record_status(db, ok=False, feature=feature, model=model, latency_s=0, error=str(exc))
+        raise
 
     meta = data.get("usageMetadata") or {}
     in_tok = int(meta.get("promptTokenCount") or 0)
-    out_tok = int(meta.get("candidatesTokenCount") or 0)
-    cost = estimate_cost_usd(model, in_tok, out_tok)
-    db.add(
-        AIUsageLog(
-            feature=feature,
-            model=model,
-            input_tokens=in_tok,
-            output_tokens=out_tok,
-            estimated_cost_usd=cost,
-        )
-    )
-    db.flush()
-
-    raw_text = _extract_json_text(data)
+    # thinking is billed as output
+    out_tok = int(meta.get("candidatesTokenCount") or 0) + int(meta.get("thoughtsTokenCount") or 0)
+    error = ""
+    parsed: Any = None
     try:
-        parsed = json.loads(raw_text)
+        parsed = json.loads(_extract_json_text(data))
+        if not isinstance(parsed, dict):
+            error = "Gemini's answer was not a JSON object"
     except json.JSONDecodeError as exc:
-        logger.warning("Gemini returned invalid JSON for %s: %s", feature, raw_text[:200])
-        raise GeminiError(f"Gemini returned invalid JSON: {exc}") from exc
-    if not isinstance(parsed, dict):
-        raise GeminiError("Gemini JSON response was not an object")
+        error = f"Gemini returned invalid JSON: {exc}"
+    except GeminiError as exc:
+        error = str(exc)
+    with session_scope() as db:
+        db.add(
+            AIUsageLog(
+                feature=feature,
+                model=model,
+                input_tokens=in_tok,
+                output_tokens=out_tok,
+                estimated_cost_usd=estimate_cost_usd(model, in_tok, out_tok),
+            )
+        )
+        _record_status(
+            db, ok=not error, feature=feature, model=model, latency_s=time.monotonic() - started, error=error
+        )
+    if error:
+        logger.warning("Gemini %s: %s", feature, error)
+        raise GeminiError(error)
     return parsed, model
+
+
+def check_connection() -> dict[str, Any]:
+    """A tiny request that proves key, endpoint and model work. Costs a fraction of a cent."""
+    started = time.monotonic()
+    try:
+        res, model = generate_json(
+            feature="test",
+            system_prompt="You check that an API connection works.",
+            user_payload={"task": 'Reply with exactly {"ok": true}'},
+            max_output_tokens=256,
+        )
+    except GeminiError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": bool(res.get("ok")), "model": model, "latency_s": round(time.monotonic() - started, 1)}
