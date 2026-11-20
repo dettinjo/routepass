@@ -137,11 +137,12 @@ def submit(kind: str, **kw: Any) -> dict[str, Any]:
 
 def status() -> dict[str, Any]:
     with _lock:
-        queued = [LABELS.get(k.split("{")[0], k) for k in _pending]
+        queued = [k for k in _pending if not k.startswith("sweep")]  # the hourly check is bookkeeping
+    current = _current if _current and _current["kind"] != "sweep" else None
     return {
         "running": _thread is not None,
-        "busy": _current is not None or bool(queued),
-        "current": _current,
+        "busy": current is not None or bool(queued),
+        "current": current,
         "queued": len(queued),
         "recent": list(_recent),
     }
