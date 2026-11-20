@@ -870,6 +870,40 @@ def change_training_session(session_id: int, kind: str, minutes: int | None = No
 
 
 @mcp.tool()
+def find_session_routes(
+    session_id: int, lat: float | None = None, lng: float | None = None, radius_km: float = 10.0
+) -> dict[str, Any]:
+    """Routes that fit a training session near a start point (default: saved Home): your history,
+    saved Komoot tours and Komoot suggestions, each with a 0–100 match score. Read-only."""
+    from routepass.analysis import routes_finder
+    from routepass.models import TrainingSession
+
+    with session_scope() as db:
+        s = db.get(TrainingSession, session_id)
+        if s is None:
+            return {"error": f"Session {session_id} not found"}
+        result = routes_finder.find_routes(
+            db, s, store.get_preferences(db), lat=lat, lng=lng, radius_km=radius_km
+        )
+        for c in result["candidates"]:
+            c.pop("polyline", None)
+        return result
+
+
+@mcp.tool()
+def attach_session_route(session_id: int, route: dict[str, Any]) -> dict[str, Any]:
+    """Attach a route (one of find_session_routes' candidates) to a session. Nothing is created on Komoot."""
+    from routepass.analysis import routes_finder
+    from routepass.models import TrainingSession
+
+    with session_scope() as db:
+        s = db.get(TrainingSession, session_id)
+        if s is None:
+            return {"error": f"Session {session_id} not found"}
+        return routes_finder.attach(db, s, route)
+
+
+@mcp.tool()
 def update_training_session(
     session_id: int,
     status: str | None = None,

@@ -11,7 +11,7 @@ from routepass.config import get_settings
 from routepass.models import Base
 
 # Bump and append to _MIGRATIONS when the schema changes; create_all handles new tables.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _MIGRATIONS: dict[int, list[str]] = {
     2: [
         "ALTER TABLE activities ADD COLUMN rpe INTEGER",
@@ -27,6 +27,7 @@ _MIGRATIONS: dict[int, list[str]] = {
         "ALTER TABLE plan_adaptations ADD COLUMN ai_error TEXT",
     ],
     4: ["ALTER TABLE activities ADD COLUMN coach_analysis JSON"],
+    5: ["ALTER TABLE training_sessions ADD COLUMN route_data JSON"],
 }
 
 _engine: Engine | None = None

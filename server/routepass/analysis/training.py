@@ -2397,6 +2397,7 @@ def serialize_plan_detail(
                 "feel": s.feel,
                 "feedback_note": s.feedback_note,
                 "changed": s.original_target is not None,
+                "route": s.route_data,
                 "compliance_score": s.compliance_score,
                 "gcal_event_id": s.gcal_event_id,
                 "adaptation_note": s.adaptation_note,

@@ -379,9 +379,17 @@ def _event_body(
     if s.adaptation_note:
         lines.append("")
         lines.append(f"Coach note: {s.adaptation_note}")
+    if s.route_data:
+        rd = s.route_data
+        lines.append("")
+        lines.append(
+            f"Route: {rd.get('name') or 'Planned route'} ({float(rd.get('distance_km') or 0):.1f} km, +{int(rd.get('elevation_gain_m') or 0)} m)"
+        )
+        if rd.get("komoot_url"):
+            lines.append(f"Open in Komoot: {rd['komoot_url']}")
     base_url = get_settings().base_url.rstrip("/")
     lines.append("")
-    lines.append(f"Open in RoutePass: {base_url}/insights/training")
+    lines.append(f"Open in RoutePass: {base_url}/training")
     return {
         "summary": title,
         "description": "\n".join(lines),

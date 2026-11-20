@@ -302,6 +302,9 @@ class TrainingSession(Base):
     feedback_note: Mapped[str | None] = mapped_column(Text)
     original_target: Mapped[dict | None] = mapped_column(JSON)  # before a shorter/easier/swap variant
     coach_feedback: Mapped[str | None] = mapped_column(Text)  # the AI coach's note on the matched activity
+    route_data: Mapped[dict | None] = mapped_column(
+        JSON
+    )  # route chosen for the session (analysis/routes_finder)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
