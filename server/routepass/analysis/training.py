@@ -1,12 +1,8 @@
 """Multi-sport adaptive Training Plan engine (Running, Trail, Cycling, Triathlon).
 
-Hybrid deterministic + Gemini architecture:
-- Deterministic Python handles all sports-science math: periodization skeleton,
-  activity-to-session matching, alignment scoring, Banister CTL trajectory
-  simulation, and multi-sport race finish-time predictions (0 tokens).
-- Gemini (`gemini-2.5-pro` for initial plan enrichment, `gemini-2.5-flash` for
-  ongoing micro-adaptations) provides coaching judgment within strict JSON
-  schemas, state-hash deduplication, and monthly USD budget guardrails.
+The code does all the numbers: periodisation, matching activities to sessions, compliance, load
+(CTL/ATL/TSB), race predictions and the built-in adaptation rules. The optional AI coach
+(routepass.ai.coach) only writes text and proposes changes, which _apply_mutations checks.
 """
 
 from __future__ import annotations
@@ -53,32 +49,6 @@ _DEFAULT_DISCIPLINES: dict[str, list[str]] = {
     "duathlon": ["run", "bike"],
     "base_build": ["run", "bike"],
 }
-
-_PLAN_SYSTEM_PROMPT = (
-    "You are an elite endurance sports scientist and coach specializing in trail running, "
-    "road running, cycling, and triathlon. Given an athlete's baseline metrics, target race, "
-    "and an initial 4-week schedule skeleton, refine the upcoming sessions with specific, "
-    "practical workout titles, concise descriptions, and structured workout_steps "
-    "(warmup, main set, cooldown with HR/GAP/FTP/CSS zones). Keep total weekly TSS within "
-    "+/-10% of the skeleton. Return strictly valid JSON with keys: "
-    "'coach_summary' (string, 2-3 sentences), 'week_focuses' (object mapping week_index string "
-    "to short focus string), and 'sessions' (array of objects with 'temp_id', 'title', "
-    "'description', 'workout_steps' (array of short strings))."
-)
-
-_ADAPT_SYSTEM_PROMPT = (
-    "You are an adaptive endurance coach. Review the athlete's recent completed/missed sessions, "
-    "current fatigue (CTL/ATL/TSB/ACWR), optional athlete feedback, and upcoming 14-day schedule. "
-    "Propose minimal, smart adjustments: if a key session was missed, reschedule or trim it onto "
-    "an open/easy day without stacking two high-intensity sessions back-to-back (except trail "
-    "back-to-back aerobic weekends). If fatigue is high (TSB < -20 or ACWR > 1.35) or athlete "
-    "reports tiredness, scale down intensity/duration. Return strictly valid JSON: "
-    "{'summary': string (1-2 sentences), 'mutations': [{'session_id': int, "
-    "'action': 'reschedule'|'adjust_load'|'swap_type'|'skip', 'new_date': 'YYYY-MM-DD' (optional), "
-    "'duration_scale': float 0.5-1.25 (optional), 'new_title': string (optional), "
-    "'new_description': string (optional), 'new_session_type': string (optional), "
-    "'note': string}]}. Return empty mutations array if the current plan is already optimal."
-)
 
 
 def _iso(d: date) -> str:
@@ -871,7 +841,8 @@ def create_plan(
     use_ai: bool = True,
     today: date | None = None,
 ) -> TrainingPlan:
-    """Create a new multi-sport training plan, optionally enriched by Gemini Pro."""
+    """Create a training plan with the built-in rules. With use_ai the AI coach then writes the
+    sessions of the coming weeks in the background (routepass.ai.coach)."""
     today = today or date.today()
     plan_type = str(payload.get("plan_type") or "trail_run")
     if plan_type not in PLAN_TYPES:
@@ -888,6 +859,7 @@ def create_plan(
     schedule_prefs = dict(payload.get("schedule_prefs") or {})
     schedule_prefs.setdefault("preferred_slot", "evening")
     schedule_prefs.setdefault("rest_days", [0])
+    schedule_prefs["ai_coach"] = bool(use_ai)  # the AI coach writes sessions as weeks come up
 
     baseline = athlete_baseline(db, prefs, today)
     weeks_data, sessions_data = _build_skeleton(
@@ -904,67 +876,6 @@ def create_plan(
         f"{len(weeks_data)}-week {plan_type.replace('_', ' ')} plan targeting {name} on {_iso(event_date)}."
     )
     model_used = "deterministic"
-
-    # Optional Gemini Pro enrichment for the first 4 weeks (compact prompt = < $0.05)
-    if use_ai:
-        first_4w = [s for s in sessions_data if s["week_index"] <= 4]
-        ai_payload = {
-            "plan_name": name,
-            "plan_type": plan_type,
-            "event_date": _iso(event_date),
-            "goal_spec": goal_spec,
-            "schedule_prefs": schedule_prefs,
-            "athlete_baseline": baseline,
-            "upcoming_sessions": [
-                {
-                    "temp_id": s["temp_id"],
-                    "week_index": s["week_index"],
-                    "date": s["scheduled_date"],
-                    "sport": s["sport"],
-                    "type": s["session_type"],
-                    "priority": s["priority"],
-                    "dur_min": round(s["target_duration_s"] / 60),
-                    "km": s["target_distance_km"],
-                    "elev_m": s["target_elev_m"],
-                    "tss": s["target_tss"],
-                    "title": s["title"],
-                }
-                for s in first_4w
-            ],
-        }
-        try:
-            res, model_used = gemini.generate_json(
-                db,
-                feature="plan_generate",
-                system_prompt=_PLAN_SYSTEM_PROMPT,
-                user_payload=ai_payload,
-                tier="pro",
-                max_output_tokens=3500,
-            )
-            if isinstance(res.get("coach_summary"), str) and res["coach_summary"].strip():
-                coach_summary = res["coach_summary"].strip()
-            w_focuses = res.get("week_focuses") or {}
-            if isinstance(w_focuses, dict):
-                for w in weeks_data:
-                    wf = w_focuses.get(str(w["week_index"]))
-                    if isinstance(wf, str) and wf.strip():
-                        w["coach_focus"] = wf.strip()
-            by_tid = {s["temp_id"]: s for s in sessions_data}
-            for item in res.get("sessions") or []:
-                if not isinstance(item, dict):
-                    continue
-                target = by_tid.get(item.get("temp_id"))
-                if not target:
-                    continue
-                if isinstance(item.get("title"), str) and item["title"].strip():
-                    target["title"] = item["title"].strip()[:180]
-                if isinstance(item.get("description"), str) and item["description"].strip():
-                    target["description"] = item["description"].strip()[:800]
-                if isinstance(item.get("workout_steps"), list):
-                    target["workout_steps"] = [str(x)[:160] for x in item["workout_steps"][:8]]
-        except (gemini.GeminiNotConfiguredError, gemini.BudgetExceededError, gemini.GeminiError) as exc:
-            logger.info("Plan generation falling back to deterministic skeleton: %s", exc)
-            model_used = "deterministic"
 
     # Archive any previous active plan if requested (default: keep one active plan)
     if payload.get("set_active", True):
@@ -1760,24 +1671,35 @@ def _state_hash(recent: list[TrainingSession], upcoming: list[TrainingSession], 
     return hashlib.sha256(json.dumps(sig, sort_keys=True).encode()).hexdigest()[:32]
 
 
-def adapt_plan(
+def ai_enabled(db: Session, plan: TrainingPlan | None = None) -> bool:
+    """The AI coach works on this plan: a key is set, budget is left and the plan has it on."""
+    cfg = gemini.get_ai_config(db)
+    if not cfg["configured"] or cfg["remaining_usd"] <= 0:
+        return False
+    return plan is None or bool((plan.schedule_prefs or {}).get("ai_coach", True))
+
+
+def ai_info(db: Session) -> dict[str, Any]:
+    """Gemini configuration and spend plus what the AI coach is doing right now."""
+    from routepass.ai import coach
+
+    return {**gemini.get_ai_config(db), "coach": coach.status()}
+
+
+def prepare_adaptation(
     db: Session,
     plan: TrainingPlan,
     prefs: dict[str, Any],
     *,
-    trigger: str = "manual",
     user_note: str = "",
     today: date | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
-    """Adapt upcoming 14 days based on completed/missed sessions & athlete feedback.
-
-    Uses Gemini Flash when configured & within budget; falls back cleanly to a
-    deterministic rescheduler if offline, unconfigured, or budget-capped.
-    """
+    """Match activities and gather what an adaptation looks at. Returns {"changed": False, ...} when
+    nothing happened since the last adaptation, else the context for finish_adaptation, including the
+    compact payload the AI coach gets."""
     today = today or date.today()
     match_stats = match_activities_to_plan(db, plan, today=today)
-
     sessions = list(
         db.scalars(
             select(TrainingSession)
@@ -1793,29 +1715,18 @@ def adapt_plan(
         for s in sessions
         if today <= _parse_date(s.scheduled_date, today) <= win_future and s.status in ("planned", "moved")
     ]
-
     h = _state_hash(recent, upcoming, user_note)
     if not force and plan.last_adapted_hash == h:
-        return {
-            "adapted": False,
-            "reason": "No changes since last adaptation",
-            "match": match_stats,
-            "diff": [],
-        }
+        return {"changed": False, "match": match_stats}
 
     baseline = athlete_baseline(db, prefs, today)
-    compact_payload = {
+    payload = {
         "today": _iso(today),
         "plan_name": plan.name,
         "plan_type": plan.plan_type,
         "event_date": plan.event_date,
-        "athlete_load": {
-            "ctl": baseline["ctl"],
-            "atl": baseline["atl"],
-            "tsb": baseline["tsb"],
-            "acwr": baseline["acwr"],
-        },
-        "user_note": user_note.strip()[:400],
+        "athlete_load": {k: baseline.get(k) for k in ("ctl", "atl", "tsb", "acwr")},
+        "user_note": user_note.strip()[:600],
         "recent_sessions": [
             {
                 "id": s.id,
@@ -1827,6 +1738,9 @@ def adapt_plan(
                 "compliance": s.compliance_score,
                 "dur_min": round(s.target_duration_s / 60),
                 "title": s.title,
+                "felt": s.feel,
+                "rpe": s.rpe,
+                "athlete_note": s.feedback_note,
             }
             for s in recent
         ],
@@ -1844,46 +1758,67 @@ def adapt_plan(
             }
             for s in upcoming
         ],
+        "rest_days": (plan.schedule_prefs or {}).get("rest_days", []),
+    }
+    return {
+        "changed": True,
+        "match": match_stats,
+        "today": _iso(today),
+        "user_note": user_note,
+        "recent_ids": [s.id for s in recent],
+        "upcoming_ids": [s.id for s in upcoming],
+        "baseline": baseline,
+        "payload": payload,
     }
 
-    mutations: list[dict[str, Any]] = []
-    summary = ""
-    model_used = "deterministic"
 
-    try:
-        res, model_used = gemini.generate_json(
-            db,
-            feature="plan_adapt",
-            system_prompt=_ADAPT_SYSTEM_PROMPT,
-            user_payload=compact_payload,
-            tier="fast",
-            max_output_tokens=1500,
-        )
-        summary = str(res.get("summary") or "").strip()
-        raw_muts = res.get("mutations") or []
-        if isinstance(raw_muts, list):
-            mutations = [m for m in raw_muts if isinstance(m, dict)]
-    except (gemini.GeminiNotConfiguredError, gemini.BudgetExceededError, gemini.GeminiError) as exc:
-        logger.info("Adaptation using deterministic fallback: %s", exc)
-        summary, mutations = _deterministic_adapt(recent, upcoming, baseline, today, user_note)
+def finish_adaptation(
+    db: Session,
+    plan: TrainingPlan,
+    ctx: dict[str, Any],
+    *,
+    trigger: str,
+    ai: dict[str, Any] | None = None,
+    ai_error: str | None = None,
+) -> dict[str, Any]:
+    """Apply an adaptation: the AI coach's proposal (checked first) when there is one, else the
+    built-in rules. Records it in the plan's history and syncs the calendar."""
+    today = _parse_date(ctx["today"], date.today())
+    by_id = {s.id: s for s in db.scalars(select(TrainingSession).where(TrainingSession.plan_id == plan.id))}
+    recent = [by_id[i] for i in ctx["recent_ids"] if i in by_id]
+    upcoming = [
+        by_id[i] for i in ctx["upcoming_ids"] if i in by_id and by_id[i].status in ("planned", "moved")
+    ]
+
+    if ai is not None:
+        summary = str(ai.get("summary") or "").strip()[:600]
+        mutations = [m for m in (ai.get("mutations") or []) if isinstance(m, dict)]
+        model_used = str(ai.get("model") or "ai")
+    else:
+        summary, mutations = _deterministic_adapt(recent, upcoming, ctx["baseline"], today, ctx["user_note"])
         model_used = "deterministic"
 
-    diff = _apply_mutations(db, plan, sessions, mutations, today)
-    plan.last_adapted_hash = _state_hash(recent, upcoming, user_note)
+    diff, rejected = _apply_mutations(
+        db, plan, list(by_id.values()), mutations, today, allowed_ids={s.id for s in upcoming}
+    )
+    plan.last_adapted_hash = _state_hash(recent, upcoming, ctx["user_note"])
     if not summary:
         summary = (
             f"Adjusted {len(diff)} upcoming session(s) based on recent training."
             if diff
             else "Your upcoming schedule looks well-balanced — no changes needed."
         )
-
     db.add(
         PlanAdaptation(
             plan_id=plan.id,
-            trigger=trigger,
+            trigger=trigger[:32],
             model_used=model_used,
             summary=summary,
             diff=diff,
+            details={"rejected": rejected, "user_note": ctx["user_note"][:300]}
+            if rejected or ctx["user_note"]
+            else None,
+            ai_error=(ai_error or None) and ai_error[:300],
         )
     )
     db.flush()
@@ -1893,9 +1828,35 @@ def adapt_plan(
         "model_used": model_used,
         "summary": summary,
         "diff": diff,
-        "match": match_stats,
+        "rejected": rejected,
+        "ai_error": ai_error,
+        "match": ctx["match"],
         "calendar_sync": cal_sync,
     }
+
+
+def adapt_plan(
+    db: Session,
+    plan: TrainingPlan,
+    prefs: dict[str, Any],
+    *,
+    trigger: str = "manual",
+    user_note: str = "",
+    today: date | None = None,
+    force: bool = False,
+    ai_error: str | None = None,
+) -> dict[str, Any]:
+    """Adapt the next 14 days with the built-in rules, right away. The AI coach does the same in the
+    background (routepass.ai.coach.adapt), calling Gemini between prepare and finish."""
+    ctx = prepare_adaptation(db, plan, prefs, user_note=user_note, today=today, force=force)
+    if not ctx["changed"]:
+        return {
+            "adapted": False,
+            "reason": "No changes since last adaptation",
+            "match": ctx["match"],
+            "diff": [],
+        }
+    return finish_adaptation(db, plan, ctx, trigger=trigger, ai_error=ai_error)
 
 
 def _maybe_sync_calendar(db: Session, plan: TrainingPlan) -> dict[str, Any] | None:
@@ -2102,15 +2063,19 @@ def skip_and_adapt_session(
         f"Immediate actions already applied: {' '.join(immediate_actions)} "
         "Adapt remaining upcoming sessions smoothly without overloading recovery."
     )
-    adapt_res = adapt_plan(
-        db,
-        plan,
-        prefs,
-        trigger=f"skip_{reason_l}",
-        user_note=coach_note,
-        today=today,
-        force=True,
-    )
+    if ai_enabled(db, plan):
+        # the caller commits, then hands this to the AI coach (routepass.ai.coach.submit_adapt)
+        adapt_res = {"queued": True, "trigger": f"skip_{reason_l}", "user_note": coach_note}
+    else:
+        adapt_res = adapt_plan(
+            db,
+            plan,
+            prefs,
+            trigger=f"skip_{reason_l}",
+            user_note=coach_note,
+            today=today,
+            force=True,
+        )
     return {
         "session_id": session.id,
         "reason": reason_l,
@@ -2172,23 +2137,75 @@ def _deterministic_adapt(
     return summary, muts
 
 
+# What the AI coach may set a session to, and which types count as hard days.
+SESSION_TYPES = ("easy", "long", "tempo", "intervals", "hills", "recovery", "strides", "brick", "strength")
+HARD_TYPES = ("tempo", "intervals", "hills", "race")
+MAX_MUTATIONS = 6
+
+
+def _as_int(v: Any) -> int | None:
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str) and v.strip().isdigit():
+        return int(v.strip())
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
+    return None
+
+
 def _apply_mutations(
     db: Session,
     plan: TrainingPlan,
     sessions: list[TrainingSession],
     mutations: list[dict[str, Any]],
     today: date,
-) -> list[dict[str, Any]]:
+    *,
+    allowed_ids: set[int] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Apply proposed changes after checking each one. Returns (applied diff, rejected with reason).
+
+    Rules the code enforces, whoever proposed the change: only open sessions in the next 14 days;
+    race sessions are never touched; key sessions are never skipped; known session types only;
+    no two hard days back to back; load changes stay within 50–125 %."""
     by_id = {s.id: s for s in sessions}
     event_d = _parse_date(plan.event_date, today + timedelta(days=90))
+    horizon = min(event_d, today + timedelta(days=14))
     applied: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
 
-    for m in mutations[:6]:
-        sid = m.get("session_id")
-        s = by_id.get(int(sid)) if isinstance(sid, int) else None
-        if not s or s.status in ("completed", "skipped"):
+    def reject(m: dict[str, Any], why: str) -> None:
+        rejected.append({"session_id": m.get("session_id"), "action": m.get("action"), "reason": why})
+
+    def hard_neighbour(s: TrainingSession, on: date) -> TrainingSession | None:
+        for o in sessions:
+            if o.id == s.id or o.status in ("skipped", "missed") or o.session_type not in HARD_TYPES:
+                continue
+            if abs((_parse_date(o.scheduled_date, today) - on).days) == 1:
+                return o
+        return None
+
+    for m in mutations:
+        if len(applied) >= MAX_MUTATIONS:
+            reject(m, f"more than {MAX_MUTATIONS} changes at once")
             continue
+        sid = _as_int(m.get("session_id"))
+        s = by_id.get(sid) if sid is not None else None
         action = str(m.get("action") or "")
+        if s is None or (allowed_ids is not None and s.id not in allowed_ids):
+            reject(m, "not an open session in the next 14 days")
+            continue
+        if s.status in ("completed", "partial", "skipped") or s.matched_activity_id:
+            reject(m, "session already done or skipped")
+            continue
+        if s.session_type == "race":
+            reject(m, "race sessions are never changed")
+            continue
+        if action not in ("skip", "reschedule", "adjust_load", "swap_type"):
+            reject(m, f"unknown action {action!r}")
+            continue
+        note = str(m.get("note") or "")[:300]
         before = {
             "scheduled_date": s.scheduled_date,
             "title": s.title,
@@ -2196,34 +2213,66 @@ def _apply_mutations(
             "tss": s.target_tss,
             "status": s.status,
         }
-        note = str(m.get("note") or "")[:300]
 
         if action == "skip":
+            if s.priority == "key":
+                reject(m, "key sessions are moved or shortened, not skipped")
+                continue
             s.status = "skipped"
-            s.adaptation_note = note or "Skipped by adaptive coach"
-        elif action in ("reschedule", "adjust_load", "swap_type"):
-            new_date_s = m.get("new_date")
-            if isinstance(new_date_s, str):
-                nd = _parse_date(new_date_s, today)
-                if today <= nd <= event_d:
-                    s.scheduled_date = _iso(nd)
-                    s.status = "moved"
+            s.adaptation_note = note or "Skipped by the coach"
+        else:
+            new_date = _parse_date(s.scheduled_date, today)
+            if isinstance(m.get("new_date"), str):
+                nd = _parse_date(m["new_date"], new_date)
+                if not today <= nd <= horizon:
+                    reject(m, "new date outside the next 14 days")
+                    continue
+                new_date = nd
+            new_type = s.session_type
+            if isinstance(m.get("new_session_type"), str) and m["new_session_type"].strip():
+                t = m["new_session_type"].strip().lower()
+                if t not in SESSION_TYPES:
+                    reject(m, f"unknown session type {t!r}")
+                    continue
+                new_type = t
+            creates_hard_day = new_type in HARD_TYPES and (
+                new_type != s.session_type or _iso(new_date) != s.scheduled_date
+            )
+            if creates_hard_day:
+                clash = hard_neighbour(s, new_date)
+                if clash is not None:
+                    reject(m, f"would put two hard days back to back (next to “{clash.title}”)")
+                    continue
             scale = m.get("duration_scale")
-            if isinstance(scale, (int, float)):
-                clamped = max(0.5, min(1.25, float(scale)))
-                s.target_duration_s = round(s.target_duration_s * clamped)
-                s.target_distance_km = round(s.target_distance_km * clamped, 1)
-                s.target_elev_m = round(s.target_elev_m * clamped, 0)
-                s.target_tss = round(s.target_tss * clamped, 0)
+            if isinstance(scale, bool) or (scale is not None and not isinstance(scale, (int, float))):
+                scale = None
+
+            if s.original_target is None:
+                from routepass.analysis.training_extras import _snapshot
+
+                s.original_target = _snapshot(s)
+            if _iso(new_date) != s.scheduled_date:
+                s.scheduled_date = _iso(new_date)
+                week = db.scalar(
+                    select(TrainingWeek).where(
+                        TrainingWeek.plan_id == plan.id, TrainingWeek.start_date == _iso(_monday_of(new_date))
+                    )
+                )
+                if week is not None:
+                    s.week_id = week.id
+            s.session_type = new_type
+            if scale is not None:
+                k = max(0.5, min(1.25, float(scale)))
+                s.target_duration_s = round(s.target_duration_s * k)
+                s.target_distance_km = round(s.target_distance_km * k, 1)
+                s.target_elev_m = round(s.target_elev_m * k, 0)
+                s.target_tss = round(s.target_tss * k, 0)
             if isinstance(m.get("new_title"), str) and m["new_title"].strip():
                 s.title = m["new_title"].strip()[:180]
             if isinstance(m.get("new_description"), str) and m["new_description"].strip():
                 s.description = m["new_description"].strip()[:800]
-            if isinstance(m.get("new_session_type"), str) and m["new_session_type"].strip():
-                s.session_type = m["new_session_type"].strip()[:20]
-            s.adaptation_note = note or f"Adapted ({action})"
-        else:
-            continue
+            s.status = "moved"
+            s.adaptation_note = note or f"Adapted ({action.replace('_', ' ')})"
 
         after = {
             "scheduled_date": s.scheduled_date,
@@ -2238,7 +2287,7 @@ def _apply_mutations(
             )
 
     db.flush()
-    return applied
+    return applied, rejected
 
 
 def serialize_plan_summary(plan: TrainingPlan) -> dict[str, Any]:
@@ -2280,7 +2329,7 @@ def serialize_plan_detail(
     adaptations = list(
         db.scalars(
             select(PlanAdaptation)
-            .where(PlanAdaptation.plan_id == plan.id)
+            .where(PlanAdaptation.plan_id == plan.id, PlanAdaptation.trigger != "weekly_review")
             .order_by(PlanAdaptation.created_at.desc())
             .limit(12)
         )
@@ -2351,13 +2400,15 @@ def serialize_plan_detail(
                 "compliance_score": s.compliance_score,
                 "gcal_event_id": s.gcal_event_id,
                 "adaptation_note": s.adaptation_note,
+                "coach_feedback": s.coach_feedback,
             }
         )
 
     out = serialize_plan_summary(plan)
     out["analytics"] = analytics
     out["zones"] = tx.personal_zones(prefs.get("profile") or {}, analytics.get("baseline") or {})
-    out["ai"] = gemini.get_ai_config(db)
+    out["ai"] = ai_info(db)
+    out["ai_coach"] = bool((plan.schedule_prefs or {}).get("ai_coach", True))
     out["weeks"] = [
         {
             "id": w.id,
@@ -2370,6 +2421,7 @@ def serialize_plan_detail(
             "target_elev_m": w.target_elev_m,
             "discipline_split": w.discipline_split or {},
             "coach_focus": w.coach_focus,
+            "ai_written": w.ai_written_at is not None,
             "sessions": sessions_by_week.get(w.id, []),
         }
         for w in weeks
@@ -2382,9 +2434,28 @@ def serialize_plan_detail(
             "model_used": a.model_used,
             "summary": a.summary,
             "diff": a.diff or [],
+            "details": a.details,
+            "ai_error": a.ai_error,
         }
         for a in adaptations
     ]
+    review = db.scalar(
+        select(PlanAdaptation)
+        .where(PlanAdaptation.plan_id == plan.id, PlanAdaptation.trigger == "weekly_review")
+        .order_by(PlanAdaptation.created_at.desc())
+        .limit(1)
+    )
+    out["weekly_review"] = (
+        {
+            **(review.details or {}),
+            "id": review.id,
+            "created_at": review.created_at.isoformat() + "Z" if review.created_at else None,
+            "model_used": review.model_used,
+            "ai_error": review.ai_error,
+        }
+        if review is not None
+        else None
+    )
     return out
 
 
@@ -2398,6 +2469,7 @@ def sync_active_plans_after_ingest(db: Session, prefs: dict[str, Any]) -> dict[s
     total_missed = 0
     adapted = 0
     cal_synced = 0
+    ai_plans: list[int] = []
     gcal_cfg = gcal.get_config(db)
     push_prefs = push.get_prefs(db)
 
@@ -2405,7 +2477,8 @@ def sync_active_plans_after_ingest(db: Session, prefs: dict[str, Any]) -> dict[s
         res = match_activities_to_plan(db, plan)
         total_matched += res["matched"]
         total_missed += res["missed"]
-        if res["matched"] > 0 and push_prefs.get("notify_completed", True):
+        # with the AI coach on, its note on the workout is the notification (routepass.ai.coach.feedback)
+        if res["matched"] > 0 and push_prefs.get("notify_completed", True) and not ai_enabled(db, plan):
             push.send_notification(
                 db,
                 title=f"{plan.name}: Workout synced",
@@ -2413,7 +2486,9 @@ def sync_active_plans_after_ingest(db: Session, prefs: dict[str, Any]) -> dict[s
                 url="/insights/training",
                 kind="completed",
             )
-        if res["missed"] > 0 or res["matched"] > 0:
+        if (res["missed"] > 0 or res["matched"] > 0) and ai_enabled(db, plan):
+            ai_plans.append(plan.id)  # the AI coach adapts it in the background after this sync
+        elif res["missed"] > 0 or res["matched"] > 0:
             try:
                 ad = adapt_plan(db, plan, prefs, trigger="auto_sync", force=False)
                 if ad.get("adapted") and ad.get("diff"):
@@ -2451,4 +2526,5 @@ def sync_active_plans_after_ingest(db: Session, prefs: dict[str, Any]) -> dict[s
         "missed": total_missed,
         "adapted": adapted,
         "calendar_synced": cal_synced,
+        "ai_adapt": ai_plans,
     }

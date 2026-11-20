@@ -87,14 +87,12 @@ def test_multi_sport_plan_lifecycle_and_predictions(db):
         )
         assert res["adapted"] is True
         assert res["model_used"] == "deterministic"
-        assert len(res["diff"]) >= 1
+        assert len(res["diff"]) >= 1, res["rejected"]
 
 
 def test_gemini_budget_guard_and_endpoint_detection(db):
-    urls_vertex = gemini._endpoints_for_key("AQ.testkey", "gemini-4-hydrogen")
-    assert "aiplatform.googleapis.com" in urls_vertex[0]
-    urls_studio = gemini._endpoints_for_key("AIzaTestKey", "gemini-4-hydrogen")
-    assert "generativelanguage.googleapis.com/v1/" in urls_studio[0]
+    # every key tries Google AI Studio first; Vertex only when AI Studio refuses the key
+    assert gemini._endpoint_order("AQ.testkey") == ["studio_v1beta", "studio_v1", "vertex"]
 
     with session_scope() as s:
         cfg = gemini.save_ai_config(s, api_key="AQ.fake-key", monthly_budget_usd=1.0)
@@ -115,17 +113,11 @@ def test_gemini_budget_guard_and_endpoint_detection(db):
         )
         s.flush()
 
-        try:
-            gemini.generate_json(
-                s,
-                feature="plan_adapt",
-                system_prompt="test",
-                user_payload={"a": 1},
-                tier="fast",
-            )
-            raise AssertionError("Expected BudgetExceededError")
-        except gemini.BudgetExceededError:
-            pass
+    try:
+        gemini.generate_json(feature="plan_adapt", system_prompt="test", user_payload={"a": 1}, tier="fast")
+        raise AssertionError("Expected BudgetExceededError")
+    except gemini.BudgetExceededError:
+        pass
 
 
 def test_training_rest_api_and_mcp(tmp_path, monkeypatch):

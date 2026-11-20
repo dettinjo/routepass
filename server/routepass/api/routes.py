@@ -1231,7 +1231,6 @@ class AIConfigBody(BaseModel):
 def list_training_plans(db: Session = Depends(get_session)) -> dict[str, Any]:
     from sqlalchemy import select
 
-    from routepass.ai import gemini
     from routepass.analysis import training
     from routepass.models import TrainingPlan
 
@@ -1240,16 +1239,20 @@ def list_training_plans(db: Session = Depends(get_session)) -> dict[str, Any]:
     )
     return {
         "plans": [training.serialize_plan_summary(p) for p in plans],
-        "ai": gemini.get_ai_config(db),
+        "ai": training.ai_info(db),
     }
 
 
 @router.post("/training/plans", tags=["training"])
 def create_training_plan(body: CreateTrainingPlanBody, db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass.ai import coach
     from routepass.analysis import training
 
     prefs = store.get_preferences(db)
     plan = training.create_plan(db, prefs, body.model_dump(), use_ai=body.use_ai)
+    if training.ai_enabled(db, plan):
+        db.commit()  # the coach works in its own session and must see the plan
+        coach.submit("write_weeks", plan_id=plan.id, intro=True)
     return training.serialize_plan_detail(db, plan, prefs)
 
 
@@ -1329,10 +1332,19 @@ def adapt_training_plan(
     plan = db.get(TrainingPlan, plan_id)
     if plan is None:
         raise HTTPException(404, "Training plan not found")
+    from routepass.ai import coach
+
     prefs = store.get_preferences(db)
-    result = training.adapt_plan(
-        db, plan, prefs, trigger="manual", user_note=body.user_note, force=body.force
-    )
+    if training.ai_enabled(db, plan):
+        # Gemini can take a minute: the coach adapts in the background and the page follows its status
+        db.commit()
+        result = coach.submit(
+            "adapt", plan_id=plan.id, trigger="manual", user_note=body.user_note, force=body.force
+        )
+    else:
+        result = training.adapt_plan(
+            db, plan, prefs, trigger="manual", user_note=body.user_note, force=body.force
+        )
     return {"result": result, "plan": training.serialize_plan_detail(db, plan, prefs)}
 
 
@@ -1458,14 +1470,37 @@ def skip_adapt_training_session(
         severity=body.severity,
         note=body.note,
     )
+    ad = result.get("adaptation") or {}
+    if ad.get("queued"):
+        from routepass.ai import coach
+
+        db.commit()
+        coach.submit("adapt", plan_id=plan.id, trigger=ad["trigger"], user_note=ad["user_note"], force=True)
     return {"result": result, "plan": training.serialize_plan_detail(db, plan, prefs)}
 
 
 @router.get("/training/ai-config", tags=["training"])
 def get_training_ai_config(db: Session = Depends(get_session)) -> dict[str, Any]:
+    from routepass.analysis import training
+
+    return training.ai_info(db)
+
+
+@router.post("/training/ai-config/test", tags=["training"])
+def test_training_ai() -> dict[str, Any]:
+    """Send a tiny request to Gemini with the saved key and model. Holds no database session while
+    waiting; gemini-4 models can take up to a minute when busy."""
     from routepass.ai import gemini
 
-    return gemini.get_ai_config(db)
+    return gemini.check_connection()
+
+
+@router.get("/training/ai-status", tags=["training"])
+def training_ai_status() -> dict[str, Any]:
+    """What the AI coach is doing now and its last jobs."""
+    from routepass.ai import coach
+
+    return coach.status()
 
 
 @router.put("/training/ai-config", tags=["training"])

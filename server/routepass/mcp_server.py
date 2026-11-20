@@ -706,13 +706,26 @@ def create_training_plan(
             },
             use_ai=use_ai,
         )
-        return training.serialize_plan_detail(db, plan, prefs)
+        ai = training.ai_enabled(db, plan)
+        plan_id = plan.id
+    if ai:
+        from routepass.ai import coach
+
+        coach.submit("write_weeks", plan_id=plan_id, intro=True)
+    with session_scope() as db:
+        from routepass.models import TrainingPlan
+
+        out = training.serialize_plan_detail(db, db.get(TrainingPlan, plan_id), store.get_preferences(db))
+        if ai:
+            out["note"] = "The AI coach is writing the coming weeks' sessions in the background."
+        return out
 
 
 @mcp.tool()
 def adapt_training_plan(plan_id: int | None = None, user_note: str = "") -> dict[str, Any]:
-    """Match recorded activities to the active training plan and adapt upcoming 14 days using Gemini AI
-    (or deterministic fallback if budget/key unavailable)."""
+    """Match recorded activities to the active plan and adapt the next 14 days. With the AI coach on
+    (Gemini key set) this runs in the background and can take a minute: check get_ai_coach_status or
+    get_training_plan afterwards. Without it the built-in rules adapt right away."""
     from sqlalchemy import select
 
     from routepass.analysis import training
@@ -728,9 +741,54 @@ def adapt_training_plan(plan_id: int | None = None, user_note: str = "") -> dict
         )
         if plan is None:
             return {"error": "No active training plan found"}
-        return training.adapt_plan(
-            db, plan, store.get_preferences(db), trigger="mcp", user_note=user_note, force=True
+        if not training.ai_enabled(db, plan):
+            return training.adapt_plan(
+                db, plan, store.get_preferences(db), trigger="mcp", user_note=user_note, force=True
+            )
+        plan_id = plan.id
+    from routepass.ai import coach
+
+    return coach.submit("adapt", plan_id=plan_id, trigger="mcp", user_note=user_note, force=True)
+
+
+@mcp.tool()
+def get_ai_coach_status(plan_id: int | None = None) -> dict[str, Any]:
+    """The AI coach: whether Gemini works (last success or error), this month's spend, what it is
+    doing now, its latest plan changes and the latest weekly review."""
+    from sqlalchemy import select
+
+    from routepass.analysis import training
+    from routepass.models import PlanAdaptation, TrainingPlan
+
+    with session_scope() as db:
+        info = training.ai_info(db)
+        info.pop("available_models", None)
+        plan = (
+            db.get(TrainingPlan, plan_id)
+            if plan_id is not None
+            else db.scalar(
+                select(TrainingPlan).where(TrainingPlan.status == "active").order_by(TrainingPlan.id.desc())
+            )
         )
+        if plan is not None:
+            rows = db.scalars(
+                select(PlanAdaptation)
+                .where(PlanAdaptation.plan_id == plan.id)
+                .order_by(PlanAdaptation.created_at.desc())
+                .limit(8)
+            )
+            info["history"] = [
+                {
+                    "at": r.created_at.isoformat() + "Z",
+                    "trigger": r.trigger,
+                    "by": r.model_used,
+                    "summary": r.summary,
+                    "details": r.details,
+                    "ai_error": r.ai_error,
+                }
+                for r in rows
+            ]
+        return info
 
 
 @mcp.tool()
