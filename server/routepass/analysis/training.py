@@ -843,6 +843,7 @@ def create_plan(
 ) -> TrainingPlan:
     """Create a training plan with the built-in rules. With use_ai the AI coach then writes the
     sessions of the coming weeks in the background (routepass.ai.coach)."""
+    explicit_today = today is not None
     today = today or date.today()
     plan_type = str(payload.get("plan_type") or "trail_run")
     if plan_type not in PLAN_TYPES:
@@ -892,6 +893,11 @@ def create_plan(
         schedule_prefs=schedule_prefs,
         baseline=baseline,
         coach_summary=coach_summary,
+        **(
+            {"created_at": datetime(today.year, today.month, today.day, 12, 0)}
+            if explicit_today
+            else {}
+        ),
     )
     db.add(plan)
     db.flush()
@@ -930,7 +936,7 @@ def create_plan(
 def plan_first_day(plan: TrainingPlan) -> date:
     """The first day a session may be due: the plan's start, never before it was created."""
     start = _parse_date(plan.start_date, date.today())
-    if plan.created_at is not None:
+    if plan.created_at is not None and start.weekday() == 0:
         # Older plans stored the Monday of week 1 even when created mid-week.
         created = plan.created_at.date()
         if 0 < (created - start).days < 7:
