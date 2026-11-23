@@ -3,7 +3,11 @@
 
 **[English](README.md) · [Deutsch](README.de.md)**
 
+<p align="center"><img src="docs/screenshots/insights.png" alt="Insights: Umfang über die Zeit nach Sportart" width="100%" /></p>
+
 RoutePass ist eine selbst gehostete Strava ⇄ Komoot-Synchronisation und Trainings-App für eine Person. Beide Plattformen ergeben eine duplikatfreie Aktivitätshistorie für FastAPI-Backend, React-Web-App und einen MCP-Server für KI-Assistenten.
+
+## Highlights
 
 - **Duplikatfreie Zwei-Wege-Sync** — Strava-Aktivitäten und Komoot-Touren werden zu einer Aktivität zusammengeführt (±10 min, ±15 % Distanz); Regeln steuern jede Kopie, eine Retry-Queue beachtet Rate-Limits.
 - **LLM-Coach mit Leitplanken** — Gemini läuft im Hintergrund-Worker und schreibt nur Text oder schlägt Planänderungen vor; der Code rechnet alle Zahlen, lehnt unsichere Änderungen ab, mit Regel-Fallbacks.
@@ -15,22 +19,11 @@ RoutePass ist eine selbst gehostete Strava ⇄ Komoot-Synchronisation und Traini
 
 ## Screenshots
 
-<p align="center"><img src="docs/screenshots/insights.png" alt="Insights: Umfang über die Zeit nach Sportart" width="100%" /></p>
-
 <p align="center">
   <img src="docs/screenshots/training.png" alt="Trainingsplan mit heutiger Einheit und Wettkampfprognose" width="32%" /> <img src="docs/screenshots/fitness.png" alt="Fitness-Level: Schätzungen für Rad und Lauf" width="32%" /> <img src="docs/screenshots/activity.png" alt="Aktivität mit Karte, Kennzahlen und Verläufen" width="32%" />
 </p>
 
 Alle Screenshots zeigen die synthetischen Demodaten aus `server/scripts/seed_demo.py` (Oberfläche auf Englisch).
-
-## Funktionen
-
-- **Synchronisation** — Komoot → Strava und Strava → Komoot, jeweils schaltbar. Regeln (Sportart, Distanz, Höhenmeter, Dauer, Name, Wochentag, Datum, Pendeln/Indoor, Herzfrequenz/Leistung, Orte) überspringen oder gestalten eine Kopie: Titel- und Beschreibungsvorlagen, Sportart-Zuordnung, Sichtbarkeit, Ausrüstung. Ein Probelauf zeigt vor jedem Upload, was eine Regel tun würde. Jede Strava-Sportart (50) und jede aufzeichenbare Komoot-Sportart (25) ist explizit zugeordnet, abgesichert durch Tests.
-- **Eine Historie** — RoutePass erkennt eigene Uploads, kopiert nie eine Aktivität, die es auf dem Ziel schon gibt, und wartet eine Karenzzeit ab, damit Geräte, die auf beide Plattformen hochladen, zuerst ankommen. Falsche Zuordnungen lassen sich von Hand trennen oder zusammenführen. Kopien übernehmen die Sichtbarkeit des Originals; Fotos beider Plattformen werden pro Aktivität angezeigt.
-- **Analyse** — Dashboard mit Periodenvergleich, Umfang nach Sportart, Jahresvergleich, Kalender-Heatmap, Fitness/Ermüdung/Form (CTL/ATL/TSB), Rekorde und Bestleistungen, Leistungskurve, Zonen mit Polarisierung, Effizienz-Trend, Gewohnheiten, Serien, Eddington-Zahl, Explorer-Kacheln, Ausrüstungs-Kilometer und eine Karte aller Routen. Pro Aktivität: Karte mit verknüpften Verlaufs-Diagrammen, Splits, Anstiege (mit geschätzten Watt bei Fahrten ohne Powermeter), Zonen und Bestleistungen.
-- **Training** — Pläne mit Phasen, Schlüsseleinheiten, Wettkampfprognose und Kalender-Export; Optionen „kürzer / leichter / tauschen“ für einen Tag; Gründe zum Auslassen (keine Zeit, Krankheit, Muskelkater oder Müdigkeit, Verletzung), die die folgenden Tage anpassen.
-- **KI-Coach (optional, Gemini)** — schreibt die Einheiten der nächsten zwei Wochen mit den persönlichen Zonen, passt die nächsten 14 Tage nach Training oder einer Notiz an, kommentiert jede zugeordnete Einheit, schreibt einen Wochenrückblick und einen monatlichen Fitness-Bericht und analysiert auf Wunsch einzelne Aktivitäten. Er läuft innerhalb eines monatlichen Kostenlimits; ist Gemini nicht erreichbar oder das Kontingent aufgebraucht, übernehmen die eingebauten Regeln und die App sagt warum.
-- **Web-App** — Mobile First (Tab-Leiste auf dem Handy, Seitenleiste auf dem Desktop), helles und dunkles Design, als PWA installierbar.
 
 ## Architektur
 
@@ -46,6 +39,15 @@ Alle Screenshots zeigen die synthetischen Demodaten aus `server/scripts/seed_dem
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
+### Funktionsumfang & Sync-Mechanik
+
+- **Synchronisation** — Komoot → Strava und Strava → Komoot, jeweils schaltbar. Regeln (Sportart, Distanz, Höhenmeter, Dauer, Name, Wochentag, Datum, Pendeln/Indoor, Herzfrequenz/Leistung, Orte) überspringen oder gestalten eine Kopie: Titel- und Beschreibungsvorlagen, Sportart-Zuordnung, Sichtbarkeit, Ausrüstung. Ein Probelauf zeigt vor jedem Upload, was eine Regel tun würde. Jede Strava-Sportart (50) und jede aufzeichenbare Komoot-Sportart (25) ist explizit zugeordnet, abgesichert durch Tests.
+- **Eine Historie** — RoutePass erkennt eigene Uploads, kopiert nie eine Aktivität, die es auf dem Ziel schon gibt, und wartet eine Karenzzeit ab, damit Geräte, die auf beide Plattformen hochladen, zuerst ankommen. Falsche Zuordnungen lassen sich von Hand trennen oder zusammenführen. Kopien übernehmen die Sichtbarkeit des Originals; Fotos beider Plattformen werden pro Aktivität angezeigt.
+- **Analyse** — Dashboard mit Periodenvergleich, Umfang nach Sportart, Jahresvergleich, Kalender-Heatmap, Fitness/Ermüdung/Form (CTL/ATL/TSB), Rekorde und Bestleistungen, Leistungskurve, Zonen mit Polarisierung, Effizienz-Trend, Gewohnheiten, Serien, Eddington-Zahl, Explorer-Kacheln, Ausrüstungs-Kilometer und eine Karte aller Routen. Pro Aktivität: Karte mit verknüpften Verlaufs-Diagrammen, Splits, Anstiege (mit geschätzten Watt bei Fahrten ohne Powermeter), Zonen und Bestleistungen.
+- **Training** — Pläne mit Phasen, Schlüsseleinheiten, Wettkampfprognose und Kalender-Export; Optionen „kürzer / leichter / tauschen“ für einen Tag; Gründe zum Auslassen (keine Zeit, Krankheit, Muskelkater oder Müdigkeit, Verletzung), die die folgenden Tage anpassen.
+- **KI-Coach (optional, Gemini)** — schreibt die Einheiten der nächsten zwei Wochen mit den persönlichen Zonen, passt die nächsten 14 Tage nach Training oder einer Notiz an, kommentiert jede zugeordnete Einheit, schreibt einen Wochenrückblick und einen monatlichen Fitness-Bericht und analysiert auf Wunsch einzelne Aktivitäten. Er läuft innerhalb eines monatlichen Kostenlimits; ist Gemini nicht erreichbar oder das Kontingent aufgebraucht, übernehmen die eingebauten Regeln und die App sagt warum.
+- **Historie (v1 → v2)** — v1 entstand als Multi-Tenant-Dienst mit FastAPI, PostgreSQL und Redis/ARQ; v2 ist der kompakte Einzel-Container mit SQLite (WAL) und integriertem Hintergrund-Worker.
+
 - **Sync-Zyklus** (`engine/runner.py`): beide Plattformen inkrementell importieren → Datensätze zu Aktivitäten zusammenführen (`engine/ingest.py`) → Kopien nach Regeln planen (`engine/sync.py`) → als GPX mit Herzfrequenz, Kadenz und Leistung hochladen → Aufzeichnungen im Hintergrund laden. Fehlgeschlagene Uploads werden mit Backoff wiederholt (15 min bis 12 h, höchstens 5 Versuche); Rate-Limits verschieben einen Job, ohne einen Versuch zu zählen, und Hintergrundarbeit lässt einen Teil von Stravas 15-Minuten- und Tageslimit frei.
 - **Analyse** (`analysis/`): reine NumPy-Track-Metriken; Auswertungen lesen nur die duplikatfreie Tabelle `activities`, nichts wird doppelt gezählt.
 - **Zwei Listener in einem Prozess**: ein privater Port für die Web-App (Session-Cookies nach der Anmeldung) und ein optionaler öffentlicher Port, der nur `/api/v1/*` und `/mcp` mit Bearer-Token bedient — für OAuth-Callbacks, Strava-Webhooks und entfernte MCP-Clients.
@@ -60,10 +62,10 @@ Seit Mitte 2026 funktioniert Stravas API nur, solange der Besitzer der App ein b
 ## Tech-Stack
 
 **Backend:** Python 3.12 · FastAPI · SQLAlchemy · SQLite · NumPy · httpx · MCP Python SDK · Gemini API
-**Frontend:** React · TypeScript · Vite · TanStack Query · uPlot · Leaflet · Tabler Icons
+**Frontend:** React · TypeScript · Vite · TanStack Query · uPlot · Leaflet · Tabler Icons · PWA
 **Auslieferung:** Docker (Multi-Stage-Build) · GitHub Actions → GitHub Container Registry · pytest mit per respx gemockten Provider-APIs (85 Tests) · Ruff
 
-## Starten
+## Einrichtung
 
 ```bash
 cp .env.example .env            # ROUTEPASS_API_TOKEN setzen, optional Strava-App-ID/-Secret
@@ -108,6 +110,4 @@ uvicorn routepass.asgi:app --reload                     # :8000
 cd web && npm ci && npm run dev                         # :5173, Proxy für /api und /mcp
 ```
 
-## Lizenz
-
-MIT
+Lizenziert unter **MIT**.
