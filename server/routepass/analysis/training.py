@@ -893,11 +893,7 @@ def create_plan(
         schedule_prefs=schedule_prefs,
         baseline=baseline,
         coach_summary=coach_summary,
-        **(
-            {"created_at": datetime(today.year, today.month, today.day, 12, 0)}
-            if explicit_today
-            else {}
-        ),
+        **({"created_at": datetime(today.year, today.month, today.day, 12, 0)} if explicit_today else {}),
     )
     db.add(plan)
     db.flush()
