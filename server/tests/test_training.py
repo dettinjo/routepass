@@ -346,13 +346,17 @@ def test_data_quality_suggests_profile_values(db):
 def test_session_feedback_variants_and_rpe_load(client):
     from routepass.models import TrainingSession
 
-    today = date(2026, 11, 19)
+    today = date.today()
     with session_scope() as s:
         prefs = store.get_preferences(s)
         plan = training.create_plan(
             s,
             prefs,
-            {"name": "50k", "plan_type": "trail_run", "event_date": "2027-07-08"},
+            {
+                "name": "50k",
+                "plan_type": "trail_run",
+                "event_date": (today + timedelta(days=180)).isoformat(),
+            },
             use_ai=False,
             today=today,
         )
@@ -361,7 +365,7 @@ def test_session_feedback_variants_and_rpe_load(client):
         )
         first, second, third = sessions[0].id, sessions[1].id, sessions[2].id
         act = Activity(
-            start_time=datetime(2026, 11, 19, 18),
+            start_time=datetime(today.year, today.month, today.day, 18),
             name="Run",
             sport="TrailRun",
             family="run",
