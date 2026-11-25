@@ -24,12 +24,17 @@ HANDOFF_TTL_S = 365 * 86400  # 1 year
 CURRENT_KEY = "strava.userscript_key"  # id of the one handoff token that is still accepted
 
 
-def issue_handoff_token(db: Session) -> str:
-    """Mint a token for a fresh userscript download. Only the newest download stays valid, so
-    reinstalling the script revokes every earlier copy (and any leaked token)."""
+def issue_handoff_token(db: Session, *, new: bool = False) -> str:
+    """A token for a userscript download.
+
+    Plain downloads reuse the current token id: Tampermonkey re-downloads the script to check for
+    updates, and that must not revoke the installed copy. An explicit install from Settings
+    (`new=True`) mints a new id, which revokes every earlier copy (and any leaked token)."""
     now = int(time.time())
-    jti = secrets.token_urlsafe(12)
-    store.set_value(db, CURRENT_KEY, jti)
+    jti = None if new else store.get_value(db, CURRENT_KEY)
+    if not jti:
+        jti = secrets.token_urlsafe(12)
+        store.set_value(db, CURRENT_KEY, jti)
     return auth.sign({"purpose": HANDOFF_PURPOSE, "jti": jti, "iat": now, "exp": now + HANDOFF_TTL_S})
 
 
@@ -42,16 +47,20 @@ def verify_handoff_token(db: Session, token: str | None) -> bool:
     return payload.get("jti") == current if current else True
 
 
-def render_userscript(base_url: str, token: str) -> str:
-    """Return the complete `.user.js` source code configured for `base_url`."""
+VERSION = "1.4.0"
+SCRIPT_PATH = "/api/v1/connections/strava/userscript.user.js"
+META_PATH = "/api/v1/connections/strava/userscript.meta.js"
+
+
+def render_meta(base_url: str) -> str:
+    """The header block alone: what Tampermonkey fetches to see whether there is a new version.
+    Carries no token."""
     origin = base_url.rstrip("/")
     host = urlparse(origin).hostname or "*"
-    origin_js = json.dumps(origin)
-    token_js = json.dumps(token)
     return f"""// ==UserScript==
 // @name         RoutePass Strava Auto-Connect
 // @namespace    {origin}/
-// @version      1.3.0
+// @version      {VERSION}
 // @description  Automatically syncs your Strava session cookies (_strava4_session + strava_remember_token) to RoutePass when you sign in on strava.com.
 // @match        https://www.strava.com/*
 // @grant        GM_cookie
@@ -61,8 +70,20 @@ def render_userscript(base_url: str, token: str) -> str:
 // @grant        GM_setValue
 // @connect      {host}
 // @run-at       document-idle
+// @updateURL    {origin}{META_PATH}
+// @downloadURL  {origin}{SCRIPT_PATH}
 // ==/UserScript==
+"""
 
+
+def render_userscript(base_url: str, token: str) -> str:
+    """Return the complete `.user.js` source code configured for `base_url`."""
+    origin = base_url.rstrip("/")
+    origin_js = json.dumps(origin)
+    token_js = json.dumps(token)
+    return (
+        render_meta(origin)
+        + f"""
 (function () {{
   "use strict";
 
@@ -284,3 +305,4 @@ def render_userscript(base_url: str, token: str) -> str:
   runSync(isPendingConnect());
 }})();
 """
+    )

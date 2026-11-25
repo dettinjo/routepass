@@ -73,7 +73,7 @@ function Strava() {
         {s?.connected && (
           <Menu>
             <button onClick={() => call.mutate({ path: "/connections/strava/check", method: "GET" }, { onSuccess: () => toast("Strava connection works") })}><IconRefresh size={ICON.button} />Test connection</button>
-            <a href="/api/v1/connections/strava/userscript.user.js" target="_blank" rel="noreferrer"><IconImport size={ICON.button} />Reinstall connector</a>
+            <a href="/api/v1/connections/strava/userscript.user.js?new=1" target="_blank" rel="noreferrer"><IconImport size={ICON.button} />Reinstall connector</a>
             {status?.public_url && <>
               <div className="sep" />
               <div className="meta">Instant sync via webhook</div>
@@ -109,7 +109,7 @@ function Strava() {
           <div className="stack" style={{ gap: 10 }}>
             <p className="small secondary">No paid Strava API needed: a small browser add-on hands your Strava sign-in to RoutePass and keeps it fresh.</p>
             <div className="row">
-              <a className="btn sm" href="/api/v1/connections/strava/userscript.user.js" target="_blank" rel="noreferrer"><IconImport size={ICON.button} />1. Install connector</a>
+              <a className="btn sm" href="/api/v1/connections/strava/userscript.user.js?new=1" target="_blank" rel="noreferrer"><IconImport size={ICON.button} />1. Install connector</a>
               {signIn}
             </div>
             <span className="xs muted">Needs <a href="https://www.tampermonkey.net/" target="_blank" rel="noreferrer">Tampermonkey</a> on a desktop browser (Chrome/Edge: the BETA version). Installing again replaces the previous connector.</span>
