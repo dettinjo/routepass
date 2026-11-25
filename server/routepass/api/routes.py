@@ -1374,6 +1374,9 @@ def update_training_plan(
                 select(TrainingPlan).where(TrainingPlan.status == "active", TrainingPlan.id != plan.id)
             ):
                 prev.status = "archived"
+                training.remove_calendar_events(db, prev, upcoming_only=True)
+        elif body.status == "archived" and plan.status != "archived":
+            training.remove_calendar_events(db, plan, upcoming_only=True)
         plan.status = body.status
     if body.event_date is not None:
         plan.event_date = body.event_date[:10]
@@ -1386,15 +1389,18 @@ def update_training_plan(
 
 
 @router.delete("/training/plans/{plan_id}", tags=["training"])
-def delete_training_plan(plan_id: int, db: Session = Depends(get_session)) -> dict[str, bool]:
+def delete_training_plan(plan_id: int, db: Session = Depends(get_session)) -> dict[str, Any]:
+    """Deletes the plan and every Google Calendar event written for it (past ones too)."""
+    from routepass.analysis import training
     from routepass.models import TrainingPlan
 
     plan = db.get(TrainingPlan, plan_id)
     if plan is None:
         raise HTTPException(404, "Training plan not found")
+    removed = training.remove_calendar_events(db, plan, upcoming_only=False)
     db.delete(plan)
     db.flush()
-    return {"deleted": True}
+    return {"deleted": True, "calendar_events_removed": removed}
 
 
 @router.post("/training/plans/{plan_id}/match", tags=["training"])

@@ -395,6 +395,10 @@ def _event_body(
         "description": "\n".join(lines),
         "start": {"dateTime": start_dt.isoformat()},
         "end": {"dateTime": end_dt.isoformat()},
+        # lets cleanup_orphan_events find our events even after their session is gone
+        "extendedProperties": {
+            "private": {"routepass": "1", "plan_id": str(plan.id), "session_id": str(s.id)}
+        },
     }
 
 
@@ -445,9 +449,7 @@ def sync_plan_to_calendar(
 
     with httpx.Client(timeout=20) as client:
         for s in sessions:
-            if s.sport == "rest":
-                continue
-            if s.status == "skipped":
+            if s.sport == "rest" or s.status == "skipped":
                 if s.gcal_event_id:
                     client.delete(
                         f"{GCAL_API}/calendars/{target_cal}/events/{s.gcal_event_id}", headers=headers
@@ -507,6 +509,10 @@ def sync_plan_to_calendar(
                     created += 1
 
     db.flush()
+    try:
+        deleted += cleanup_orphan_events(db)
+    except Exception:  # noqa: BLE001 - leftovers are retried on the next sync
+        logger.exception("Calendar orphan cleanup failed")
     return {
         "created": created,
         "updated": updated,
@@ -514,3 +520,98 @@ def sync_plan_to_calendar(
         "conflicts": conflicts,
         "synced_sessions": len(sessions),
     }
+
+
+LEGACY_MARKER = "Open in RoutePass:"  # events written before extendedProperties were added
+
+
+def _target(db: Session) -> tuple[str, dict[str, str]] | None:
+    """(calendar id, auth headers) when a target calendar is connected, else None."""
+    cfg = get_config(db)
+    if not (cfg.get("connected") and cfg.get("target_calendar_id")):
+        return None
+    return str(cfg["target_calendar_id"]), {"Authorization": f"Bearer {_access_token(db)}"}
+
+
+def _delete_event(client: httpx.Client, cal: str, headers: dict[str, str], event_id: str) -> bool:
+    r = client.delete(f"{GCAL_API}/calendars/{cal}/events/{event_id}", headers=headers)
+    # 404/410: already gone, which is what we want
+    if r.status_code >= 400 and r.status_code not in (404, 410):
+        raise GCalError(f"Deleting calendar event failed ({r.status_code}): {r.text[:200]}")
+    return r.status_code < 400
+
+
+def _our_events(client: httpx.Client, cal: str, headers: dict[str, str]) -> list[dict[str, Any]]:
+    """Every event RoutePass wrote to the target calendar (tagged, plus legacy untagged ones)."""
+    found: dict[str, dict[str, Any]] = {}
+    for params in (
+        {"privateExtendedProperty": "routepass=1"},
+        {"q": LEGACY_MARKER},
+    ):
+        token = None
+        while True:
+            q = {**params, "maxResults": 2500, "showDeleted": "false"}
+            if token:
+                q["pageToken"] = token
+            r = client.get(f"{GCAL_API}/calendars/{cal}/events", headers=headers, params=q)
+            if r.status_code >= 400:
+                raise GCalError(f"Listing calendar events failed ({r.status_code}): {r.text[:200]}")
+            body = r.json()
+            for ev in body.get("items", []):
+                priv = (ev.get("extendedProperties") or {}).get("private") or {}
+                if priv.get("routepass") == "1" or LEGACY_MARKER in (ev.get("description") or ""):
+                    found[ev["id"]] = ev
+            token = body.get("nextPageToken")
+            if not token:
+                break
+    return list(found.values())
+
+
+def delete_plan_events(db: Session, plan: TrainingPlan, *, from_date: date | None = None) -> int:
+    """Remove a plan's events from the calendar: all of them, or only those on/after `from_date`
+    (an archived plan keeps its history but drops what is still to come). Clears gcal_event_id."""
+    tgt = _target(db)
+    if tgt is None:
+        return 0
+    cal, headers = tgt
+    n = 0
+    with httpx.Client(timeout=20) as client:
+        for s in plan.sessions:
+            if not s.gcal_event_id:
+                continue
+            if from_date and s.scheduled_date < from_date.isoformat():
+                continue
+            if _delete_event(client, cal, headers, s.gcal_event_id):
+                n += 1
+            s.gcal_event_id = None
+        # tagged events the plan lost track of (e.g. a sync that failed halfway)
+        for ev in _our_events(client, cal, headers):
+            priv = (ev.get("extendedProperties") or {}).get("private") or {}
+            if priv.get("plan_id") != str(plan.id):
+                continue
+            day = ((ev.get("start") or {}).get("dateTime") or (ev.get("start") or {}).get("date") or "")[:10]
+            if from_date and day and day < from_date.isoformat():
+                continue
+            if _delete_event(client, cal, headers, ev["id"]):
+                n += 1
+    db.flush()
+    return n
+
+
+def cleanup_orphan_events(db: Session) -> int:
+    """Delete RoutePass events no session points to any more (deleted plans, removed sessions)."""
+    tgt = _target(db)
+    if tgt is None:
+        return 0
+    cal, headers = tgt
+    known = set(
+        db.scalars(select(TrainingSession.gcal_event_id).where(TrainingSession.gcal_event_id.is_not(None)))
+    )
+    n = 0
+    with httpx.Client(timeout=20) as client:
+        for ev in _our_events(client, cal, headers):
+            if ev["id"] not in known and _delete_event(client, cal, headers, ev["id"]):
+                n += 1
+    if n:
+        logger.info("Removed %d orphaned training events from Google Calendar", n)
+    return n

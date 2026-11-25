@@ -795,8 +795,12 @@ function PlanView() {
     onError: (e: Error) => toast(e.message, true),
   });
   const deleteMut = useMutation({
-    mutationFn: (id: number) => api(`/training/plans/${id}`, { method: "DELETE" }),
-    onSuccess: () => { setSelectedPlanId(null); setWeekIdx(null); qc.invalidateQueries({ queryKey: ["training-plans"] }); toast("Plan deleted"); },
+    mutationFn: (id: number) => api<{ calendar_events_removed: number | null }>(`/training/plans/${id}`, { method: "DELETE" }),
+    onSuccess: (r) => {
+      setSelectedPlanId(null); setWeekIdx(null); qc.invalidateQueries({ queryKey: ["training-plans"] });
+      const n = r?.calendar_events_removed;
+      toast(n === null ? "Plan deleted. Calendar entries couldn't be removed now; the next calendar sync removes them." : n ? `Plan deleted, ${n} calendar ${n === 1 ? "entry" : "entries"} removed` : "Plan deleted");
+    },
     onError: (e: Error) => toast(e.message, true),
   });
 
@@ -901,7 +905,7 @@ function PlanView() {
               <button onClick={() => setShowWizard(true)}><IconPlus size={ICON.button} />New plan</button>
               <div className="sep" />
               {aiInfo?.configured && <div className="meta">AI coach this month: ${num(aiInfo.usage?.spent_usd ?? 0, 2)} of ${num(aiInfo.monthly_budget_usd ?? 8, 0)}</div>}
-              <button className="danger" onClick={() => confirm(`Delete “${plan.name}” and all its sessions?`) && deleteMut.mutate(plan.id)}><IconTrash size={ICON.button} />Delete plan</button>
+              <button className="danger" onClick={() => confirm(`Delete “${plan.name}”, all its sessions and their Google Calendar entries?`) && deleteMut.mutate(plan.id)}><IconTrash size={ICON.button} />Delete plan</button>
             </Menu>
           </div>
           <div className="plan-kpis">
