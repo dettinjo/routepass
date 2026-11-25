@@ -1,12 +1,12 @@
-const SHELL_CACHE = "routepass-shell-v4";
-const API_CACHE = "routepass-api-v4";
+const SHELL_CACHE = "routepass-shell-v5";
+const API_CACHE = "routepass-api-v5";
 const PRECACHE_URLS = [
   "/",
   "/manifest.webmanifest",
   "/favicon.svg",
-  "/icon-192.png",
-  "/icon-512.png",
-  "/apple-touch-icon.png",
+  "/icon-192.png?v=2",
+  "/icon-512.png?v=2",
+  "/apple-touch-icon.png?v=2",
 ];
 
 self.addEventListener("install", (event) => {
@@ -136,8 +136,8 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     self.registration.showNotification(data.title, {
       body: data.body,
-      icon: "/icon-192.png",
-      badge: "/icon-192.png",
+      icon: "/icon-192.png?v=2",
+      badge: "/badge-96.png",
       tag: data.tag || "routepass",
       data: { url: data.url || "/insights/training" },
     }),
