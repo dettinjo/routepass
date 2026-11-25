@@ -882,6 +882,7 @@ def create_plan(
     if payload.get("set_active", True):
         for prev in db.scalars(select(TrainingPlan).where(TrainingPlan.status == "active")):
             prev.status = "archived"
+            remove_calendar_events(db, prev, upcoming_only=True)
 
     plan = TrainingPlan(
         name=name,
@@ -1861,6 +1862,19 @@ def adapt_plan(
     return finish_adaptation(db, plan, ctx, trigger=trigger, ai_error=ai_error)
 
 
+def remove_calendar_events(db: Session, plan: TrainingPlan, *, upcoming_only: bool) -> int | None:
+    """Best effort: take a plan's sessions out of Google Calendar (all of them when the plan is
+    deleted, the ones from today on when it is archived). None when the calendar call failed;
+    tagged leftovers are then removed by the orphan cleanup on the next sync."""
+    try:
+        from routepass.providers import gcal
+
+        return gcal.delete_plan_events(db, plan, from_date=date.today() if upcoming_only else None)
+    except Exception:  # noqa: BLE001
+        logger.exception("Removing calendar events failed for plan %s", plan.id)
+        return None
+
+
 def _maybe_sync_calendar(db: Session, plan: TrainingPlan) -> dict[str, Any] | None:
     """Best-effort Google Calendar sync when connected and auto_sync is enabled."""
     try:
@@ -2517,6 +2531,13 @@ def sync_active_plans_after_ingest(db: Session, prefs: dict[str, Any]) -> dict[s
                 cal_synced += 1
             except Exception:  # noqa: BLE001
                 logger.exception("Google Calendar auto-sync failed for plan %s", plan.id)
+
+    if not cal_synced and gcal_cfg.get("connected") and gcal_cfg.get("target_calendar_id"):
+        # no plan sync ran (it cleans up itself), e.g. the active plan was just deleted
+        try:
+            gcal.cleanup_orphan_events(db)
+        except Exception:  # noqa: BLE001
+            logger.exception("Google Calendar orphan cleanup failed")
 
     try:
         push.dispatch_due_reminders(db)
