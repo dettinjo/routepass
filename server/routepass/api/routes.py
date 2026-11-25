@@ -904,11 +904,26 @@ def _public_ui_origin(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
+@router.get("/connections/strava/userscript.meta.js", tags=["connections"])
+def strava_userscript_meta(request: Request) -> Response:
+    """The userscript's header block, which Tampermonkey reads to check for updates."""
+    return Response(
+        content=strava_userscript.render_meta(_public_ui_origin(request)),
+        media_type="application/javascript; charset=utf-8",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.get("/connections/strava/userscript.user.js", tags=["connections"])
-def strava_userscript_download(request: Request, db: Session = Depends(get_session)) -> Response:
-    """Serve a personalized 1-click Tampermonkey/Userscript that auto-syncs Strava cookies."""
+def strava_userscript_download(
+    request: Request, new: bool = False, db: Session = Depends(get_session)
+) -> Response:
+    """Serve a personalized 1-click Tampermonkey/Userscript that auto-syncs Strava cookies.
+
+    new=true (the install button in Settings) revokes every earlier copy; plain downloads, such as
+    Tampermonkey's update checks, keep the installed copy working."""
     origin = _public_ui_origin(request)
-    token = strava_userscript.issue_handoff_token(db)
+    token = strava_userscript.issue_handoff_token(db, new=new)
     script = strava_userscript.render_userscript(origin, token)
     return Response(
         content=script,

@@ -482,14 +482,20 @@ def test_userscript_handoff_is_private_revocable_and_idempotent(client, mock_api
 
     from routepass.config import get_settings
 
-    def download() -> str:
-        r = client.get("/api/v1/connections/strava/userscript.user.js", headers=AUTH)
+    def download(new: bool = True) -> str:
+        url = "/api/v1/connections/strava/userscript.user.js" + ("?new=1" if new else "")
+        r = client.get(url, headers=AUTH)
         assert r.status_code == 200
         assert "localStorage.setItem(FP_KEY" not in r.text  # no cookie fingerprint in strava.com storage
         return re.search(r'const HANDOFF_TOKEN = "([^"]+)";', r.text).group(1)
 
     first = download()
     second = download()
+    # Tampermonkey's update check re-downloads the plain URL: that must not revoke the installed copy
+    meta = client.get("/api/v1/connections/strava/userscript.meta.js", headers=AUTH)
+    assert meta.status_code == 200 and "@version" in meta.text and "HANDOFF_TOKEN" not in meta.text
+    assert "@updateURL" in meta.text and "userscript.meta.js" in meta.text
+    update_check = download(new=False)
     dash = mock_apis.get("https://www.strava.com/dashboard").mock(
         return_value=httpx.Response(200, text='<html><body><a href="/athletes/77">Me</a></body></html>')
     )
@@ -509,6 +515,12 @@ def test_userscript_handoff_is_private_revocable_and_idempotent(client, mock_api
         headers={**headers, "Authorization": f"Bearer {second}"},
     )
     assert ok.status_code == 200, ok.text
+    after_update = client.post(
+        "/api/v1/connections/strava/session/handoff",
+        json={**body, "token": update_check},
+        headers={**headers, "Authorization": f"Bearer {update_check}"},
+    )
+    assert after_update.status_code == 200  # the updated copy carries the same, still valid id
     calls = dash.call_count
     again = client.post(
         "/api/v1/connections/strava/session/handoff",
